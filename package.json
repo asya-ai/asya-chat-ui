@@ -1,0 +1,5 @@
+{
+	"dependencies": {
+		"react-syntax-highlighter": "^16.1.0"
+	}
+}

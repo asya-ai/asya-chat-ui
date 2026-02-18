@@ -1,0 +1,15 @@
+.env
+.venv
+node_modules
+dist
+dist-ssr
+*.local
+.pnpm-store
+*.db
+postgres_data
+
+.vscode
+.DS_Store
+**/.DS_Store
+
+data

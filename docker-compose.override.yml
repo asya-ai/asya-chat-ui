@@ -1,0 +1,29 @@
+services:
+  backend:
+    command: >
+      sh -c "uv run python app/db/wait_for_db.py &&
+             uv run alembic upgrade head &&
+             uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/files:/data/files
+  scraper:
+    command: sh -c "corepack enable && pnpm install && pnpm start"
+    volumes:
+      - ./scraper:/app
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm dev --host 0.0.0.0 --port 5173"
+    environment:
+      - VITE_API_URL=/api
+      - CHOKIDAR_USEPOLLING=1
+      - WATCHPACK_POLLING=true
+      - VITE_FORCE_POLLING=true
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"

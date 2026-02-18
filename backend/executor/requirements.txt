@@ -1,0 +1,14 @@
+numpy>=2.0.0
+pandas>=2.2.0
+matplotlib>=3.9.0
+seaborn>=0.13.0
+scipy>=1.14.0
+scikit-learn>=1.5.0
+Pillow>=10.4.0
+requests>=2.32.0
+beautifulsoup4>=4.12.0
+lxml>=5.2.0
+sympy>=1.13.0
+openpyxl>=3.1.5
+python-docx>=1.1.2
+pypdf>=4.2.0
