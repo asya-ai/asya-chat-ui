@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import type { ReactNode } from "react"
 import { createContext, useContext, useMemo, useState } from "react"
 
@@ -172,6 +173,11 @@ const translations = {
     usage_by_user_month: "Users per month",
     usage_by_model_month: "Models per month",
     usage_by_org: "By organization",
+    usage_block_models: "By model",
+    usage_block_users: "By user",
+    usage_block_orgs: "By organization",
+    usage_filter_month: "Month",
+    usage_all_months: "All months",
     usage_scope_placeholder: "Select organization scope",
     usage_all_orgs: "All organizations",
     usage_breakdown: "Usage breakdown",
@@ -349,6 +355,11 @@ const translations = {
     usage_by_user_month: "Lietotāji mēnesī",
     usage_by_model_month: "Modeļi mēnesī",
     usage_by_org: "Pēc organizācijas",
+    usage_block_models: "Pēc modeļa",
+    usage_block_users: "Pēc lietotāja",
+    usage_block_orgs: "Pēc organizācijas",
+    usage_filter_month: "Mēnesis",
+    usage_all_months: "Visi mēneši",
     usage_scope_placeholder: "Izvēlieties organizācijas tvērumu",
     usage_all_orgs: "Visas organizācijas",
     usage_breakdown: "Lietojuma sadalījums",

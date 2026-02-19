@@ -1,5 +1,9 @@
 {
-	"dependencies": {
-		"react-syntax-highlighter": "^16.1.0"
-	}
+  "scripts": {
+    "lint": "pnpm -C frontend lint",
+    "lint:frontend": "pnpm -C frontend lint"
+  },
+  "dependencies": {
+    "react-syntax-highlighter": "^16.1.0"
+  }
 }

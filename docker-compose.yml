@@ -58,7 +58,7 @@ services:
       context: .
       dockerfile: nginx/Dockerfile
     ports:
-      - "8080:80"
+      - "8085:80"
     depends_on:
       backend:
         condition: service_healthy

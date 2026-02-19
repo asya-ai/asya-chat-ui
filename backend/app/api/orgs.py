@@ -178,6 +178,27 @@ def list_orgs(
     ]
 
 
+@router.get("/mine", response_model=list[OrgRead])
+def list_my_orgs(
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[OrgRead]:
+    orgs = session.exec(
+        select(Org)
+        .join(OrgMembership, OrgMembership.org_id == Org.id)
+        .where(OrgMembership.user_id == current_user.id, Org.is_active == True)
+    ).all()
+    return [
+        OrgRead(
+            id=str(org.id),
+            name=org.name,
+            is_active=org.is_active,
+            is_frozen=org.is_frozen,
+        )
+        for org in orgs
+    ]
+
+
 @router.get("/{org_id}/web-settings", response_model=OrgWebSettingsRead)
 def get_web_settings(
     org_id: str,

@@ -4,7 +4,15 @@ export type ThemeMode = "light" | "dark"
 
 export const getTheme = (): ThemeMode => {
   const stored = localStorage.getItem(THEME_KEY)
-  return stored === "dark" ? "dark" : "light"
+  if (stored === "dark" || stored === "light") {
+    return stored
+  }
+  if (typeof window !== "undefined" && window.matchMedia) {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light"
+  }
+  return "light"
 }
 
 export const setTheme = (mode: ThemeMode) => {

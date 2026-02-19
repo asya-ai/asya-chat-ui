@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 
-import { authApi, chatApi, modelApi, orgApi } from "@/lib/api"
+import { chatApi, modelApi, orgApi } from "@/lib/api"
 import { modelStore, orgStore } from "@/lib/storage"
 import type {
   Chat,
@@ -37,7 +37,6 @@ export const ChatPage = () => {
   )
   const [loading, setLoading] = useState(false)
   const theme = getTheme()
-  const [isAdmin, setIsAdmin] = useState(false)
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState("")
   const [editingAttachments, setEditingAttachments] = useState<
@@ -174,18 +173,27 @@ export const ChatPage = () => {
   }
 
   useEffect(() => {
-    if (!orgId) {
-      orgApi
-        .list()
-        .then((orgs) => {
-          if (orgs.length > 0) {
-            orgStore.set(orgs[0].id)
-            setOrgId(orgs[0].id)
-            return
-          }
+    orgApi
+      .mine()
+      .then((orgs) => {
+        if (orgs.length === 0) {
           navigate("/settings")
-        })
-        .catch(() => navigate("/settings"))
+          return
+        }
+        const storedId = orgId ?? orgStore.get()
+        const nextId = storedId && orgs.some((org) => org.id === storedId)
+          ? storedId
+          : orgs[0].id
+        if (nextId !== orgId) {
+          orgStore.set(nextId)
+          setOrgId(nextId)
+        }
+      })
+      .catch(() => navigate("/settings"))
+  }, [navigate, orgId])
+
+  useEffect(() => {
+    if (!orgId) {
       return
     }
     modelApi
@@ -212,11 +220,7 @@ export const ChatPage = () => {
         }
       }
     })
-    authApi
-      .me()
-      .then((me) => setIsAdmin(me.is_admin))
-      .catch(() => setIsAdmin(false))
-  }, [navigate, orgId, selectedModel, chatId])
+  }, [orgId, selectedModel, chatId])
 
   useEffect(() => {
     if (selectedModel) {
@@ -789,11 +793,6 @@ export const ChatPage = () => {
           <Button variant="outline" onClick={() => navigate("/settings/me")}>
             {t("common_settings")}
           </Button>
-          {isAdmin ? (
-            <Button variant="outline" onClick={() => navigate("/usage")}>
-              {t("usage_title")}
-            </Button>
-          ) : null}
         </div>
       </div>
     </div>

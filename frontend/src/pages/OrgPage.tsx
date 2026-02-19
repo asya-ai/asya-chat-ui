@@ -4,7 +4,6 @@ import { useLocation, useNavigate } from "react-router-dom"
 import { authApi, modelApi, orgApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
-import { LanguageSelect } from "@/components/LanguageSelect"
 import { SettingsShell } from "@/components/SettingsShell"
 import type {
   ChatModel,
@@ -525,14 +524,14 @@ export const OrgPage = () => {
               </SelectContent>
             </Select>
           ) : null}
-          <LanguageSelect />
-          <Button onClick={() => navigate("/chat")} disabled={!selectedOrg}>
-            {t("org_go_chat")}
+          <Button variant="outline" onClick={() => navigate("/chat")} disabled={!selectedOrg}>
+            {t("common_back_to_chat")}
           </Button>
         </div>
       }
     >
-      {error ? <p className="text-sm text-red-500">{error}</p> : null}
+      <div className="space-y-6">
+        {error ? <p className="text-sm text-red-500">{error}</p> : null}
 
         {activeSection === "orgs" ? (
           <>
@@ -1181,7 +1180,11 @@ export const OrgPage = () => {
             ) : null}
           </>
         ) : null}
-      <Dialog open={Boolean(renameOrgId)} onOpenChange={(open) => (!open ? closeRenameDialog() : null)}>
+      </div>
+      <Dialog
+        open={Boolean(renameOrgId)}
+        onOpenChange={(open) => (!open ? closeRenameDialog() : null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("org_dialog_rename_title")}</DialogTitle>
@@ -1199,7 +1202,10 @@ export const OrgPage = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(deleteOrgId)} onOpenChange={(open) => (!open ? closeDeleteDialog() : null)}>
+      <Dialog
+        open={Boolean(deleteOrgId)}
+        onOpenChange={(open) => (!open ? closeDeleteDialog() : null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("org_dialog_delete_title")}</DialogTitle>

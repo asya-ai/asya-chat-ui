@@ -9,6 +9,7 @@ import { LanguageSelect } from "@/components/LanguageSelect"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { modelStore, orgStore } from "@/lib/storage"
 
 export const LoginPage = () => {
   const navigate = useNavigate()
@@ -26,7 +27,9 @@ export const LoginPage = () => {
     try {
       const data = await authApi.login(email, password)
       setToken(data.access_token)
-      navigate("/settings")
+      orgStore.clear()
+      modelStore.clear()
+      navigate("/chat")
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_login_failed"))
     } finally {

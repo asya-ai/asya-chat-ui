@@ -197,6 +197,7 @@ export const authApi = {
 
 export const orgApi = {
   list: () => apiFetch<Org[]>("/orgs"),
+  mine: () => apiFetch<Org[]>("/orgs/mine"),
   create: (name: string) =>
     apiFetch<Org>("/orgs", { method: "POST", body: JSON.stringify({ name }) }),
   members: (orgId: string) => apiFetch<OrgMember[]>(`/orgs/${orgId}/members`),
@@ -220,6 +221,23 @@ export const orgApi = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+}
+
+export const usageApi = {
+  summary: (orgId: string | null, groupBy: string, month?: string) => {
+    const params = new URLSearchParams()
+    if (orgId) params.set("org_id", orgId)
+    if (groupBy) params.set("group_by", groupBy)
+    if (month) params.set("month", month)
+    const query = params.toString()
+    return apiFetch<UsageSlice[]>(`/usage${query ? `?${query}` : ""}`)
+  },
+  months: (orgId: string | null) => {
+    const params = new URLSearchParams()
+    if (orgId) params.set("org_id", orgId)
+    const query = params.toString()
+    return apiFetch<string[]>(`/usage/months${query ? `?${query}` : ""}`)
+  },
 }
 
 export const modelApi = {
@@ -320,16 +338,3 @@ export const chatApi = {
     }),
 }
 
-export const usageApi = {
-  summary: (
-    orgId: string | null,
-    groupBy: "model" | "user" | "org" | "month" | "user_month" | "model_month" = "model"
-  ) => {
-    const params = new URLSearchParams()
-    if (orgId) {
-      params.set("org_id", orgId)
-    }
-    params.set("group_by", groupBy)
-    return apiFetch<UsageSlice[]>(`/usage?${params.toString()}`)
-  },
-}
