@@ -1,4 +1,5 @@
 from app.services.providers.base import ChatProvider
+from app.services.providers.anthropic_provider import AnthropicProvider
 from app.services.providers.gemini_provider import GeminiProvider
 from app.services.providers.groq_provider import GroqProvider
 from app.services.providers.openai_provider import AzureOpenAIProvider, OpenAIProvider
@@ -41,6 +42,11 @@ def get_provider(
                 base_url=base_url,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
+            )
+        case "anthropic":
+            return AnthropicProvider(
+                api_key=api_key,
+                base_url=base_url,
             )
         case _:
             raise ValueError(f"Unsupported provider: {provider}")

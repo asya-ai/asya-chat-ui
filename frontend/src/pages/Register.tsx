@@ -5,7 +5,9 @@ import { useNavigate, Link } from "react-router-dom"
 import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n } from "@/lib/i18n-context"
+import { isValidPassword } from "@/lib/password"
 import { LanguageSelect } from "@/components/LanguageSelect"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -20,6 +22,7 @@ export const RegisterPage = () => {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [registrationEnabled, setRegistrationEnabled] = useState(true)
+  const hasError = Boolean(error)
 
   useEffect(() => {
     authApi
@@ -32,6 +35,10 @@ export const RegisterPage = () => {
     event.preventDefault()
     if (!registrationEnabled) {
       setError(t("auth_register_disabled"))
+      return
+    }
+    if (!isValidPassword(password)) {
+      setError(t("auth_password_requirements"))
       return
     }
     setLoading(true)
@@ -66,6 +73,7 @@ export const RegisterPage = () => {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
+                className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
                 required
               />
               <Input
@@ -73,9 +81,17 @@ export const RegisterPage = () => {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 type="password"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
                 required
               />
-              {error ? <p className="text-sm text-red-500">{error}</p> : null}
+              {error ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              ) : null}
               {registrationEnabled ? (
                 <Button className="w-full" disabled={loading}>
                   {loading ? t("auth_register_loading") : t("auth_register")}

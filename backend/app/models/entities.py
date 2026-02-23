@@ -101,6 +101,19 @@ class Invite(SQLModel, table=True):
     org: Org = Relationship(back_populates="invites")
 
 
+class PasswordReset(SQLModel, table=True):
+    __tablename__ = "password_resets"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    token: str = Field(index=True, sa_column_kwargs={"unique": True})
+    expires_at: datetime
+    used_at: Optional[datetime] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    user: User = Relationship()
+
+
 class ChatModel(SQLModel, table=True):
     __tablename__ = "chat_models"
 
@@ -109,6 +122,7 @@ class ChatModel(SQLModel, table=True):
     model_name: str
     display_name: str
     is_active: bool = Field(default=True)
+    display_order: int = Field(default=0, index=True)
     context_length: Optional[int] = Field(default=None)
     supports_image_input: Optional[bool] = Field(default=None)
     supports_image_output: Optional[bool] = Field(default=None)

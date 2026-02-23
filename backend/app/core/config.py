@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     )
     secret_key: str = Field(validation_alias="JWT_SECRET")
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24
+    access_token_expire_minutes: int = Field(
+        default=60 * 24 * 7, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES"
+    )
     invite_expire_hours: int = 72
     files_base_dir: str = Field(default="/data/files", validation_alias="FILES_BASE_DIR")
     exec_host_files_dir: str = Field(
@@ -110,6 +112,9 @@ class Settings(BaseSettings):
     smtp_email: str = Field(default="", validation_alias="SMTP_EMAIL")
     smtp_host: str = Field(default="", validation_alias="SMTP_HOST")
     smtp_port: str = Field(default="", validation_alias="SMTP_PORT")
+    password_reset_expire_hours: int = Field(
+        default=1, validation_alias="PASSWORD_RESET_EXPIRE_HOURS"
+    )
     super_admin_emails: str = Field(
         default="", validation_alias="SUPER_ADMIN_EMAILS"
     )

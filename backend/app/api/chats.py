@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import json
 import httpx
 import anyio
+from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator, model_validator
@@ -504,6 +505,14 @@ async def _ws_send_event(websocket: WebSocket, payload: dict) -> None:
     await websocket.send_json(payload)
 
 
+def _format_model_error(exc: Exception) -> str:
+    message = str(exc)
+    lowered = message.lower()
+    if "not a chat model" in lowered:
+        return "Selected model does not support chat completions. Choose a chat-capable model."
+    return f"Model error: {message}"
+
+
 async def _run_agentic_loop(
     *,
     provider,
@@ -512,11 +521,12 @@ async def _run_agentic_loop(
     tool_registry: ToolRegistry,
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
-) -> tuple[str, list[dict], list[dict], list[dict]]:
+) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     tool_specs = tool_registry.list_specs()
     attachments: list[dict] = []
     sources: list[dict] = []
     image_usages: list[dict] = []
+    last_usage: ChatUsage | None = None
     last_tool_error: str | None = None
     search_calls = 0
     scrape_calls = 0
@@ -574,6 +584,7 @@ async def _run_agentic_loop(
             response = await provider.chat_with_tools(
                 model.model_name, messages, tool_specs
             )
+            last_usage = response.usage
             tool_calls = response.tool_calls or []
             logger.info(
                 "Agentic step %s tool_calls=%s finish_reason=%s response_len=%s",
@@ -607,9 +618,9 @@ async def _run_agentic_loop(
                         )
                         if result.attachments:
                             attachments.extend(result.attachments)
-                        return "", attachments, sources, image_usages
+                        return "", attachments, sources, image_usages, last_usage
                     await _emit("Answering", "start")
-                    return response.content, attachments, sources, image_usages
+                    return response.content, attachments, sources, image_usages, last_usage
                 logger.info("No tool calls and empty content; forcing final answer")
                 messages.append(
                     {"role": "user", "content": "Please provide the final answer now."}
@@ -618,7 +629,7 @@ async def _run_agentic_loop(
                     model.model_name, messages, tool_specs
                 )
                 await _emit("Answering", "start")
-                return response.content or "", attachments, sources, image_usages
+                return response.content or "", attachments, sources, image_usages, last_usage
             logger.info("Tool calls: %s", [call.name for call in tool_calls])
             assistant_call_message = {
                 "role": "assistant",
@@ -774,6 +785,7 @@ class ChatRead(BaseModel):
     title: str | None
     model_id: str | None
     created_at: datetime
+    last_activity_at: datetime
 
 
 class ChatMessageAttachmentCreate(BaseModel):
@@ -805,6 +817,7 @@ class ChatMessageCreateRequest(BaseModel):
     model_id: str | None = None
     stream: bool | None = False
     attachments: list[ChatMessageAttachmentCreate] | None = None
+    reasoning_effort: str | None = None
     locale: str | None = None
 
     @model_validator(mode="after")
@@ -1019,7 +1032,7 @@ async def _stream_message_ws(
         api_key=provider_config.api_key_override if provider_config else None,
         base_url=provider_config.base_url_override if provider_config else None,
         endpoint=provider_config.endpoint_override if provider_config else None,
-        reasoning_effort=model.reasoning_effort,
+        reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
     )
@@ -1129,17 +1142,22 @@ async def _stream_message_ws(
         session.commit()
         session.refresh(assistant_message)
 
+        prompt_tokens = response.usage.prompt_tokens
+        completion_tokens = response.usage.completion_tokens
+        total_tokens = response.usage.total_tokens
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
         usage_event = UsageEvent(
             org_id=chat.org_id,
             user_id=current_user.id,
             chat_id=chat.id,
             message_id=assistant_message.id,
             model_id=model.id,
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             cached_tokens=response.usage.cached_tokens,
             thinking_tokens=response.usage.thinking_tokens,
         )
@@ -1182,19 +1200,29 @@ async def _stream_message_ws(
                 async for item in tool_receive_stream:
                     await _ws_send_event(websocket, {"tool_event": item})
 
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(_forward_activity)
-            tg.start_soon(_forward_tool_events)
-            content, tool_attachments, tool_sources, image_usages = await _run_agentic_loop(
-                provider=provider,
-                model=model,
-                messages=messages,
-                tool_registry=tool_registry,
-                activity_sender=send_stream,
-                tool_event_sender=tool_send_stream,
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(_forward_activity)
+                tg.start_soon(_forward_tool_events)
+                content, tool_attachments, tool_sources, image_usages, last_usage = (
+                    await _run_agentic_loop(
+                    provider=provider,
+                    model=model,
+                    messages=messages,
+                    tool_registry=tool_registry,
+                    activity_sender=send_stream,
+                    tool_event_sender=tool_send_stream,
+                    )
+                )
+                await send_stream.aclose()
+                await tool_send_stream.aclose()
+        except Exception as exc:
+            logger.exception("Tool streaming failed")
+            await _ws_send_event(websocket, {"error": _format_model_error(exc)})
+            await _ws_send_event(
+                websocket, {"activity": {"label": "Thinking", "state": "end"}}
             )
-            await send_stream.aclose()
-            await tool_send_stream.aclose()
+            return
 
         tool_sources = await _normalize_sources(tool_sources)
         assistant_message = ChatMessage(
@@ -1220,19 +1248,20 @@ async def _stream_message_ws(
                 ]
             )
         session.commit()
+        usage = last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0)
         usage_event = UsageEvent(
             org_id=chat.org_id,
             user_id=current_user.id,
             chat_id=chat.id,
             message_id=assistant_message.id,
             model_id=model.id,
-            prompt_tokens=0,
-            completion_tokens=0,
-            total_tokens=0,
-            input_tokens=0,
-            output_tokens=0,
-            cached_tokens=0,
-            thinking_tokens=0,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_tokens,
+            thinking_tokens=usage.thinking_tokens,
             image_width=None,
             image_height=None,
             image_count=None,
@@ -1266,12 +1295,17 @@ async def _stream_message_ws(
 
     assistant_content = ""
     usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
-    async for chunk in provider.chat_stream(model.model_name, messages):
-        if chunk.content:
-            assistant_content += chunk.content
-            await _ws_send_event(websocket, {"delta": chunk.content})
-        if chunk.usage:
-            usage = chunk.usage
+    try:
+        response = await provider.chat(model.model_name, messages)
+        assistant_content = response.content or ""
+        usage = response.usage
+    except Exception as exc:
+        logger.exception("Chat request failed")
+        await _ws_send_event(websocket, {"error": _format_model_error(exc)})
+        await _ws_send_event(
+            websocket, {"activity": {"label": "Thinking", "state": "end"}}
+        )
+        return
 
     assistant_message = ChatMessage(
         chat_id=chat.id,
@@ -1283,17 +1317,22 @@ async def _stream_message_ws(
     session.commit()
     session.refresh(assistant_message)
 
+    prompt_tokens = usage.prompt_tokens
+    completion_tokens = usage.completion_tokens
+    total_tokens = usage.total_tokens
+    input_tokens = usage.input_tokens
+    output_tokens = usage.output_tokens
     usage_event = UsageEvent(
         org_id=chat.org_id,
         user_id=current_user.id,
         chat_id=chat.id,
         message_id=assistant_message.id,
         model_id=model.id,
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        total_tokens=usage.total_tokens,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         cached_tokens=usage.cached_tokens,
         thinking_tokens=usage.thinking_tokens,
     )
@@ -1553,7 +1592,7 @@ async def _stream_edit_ws(
         api_key=provider_config.api_key_override if provider_config else None,
         base_url=provider_config.base_url_override if provider_config else None,
         endpoint=provider_config.endpoint_override if provider_config else None,
-        reasoning_effort=model.reasoning_effort,
+        reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
     )
@@ -1709,19 +1748,26 @@ async def _stream_edit_ws(
                 async for item in tool_receive_stream:
                     await _ws_send_event(websocket, {"tool_event": item})
 
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(_forward_activity)
-            tg.start_soon(_forward_tool_events)
-            content, tool_attachments, tool_sources, image_usages = await _run_agentic_loop(
-                provider=provider,
-                model=model,
-                messages=messages,
-                tool_registry=tool_registry,
-                activity_sender=send_stream,
-                tool_event_sender=tool_send_stream,
-            )
-            await send_stream.aclose()
-            await tool_send_stream.aclose()
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(_forward_activity)
+                tg.start_soon(_forward_tool_events)
+                content, tool_attachments, tool_sources, image_usages, last_usage = (
+                    await _run_agentic_loop(
+                    provider=provider,
+                    model=model,
+                    messages=messages,
+                    tool_registry=tool_registry,
+                    activity_sender=send_stream,
+                    tool_event_sender=tool_send_stream,
+                    )
+                )
+                await send_stream.aclose()
+                await tool_send_stream.aclose()
+        except Exception as exc:
+            logger.exception("Edit tool streaming failed")
+            await _ws_send_event(websocket, {"error": _format_model_error(exc)})
+            return
 
         tool_sources = await _normalize_sources(tool_sources)
         assistant_message = ChatMessage(
@@ -1748,19 +1794,20 @@ async def _stream_edit_ws(
                 ]
             )
             session.commit()
+        usage = last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0)
         usage_event = UsageEvent(
             org_id=chat.org_id,
             user_id=current_user.id,
             chat_id=chat.id,
             message_id=assistant_message.id,
             model_id=model.id,
-            prompt_tokens=0,
-            completion_tokens=0,
-            total_tokens=0,
-            input_tokens=0,
-            output_tokens=0,
-            cached_tokens=0,
-            thinking_tokens=0,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_tokens,
+            thinking_tokens=usage.thinking_tokens,
             image_width=None,
             image_height=None,
             image_count=None,
@@ -1814,12 +1861,14 @@ async def _stream_edit_ws(
 
     assistant_content = ""
     usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
-    async for chunk in provider.chat_stream(model.model_name, messages):
-        if chunk.content:
-            assistant_content += chunk.content
-            await _ws_send_event(websocket, {"delta": chunk.content})
-        if chunk.usage:
-            usage = chunk.usage
+    try:
+        response = await provider.chat(model.model_name, messages)
+        assistant_content = response.content or ""
+        usage = response.usage
+    except Exception as exc:
+        logger.exception("Edit chat request failed")
+        await _ws_send_event(websocket, {"error": _format_model_error(exc)})
+        return
 
     assistant_message = ChatMessage(
         chat_id=chat.id,
@@ -1832,17 +1881,22 @@ async def _stream_edit_ws(
     session.commit()
     session.refresh(assistant_message)
 
+    prompt_tokens = usage.prompt_tokens
+    completion_tokens = usage.completion_tokens
+    total_tokens = usage.total_tokens
+    input_tokens = usage.input_tokens
+    output_tokens = usage.output_tokens
     usage_event = UsageEvent(
         org_id=chat.org_id,
         user_id=current_user.id,
         chat_id=chat.id,
         message_id=assistant_message.id,
         model_id=model.id,
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        total_tokens=usage.total_tokens,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         cached_tokens=usage.cached_tokens,
         thinking_tokens=usage.thinking_tokens,
     )
@@ -1908,6 +1962,7 @@ def create_chat(
         title=chat.title,
         model_id=str(chat.model_id) if chat.model_id else None,
         created_at=chat.created_at,
+        last_activity_at=chat.created_at,
     )
 
 
@@ -1928,8 +1983,18 @@ def list_chats(
         session, org_uuid, current_user.id, is_super_admin=current_user.is_super_admin
     )
 
+    last_activity_subq = (
+        select(
+            ChatMessage.chat_id,
+            func.max(ChatMessage.created_at).label("last_activity_at"),
+        )
+        .group_by(ChatMessage.chat_id)
+        .subquery()
+    )
     chats = session.exec(
-        select(Chat).where(
+        select(Chat, last_activity_subq.c.last_activity_at)
+        .outerjoin(last_activity_subq, last_activity_subq.c.chat_id == Chat.id)
+        .where(
             Chat.org_id == org_uuid,
             Chat.user_id == current_user.id,
             Chat.is_deleted.is_(False),
@@ -1941,8 +2006,9 @@ def list_chats(
             title=chat.title,
             model_id=str(chat.model_id) if chat.model_id else None,
             created_at=chat.created_at,
+            last_activity_at=last_activity_at or chat.created_at,
         )
-        for chat in chats
+        for chat, last_activity_at in chats
     ]
 
 
@@ -2230,7 +2296,7 @@ async def create_message(
         api_key=provider_config.api_key_override if provider_config else None,
         base_url=provider_config.base_url_override if provider_config else None,
         endpoint=provider_config.endpoint_override if provider_config else None,
-        reasoning_effort=model.reasoning_effort,
+        reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
     )
@@ -2437,11 +2503,13 @@ async def create_message(
                 return
 
             if tool_registry and hasattr(provider, "chat_with_tools"):
-                content, tool_attachments, tool_sources, image_usages = await _run_agentic_loop(
-                    provider=provider,
-                    model=model,
-                    messages=messages,
-                    tool_registry=tool_registry,
+                content, tool_attachments, tool_sources, image_usages, last_usage = (
+                    await _run_agentic_loop(
+                        provider=provider,
+                        model=model,
+                        messages=messages,
+                        tool_registry=tool_registry,
+                    )
                 )
                 assistant_message = ChatMessage(
                     chat_id=chat.id,
@@ -2466,6 +2534,7 @@ async def create_message(
                         ]
                     )
                     session.commit()
+                usage = last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0)
                 usage_event = UsageEvent(
                     org_id=chat.org_id,
                     user_id=current_user.id,
@@ -2516,12 +2585,11 @@ async def create_message(
                 yield f"data: {json.dumps({'done': True, 'message_id': str(assistant_message.id), 'content': content, 'model_name': model.display_name, 'model_id': str(model.id), 'attachments': tool_attachments or [], 'sources': tool_sources or []})}\n\n"
                 return
 
-            async for chunk in provider.chat_stream(model.model_name, messages):
-                if chunk.content:
-                    assistant_content += chunk.content
-                    yield f"data: {json.dumps({'delta': chunk.content})}\n\n"
-                if chunk.usage:
-                    usage = chunk.usage
+            response = await provider.chat(model.model_name, messages)
+            assistant_content = response.content or ""
+            usage = response.usage
+            if assistant_content:
+                yield f"data: {json.dumps({'delta': assistant_content})}\n\n"
 
             assistant_message = ChatMessage(
                 chat_id=chat.id,
@@ -2567,15 +2635,17 @@ async def create_message(
         response = await provider.chat_grounded(model.model_name, messages)
         response.sources = await _normalize_sources(response.sources or [])
     elif tool_registry and hasattr(provider, "chat_with_tools"):
-        content, tool_attachments, tool_sources, image_usages = await _run_agentic_loop(
-            provider=provider,
-            model=model,
-            messages=messages,
-            tool_registry=tool_registry,
+        content, tool_attachments, tool_sources, image_usages, last_usage = (
+            await _run_agentic_loop(
+                provider=provider,
+                model=model,
+                messages=messages,
+                tool_registry=tool_registry,
+            )
         )
         response = ChatResponse(
             content=content,
-            usage=ChatUsage(0, 0, 0, 0, 0, 0, 0),
+            usage=last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0),
             sources=tool_sources or None,
         )
     else:
@@ -2967,7 +3037,7 @@ async def edit_message(
         api_key=provider_config.api_key_override if provider_config else None,
         base_url=provider_config.base_url_override if provider_config else None,
         endpoint=provider_config.endpoint_override if provider_config else None,
-        reasoning_effort=model.reasoning_effort,
+        reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
     )
@@ -3063,15 +3133,17 @@ async def edit_message(
         response = await provider.chat_grounded(model.model_name, messages)
         response.sources = await _normalize_sources(response.sources or [])
     elif tool_registry and hasattr(provider, "chat_with_tools"):
-        content, tool_attachments, tool_sources, image_usages = await _run_agentic_loop(
-            provider=provider,
-            model=model,
-            messages=messages,
-            tool_registry=tool_registry,
+        content, tool_attachments, tool_sources, image_usages, last_usage = (
+            await _run_agentic_loop(
+                provider=provider,
+                model=model,
+                messages=messages,
+                tool_registry=tool_registry,
+            )
         )
         response = ChatResponse(
             content=content,
-            usage=ChatUsage(0, 0, 0, 0, 0, 0, 0),
+            usage=last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0),
             sources=tool_sources or None,
         )
     else:

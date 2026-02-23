@@ -86,7 +86,7 @@ class ProviderConfigUpdate(BaseModel):
     endpoint_override: str | None = None
 
 
-PROVIDERS = ["openai", "azure", "gemini", "groq"]
+PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic"]
 
 
 @router.post("", response_model=OrgRead)

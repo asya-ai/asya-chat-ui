@@ -19,7 +19,6 @@ services:
       retries: 10
       start_period: 20s
 
-
   backend:
     build:
       context: ./backend
@@ -28,19 +27,35 @@ services:
     environment:
       - PROJECT_ROOT_DIR=${PWD}
       - EXEC_HOST_FILES_DIR=${PWD}/data/files
+      - DOCKER_HOST=tcp://dind:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./data/files:/data/files
     depends_on:
       postgres:
         condition: service_healthy
       scraper:
         condition: service_started
+      dind:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
       interval: 5s
       timeout: 5s
       retries: 12
+
+  dind:
+    image: docker:dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - dind-data:/var/lib/docker
+      - ./data/files:/data/files
+    healthcheck:
+      test: ["CMD-SHELL", "docker info || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   scraper:
     build:
@@ -69,3 +84,6 @@ services:
     image: chatui-python-exec:latest
     profiles:
       - exec
+
+volumes:
+  dind-data:

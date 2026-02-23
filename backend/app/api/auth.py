@@ -9,8 +9,14 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import get_super_admin_emails, settings
-from app.core.security import create_access_token, get_password_hash, verify_password
-from app.models import Invite, Org, OrgMembership, Role, User
+from app.core.security import (
+    create_access_token,
+    get_password_hash,
+    validate_password,
+    verify_password,
+)
+from app.models import Invite, Org, OrgMembership, PasswordReset, Role, User
+from app.services.email_service import send_invite_email, send_password_reset_email
 from app.services.org_service import ensure_default_roles, require_org_admin
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -40,6 +46,15 @@ class InviteCreateRequest(BaseModel):
 class InviteAcceptRequest(BaseModel):
     token: str
     password: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
 
 
 class MeResponse(BaseModel):
@@ -72,8 +87,19 @@ class InviteRead(BaseModel):
     created_at: datetime
 
 
+class InvitePreview(BaseModel):
+    email: EmailStr
+    org_name: str | None
+    expires_at: datetime
+
+
 @router.post("/register", response_model=TokenResponse)
 def register(payload: RegisterRequest, session: Session = Depends(get_db)) -> TokenResponse:
+    if not validate_password(payload.password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
+        )
     existing_user = session.exec(select(User).where(User.email == payload.email)).first()
     if existing_user:
         raise HTTPException(
@@ -169,6 +195,11 @@ def change_password(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
+    if not validate_password(payload.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
+        )
     current_user.hashed_password = get_password_hash(payload.new_password)
     session.add(current_user)
     session.commit()
@@ -244,6 +275,24 @@ def create_invite(
     session.add(invite)
     session.commit()
     session.refresh(invite)
+    invite_url = f"{request.base_url}invite?token={invite.token}"
+    try:
+        send_invite_email(
+            to_email=invite.email,
+            org_name=org.name,
+            invite_url=invite_url,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Invite email send failed email=%s org_id=%s error=%s",
+            invite.email,
+            invite.org_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send invite email",
+        ) from exc
     logger.info("Invite created email=%s org_id=%s", invite.email, invite.org_id)
     return invite
 
@@ -284,6 +333,23 @@ def list_invites(
     ]
 
 
+@router.get("/invites/preview", response_model=InvitePreview)
+def preview_invite(token: str, session: Session = Depends(get_db)) -> InvitePreview:
+    invite = session.exec(select(Invite).where(Invite.token == token)).first()
+    if not invite:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+    if invite.accepted_at is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite used")
+    if invite.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite expired")
+    org = session.exec(select(Org).where(Org.id == invite.org_id)).first()
+    return InvitePreview(
+        email=invite.email,
+        org_name=org.name if org else None,
+        expires_at=invite.expires_at,
+    )
+
+
 @router.post("/invites/{invite_id}/resend", response_model=InviteRead)
 def resend_invite(
     invite_id: str,
@@ -312,6 +378,25 @@ def resend_invite(
     session.add(invite)
     session.commit()
     session.refresh(invite)
+    org = session.exec(select(Org).where(Org.id == invite.org_id)).first()
+    invite_url = f"{request.base_url}invite?token={invite.token}"
+    try:
+        send_invite_email(
+            to_email=invite.email,
+            org_name=org.name if org else "your organization",
+            invite_url=invite_url,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Invite resend email failed email=%s org_id=%s error=%s",
+            invite.email,
+            invite.org_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send invite email",
+        ) from exc
     logger.info("Invite resent email=%s org_id=%s", invite.email, invite.org_id)
     return InviteRead(
         id=str(invite.id),
@@ -367,6 +452,11 @@ def accept_invite(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Password required for new user",
             )
+        if not validate_password(payload.password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
+            )
         user = User(
             email=invite.email,
             hashed_password=get_password_hash(payload.password),
@@ -404,3 +494,64 @@ def accept_invite(
 
     token = create_access_token(str(user.id))
     return TokenResponse(access_token=token)
+
+
+@router.post("/password-reset", status_code=status.HTTP_204_NO_CONTENT)
+def request_password_reset(
+    payload: PasswordResetRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> None:
+    user = session.exec(select(User).where(User.email == payload.email)).first()
+    if not user:
+        return
+    token = secrets.token_urlsafe(32)
+    reset = PasswordReset(
+        user_id=user.id,
+        token=token,
+        expires_at=datetime.now(timezone.utc)
+        + timedelta(hours=settings.password_reset_expire_hours),
+    )
+    session.add(reset)
+    session.commit()
+    reset_url = f"{request.headers.get('origin') or request.base_url}reset-password?token={token}"
+    try:
+        send_password_reset_email(to_email=user.email, reset_url=reset_url)
+    except Exception as exc:
+        logger.warning("Password reset email failed email=%s error=%s", user.email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send password reset email",
+        ) from exc
+
+
+@router.post("/password-reset/confirm", status_code=status.HTTP_204_NO_CONTENT)
+def confirm_password_reset(
+    payload: PasswordResetConfirm,
+    session: Session = Depends(get_db),
+) -> None:
+    reset = session.exec(
+        select(PasswordReset).where(PasswordReset.token == payload.token)
+    ).first()
+    if not reset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token not found")
+    if reset.used_at is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Token already used")
+    expires_at = reset.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Token expired")
+    user = session.exec(select(User).where(User.id == reset.user_id)).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if not validate_password(payload.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
+        )
+    user.hashed_password = get_password_hash(payload.new_password)
+    reset.used_at = datetime.now(timezone.utc)
+    session.add(user)
+    session.add(reset)
+    session.commit()

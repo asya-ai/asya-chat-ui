@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.18.4",
+    "anthropic>=0.82.0",
     "argon2-cffi>=25.1.0",
     "ddgs>=9.10.0",
     "docker>=7.1.0",

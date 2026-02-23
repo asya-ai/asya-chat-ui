@@ -4,6 +4,7 @@ import json
 import urllib.request
 from typing import Iterable
 
+from anthropic import Anthropic
 from google import genai
 from groq import Groq
 from openai import OpenAI
@@ -139,6 +140,35 @@ def _gemini_models() -> tuple[list[dict[str, object]], str | None]:
         return [], f"Gemini error: {exc}"
 
 
+def _anthropic_models() -> tuple[list[dict[str, object]], str | None]:
+    if not settings.anthropic_api_key:
+        return [], "ANTHROPIC_API_KEY not set"
+    try:
+        client = Anthropic(
+            api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url
+        )
+        models = client.models.list()
+        items = []
+        for model in models.data:
+            model_id = getattr(model, "id", None) or getattr(model, "name", None)
+            if not model_id:
+                continue
+            display = getattr(model, "name", None) or model_id
+            inferred_input, inferred_output = _infer_image_support(str(model_id))
+            items.append(
+                {
+                    "model_name": model_id,
+                    "display_name": display,
+                    "context_length": None,
+                    "supports_image_input": inferred_input,
+                    "supports_image_output": inferred_output,
+                }
+            )
+        return items, None
+    except Exception as exc:  # pragma: no cover - external API call
+        return [], f"Anthropic error: {exc}"
+
+
 def _azure_models() -> tuple[list[dict[str, object]], str | None]:
     if not settings.azure_openai_api_key or not settings.azure_openai_endpoint:
         return [], "AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not set"
@@ -191,6 +221,7 @@ def get_model_suggestions() -> list[dict[str, object]]:
         ("azure", _azure_models),
         ("gemini", _gemini_models),
         ("groq", _groq_models),
+        ("anthropic", _anthropic_models),
     ]
     results: list[dict[str, object]] = []
     for provider, fn in providers:

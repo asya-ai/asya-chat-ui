@@ -28,7 +28,7 @@ DEFAULT_ALLOWLIST = {
     "scipy",
     "sklearn",
     "pillow",
-    "PIL",
+    "pil",
     "requests",
     "bs4",
     "beautifulsoup4",
@@ -66,7 +66,7 @@ def _collect_imports(code: str) -> set[str]:
 
 
 def _validate_imports(code: str) -> None:
-    allowlist = DEFAULT_ALLOWLIST
+    allowlist = {name.lower() for name in DEFAULT_ALLOWLIST}
     stdlib = {name.lower() for name in sys.stdlib_module_names}
     for module in _collect_imports(code):
         base = module.split(".")[0].lower()
@@ -227,10 +227,15 @@ def _run_container(
             nano_cpus=max(1, int(settings.exec_cpu_limit * 1e9)),
             mem_limit=settings.exec_memory_limit,
             labels=labels,
+            user="65534:65534",
+            read_only=True,
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges"],
             volumes={
                 str(host_inputs_dir): {"bind": "/inputs", "mode": "ro"},
                 str(host_work_dir): {"bind": "/workspace", "mode": "rw"},
                 str(host_outputs_dir): {"bind": "/outputs", "mode": "rw"},
+                "/tmp": {"bind": "/tmp", "mode": "rw"},  # Needed for some python ops
             },
         )
         try:

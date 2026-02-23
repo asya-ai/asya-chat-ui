@@ -1,0 +1,3 @@
+volumes:
+  postgres_data:
+  dind-data:

@@ -4,8 +4,10 @@ import { useLocation, useNavigate } from "react-router-dom"
 import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n } from "@/lib/i18n-context"
+import { isValidPassword } from "@/lib/password"
 import { LanguageSelect } from "@/components/LanguageSelect"
 import { SettingsShell } from "@/components/SettingsShell"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -27,6 +29,7 @@ export const MePage = () => {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const hasError = Boolean(error)
 
   useEffect(() => {
     authApi
@@ -56,6 +59,10 @@ export const MePage = () => {
     setSuccess(null)
     if (newPassword !== confirmPassword) {
       setError(t("me_password_mismatch"))
+      return
+    }
+    if (!isValidPassword(newPassword)) {
+      setError(t("auth_password_requirements"))
       return
     }
     setSaving(true)
@@ -144,20 +151,27 @@ export const MePage = () => {
               placeholder={t("me_current_password")}
               value={currentPassword}
               onChange={(event) => setCurrentPassword(event.target.value)}
+              className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
             />
             <Input
               type="password"
               placeholder={t("me_new_password")}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
+              className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
             />
             <Input
               type="password"
               placeholder={t("me_confirm_password")}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
+              className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
             />
-            {error ? <p className="text-sm text-red-500">{error}</p> : null}
+            {error ? (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
             {success ? <p className="text-sm text-emerald-600">{success}</p> : null}
             <Button onClick={onChangePassword} disabled={saving}>
               {saving ? t("me_password_updating") : t("me_update_password")}

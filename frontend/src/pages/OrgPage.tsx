@@ -14,6 +14,7 @@ import type {
   OrgWebSettings,
   ProviderConfig,
 } from "@/lib/types"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -29,11 +30,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Image } from "lucide-react"
+import { ArrowDown, ArrowUp, Image } from "lucide-react"
 
 type SettingsSection = "orgs" | "users" | "models"
 
-const PROVIDERS = ["openai", "azure", "gemini", "groq"] as const
+const PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic"] as const
 
 export const OrgPage = () => {
   const navigate = useNavigate()
@@ -75,6 +76,40 @@ export const OrgPage = () => {
     if (model.supports_image_output === false) return false
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
     return name.includes("image")
+  }
+
+  const orderedModels = useMemo(() => {
+    return [...models].sort((a, b) => {
+      const orderA = a.display_order ?? 0
+      const orderB = b.display_order ?? 0
+      if (orderA !== orderB) return orderA - orderB
+      return a.display_name.localeCompare(b.display_name)
+    })
+  }, [models])
+
+  const moveModel = async (modelId: string, direction: -1 | 1) => {
+    if (!isSuperAdmin) return
+    const ordered = [...orderedModels]
+    const index = ordered.findIndex((model) => model.id === modelId)
+    const nextIndex = index + direction
+    if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return
+    const swapped = [...ordered]
+    ;[swapped[index], swapped[nextIndex]] = [swapped[nextIndex], swapped[index]]
+    const next = swapped.map((model, idx) => ({
+      ...model,
+      display_order: idx + 1,
+    }))
+    setModels(next)
+    try {
+      await modelApi.updateOrder(
+        next.map((model) => ({
+          model_id: model.id,
+          display_order: model.display_order ?? 0,
+        }))
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_save_failed"))
+    }
   }
 
   const selectOrg = (orgId: string | null) => {
@@ -531,7 +566,11 @@ export const OrgPage = () => {
       }
     >
       <div className="space-y-6">
-        {error ? <p className="text-sm text-red-500">{error}</p> : null}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
 
         {activeSection === "orgs" ? (
           <>
@@ -1050,7 +1089,7 @@ export const OrgPage = () => {
                     </>
                   ) : null}
                       <div className="space-y-2">
-                    {models.map((model) => (
+                    {orderedModels.map((model, index) => (
                       <div
                         key={model.id}
                         className="flex items-center justify-between rounded-md border px-3 py-2"
@@ -1076,6 +1115,26 @@ export const OrgPage = () => {
                         </div>
                         {isSuperAdmin ? (
                           <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => moveModel(model.id, -1)}
+                                disabled={index === 0}
+                              >
+                                <ArrowUp className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => moveModel(model.id, 1)}
+                                disabled={index === orderedModels.length - 1}
+                              >
+                                <ArrowDown className="h-4 w-4" />
+                              </Button>
+                            </div>
                             <Select
                               value={model.reasoning_effort ?? "none"}
                               onValueChange={(value) => updateReasoningEffort(model.id, value)}
@@ -1126,7 +1185,7 @@ export const OrgPage = () => {
                         ) : null}
                       </div>
                     ))}
-                    {models.length === 0 ? (
+                      {orderedModels.length === 0 ? (
                       <p className="text-sm text-muted-foreground">
                         {t("org_models_no_models")}
                       </p>
@@ -1144,7 +1203,7 @@ export const OrgPage = () => {
                 <CardContent className="space-y-4">
                   {modelsOrgId ? (
                     <div className="space-y-2">
-                      {models.map((model) => {
+                      {orderedModels.map((model) => {
                         const enabled = accessEnabledIds.includes(model.id)
                         return (
                           <div
@@ -1168,7 +1227,7 @@ export const OrgPage = () => {
                           </div>
                         )
                       })}
-                      {models.length === 0 ? (
+                      {orderedModels.length === 0 ? (
                         <p className="text-xs text-muted-foreground">
                           {t("org_models_no_access")}
                         </p>

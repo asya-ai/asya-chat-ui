@@ -21,6 +21,7 @@ export type ChatModel = {
   model_name: string
   display_name: string
   is_active: boolean
+  display_order?: number
   context_length?: number | null
   supports_image_input?: boolean | null
   supports_image_output?: boolean | null
@@ -47,6 +48,7 @@ export type Chat = {
   title?: string | null
   model_id?: string | null
   created_at: string
+  last_activity_at: string
 }
 
 export type ChatMessage = {

@@ -137,14 +137,16 @@ export const UsagePage = () => {
     const isActive = sort.key === key
     const indicator = isActive ? (sort.dir === "asc" ? "▲" : "▼") : ""
     return (
-      <button
+      <Button
         type="button"
-        className="flex items-center gap-1"
+        variant="ghost"
+        size="sm"
+        className="flex items-center gap-1 h-auto px-0"
         onClick={() => onSort(nextSortState(sort, key))}
       >
         <span>{label}</span>
         <span className="text-xs text-muted-foreground">{indicator}</span>
-      </button>
+      </Button>
     )
   }
 

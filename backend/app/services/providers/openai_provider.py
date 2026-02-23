@@ -13,6 +13,89 @@ from app.services.providers.base import (
 )
 
 
+class NonChatModelError(Exception):
+    pass
+
+
+def _messages_to_prompt(messages: list[dict]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if not content:
+            continue
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") in {"text", "input_text"} and item.get("text"):
+                    text_parts.append(str(item.get("text")))
+            content = "\n".join(text_parts).strip()
+            if not content:
+                continue
+        role = message.get("role", "user")
+        label = role.capitalize()
+        parts.append(f"{label}: {content}")
+    parts.append("Assistant:")
+    return "\n\n".join(parts)
+
+
+def _is_non_chat_model_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "not a chat model" in message:
+        return True
+    if "v1/chat/completions" in message and "v1/completions" in message:
+        return True
+    if "not supported in the v1/completions endpoint" in message:
+        return True
+    return False
+
+
+def _extract_response_text(result: object) -> str:
+    content = getattr(result, "output_text", "") or ""
+    if content:
+        return content
+    output = getattr(result, "output", []) or []
+    parts: list[str] = []
+    for item in output:
+        if getattr(item, "type", "") == "message":
+            for part in getattr(item, "content", []) or []:
+                if getattr(part, "type", "") == "output_text":
+                    parts.append(getattr(part, "text", ""))
+    return "\n".join(part for part in parts if part)
+
+
+def _coalesce_usage_tokens(usage: object | None) -> tuple[int, int, int, int, int]:
+    if not usage:
+        return 0, 0, 0, 0, 0
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    total_tokens = getattr(usage, "total_tokens", 0) or 0
+    input_tokens = getattr(usage, "input_tokens", 0) or 0
+    output_tokens = getattr(usage, "output_tokens", 0) or 0
+    if prompt_tokens == 0 and input_tokens:
+        prompt_tokens = input_tokens
+    if completion_tokens == 0 and output_tokens:
+        completion_tokens = output_tokens
+    if total_tokens == 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens
+
+
+def _extract_usage_details(usage: object | None) -> tuple[int, int]:
+    if not usage:
+        return 0, 0
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
+        usage, "cached_prompt_tokens", 0
+    )
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
+        usage, "reasoning_tokens", 0
+    )
+    return cached_tokens or 0, thinking_tokens or 0
+
+
 class OpenAIProvider:
     def __init__(
         self,
@@ -52,6 +135,8 @@ class OpenAIProvider:
         try:
             return await self.client.chat.completions.create(**payload)
         except Exception as exc:
+            if _is_non_chat_model_error(exc):
+                raise NonChatModelError(str(exc)) from exc
             retry = False
             if payload.get("reasoning_effort"):
                 payload.pop("reasoning_effort", None)
@@ -72,35 +157,55 @@ class OpenAIProvider:
                 return await self.client.chat.completions.create(**payload)
             raise
 
+    async def _create_response(self, payload: dict) -> object:
+        try:
+            return await self.client.responses.create(**payload)
+        except Exception as exc:
+            if self._strip_prompt_cache(payload):
+                self.logger.error(
+                    "responses rejected prompt_cache params, retrying without them: %s",
+                    exc,
+                    exc_info=True,
+                )
+                return await self.client.responses.create(**payload)
+            raise
+
+    async def _create_text_completion(self, payload: dict) -> object:
+        try:
+            return await self.client.completions.create(**payload)
+        except Exception as exc:
+            if _is_non_chat_model_error(exc):
+                raise NonChatModelError(str(exc)) from exc
+            raise
+
     async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
         payload = {"model": model, "messages": messages}
         self._apply_prompt_cache(payload)
         if self.reasoning_effort and self.reasoning_effort != "none":
             payload["reasoning_effort"] = self.reasoning_effort
-        result = await self._create_chat_completion(payload)
-        message = result.choices[0].message.content or ""
-        usage = result.usage
-        cached_tokens = 0
-        thinking_tokens = 0
-        if usage:
-            prompt_details = getattr(usage, "prompt_tokens_details", None)
-            cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-                usage, "cached_prompt_tokens", 0
-            )
-            completion_details = getattr(usage, "completion_tokens_details", None)
-            thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-                usage, "reasoning_tokens", 0
-            )
-        prompt_tokens = usage.prompt_tokens or 0
-        input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+        try:
+            result = await self._create_chat_completion(payload)
+            message = result.choices[0].message.content or "" if result.choices else ""
+            usage = result.usage
+        except NonChatModelError:
+            input_items = _to_responses_input(messages)
+            response = await self._create_response({"model": model, "input": input_items})
+            message = _extract_response_text(response)
+            usage = response.usage
+        cached_tokens, thinking_tokens = _extract_usage_details(usage)
+        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+            _coalesce_usage_tokens(usage)
+        )
+        if input_tokens == 0:
+            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=message,
             usage=ChatUsage(
                 prompt_tokens=prompt_tokens,
-                completion_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
                 input_tokens=input_tokens,
-                output_tokens=usage.completion_tokens or 0,
+                output_tokens=output_tokens or completion_tokens,
                 cached_tokens=cached_tokens or 0,
                 thinking_tokens=thinking_tokens or 0,
             ),
@@ -154,19 +259,50 @@ class OpenAIProvider:
         self._apply_prompt_cache(payload)
         if self.reasoning_effort and self.reasoning_effort != "none":
             payload["reasoning_effort"] = self.reasoning_effort
-        result = await self._create_chat_completion(payload)
-        usage = result.usage
-        cached_tokens = 0
-        thinking_tokens = 0
-        if usage:
-            prompt_details = getattr(usage, "prompt_tokens_details", None)
-            cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-                usage, "cached_prompt_tokens", 0
+        try:
+            result = await self._create_chat_completion(payload)
+            usage = result.usage
+        except NonChatModelError:
+            self.logger.warning(
+                "Model %s does not support chat tools; falling back to responses.",
+                model,
             )
-            completion_details = getattr(usage, "completion_tokens_details", None)
-            thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-                usage, "reasoning_tokens", 0
+            input_items = _to_responses_input(normalized_messages)
+            response = await self._create_response(
+                {
+                    "model": model,
+                    "input": input_items,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.parameters,
+                        }
+                        for tool in tools
+                    ],
+                }
             )
+            content = _extract_response_text(response)
+            usage = getattr(response, "usage", None)
+            prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                _coalesce_usage_tokens(usage)
+            )
+            return ChatResponse(
+                content=content or "",
+                usage=ChatUsage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    input_tokens=input_tokens or prompt_tokens,
+                    output_tokens=output_tokens or completion_tokens,
+                    cached_tokens=0,
+                    thinking_tokens=0,
+                ),
+                tool_calls=None,
+                finish_reason=None,
+            )
+        cached_tokens, thinking_tokens = _extract_usage_details(usage)
         tool_calls: list[ChatToolCall] = []
         finish_reason = None
         if result.choices:
@@ -186,16 +322,19 @@ class OpenAIProvider:
                         arguments=arguments,
                     )
                 )
-        prompt_tokens = usage.prompt_tokens or 0
-        input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+            _coalesce_usage_tokens(usage)
+        )
+        if input_tokens == 0:
+            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=result.choices[0].message.content or "" if result.choices else "",
             usage=ChatUsage(
                 prompt_tokens=prompt_tokens,
-                completion_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
                 input_tokens=input_tokens,
-                output_tokens=usage.completion_tokens or 0,
+                output_tokens=output_tokens or completion_tokens,
                 cached_tokens=cached_tokens or 0,
                 thinking_tokens=thinking_tokens or 0,
             ),
@@ -211,32 +350,27 @@ class OpenAIProvider:
             "tools": [{"type": "web_search"}],
         }
         self._apply_prompt_cache(payload)
-        try:
-            result = await self.client.responses.create(**payload)
-        except Exception as exc:
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "responses rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                result = await self.client.responses.create(**payload)
-            else:
-                raise
-        content = getattr(result, "output_text", "") or ""
-        if not content:
-            output = getattr(result, "output", []) or []
-            parts: list[str] = []
-            for item in output:
-                if getattr(item, "type", "") == "message":
-                    for part in getattr(item, "content", []) or []:
-                        if getattr(part, "type", "") == "output_text":
-                            parts.append(getattr(part, "text", ""))
-            content = "\n".join(part for part in parts if part)
+        result = await self._create_response(payload)
+        content = _extract_response_text(result)
         sources = _extract_openai_sources(result)
+        usage = getattr(result, "usage", None)
+        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+            _coalesce_usage_tokens(usage)
+        )
+        cached_tokens, thinking_tokens = _extract_usage_details(usage)
+        if input_tokens == 0:
+            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=content,
-            usage=ChatUsage(0, 0, 0, 0, 0, 0, 0),
+            usage=ChatUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens or completion_tokens,
+                cached_tokens=cached_tokens or 0,
+                thinking_tokens=thinking_tokens or 0,
+            ),
             sources=sources or None,
         )
 
@@ -250,7 +384,30 @@ class OpenAIProvider:
         self._apply_prompt_cache(payload)
         if self.reasoning_effort and self.reasoning_effort != "none":
             payload["reasoning_effort"] = self.reasoning_effort
-        stream = await self._create_chat_completion(payload)
+        try:
+            stream = await self._create_chat_completion(payload)
+        except NonChatModelError:
+            input_items = _to_responses_input(messages)
+            response = await self._create_response({"model": model, "input": input_items})
+            content = _extract_response_text(response)
+            if content:
+                yield ChatStreamChunk(content=content)
+            usage = getattr(response, "usage", None)
+            prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                _coalesce_usage_tokens(usage)
+            )
+            yield ChatStreamChunk(
+                usage=ChatUsage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    input_tokens=input_tokens or prompt_tokens,
+                    output_tokens=output_tokens or completion_tokens,
+                    cached_tokens=0,
+                    thinking_tokens=0,
+                )
+            )
+            return
         usage_sent = False
         async for event in stream:
             if event.choices:
@@ -259,25 +416,19 @@ class OpenAIProvider:
                     yield ChatStreamChunk(content=delta)
             if event.usage:
                 usage_sent = True
-                cached_tokens = 0
-                thinking_tokens = 0
-                prompt_details = getattr(event.usage, "prompt_tokens_details", None)
-                cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-                    event.usage, "cached_prompt_tokens", 0
+                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
+                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                    _coalesce_usage_tokens(event.usage)
                 )
-                completion_details = getattr(event.usage, "completion_tokens_details", None)
-                thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-                    event.usage, "reasoning_tokens", 0
-                )
-                prompt_tokens = event.usage.prompt_tokens or 0
-                input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+                if input_tokens == 0:
+                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
                 yield ChatStreamChunk(
                     usage=ChatUsage(
                         prompt_tokens=prompt_tokens,
-                        completion_tokens=event.usage.completion_tokens or 0,
-                        total_tokens=event.usage.total_tokens or 0,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
                         input_tokens=input_tokens,
-                        output_tokens=event.usage.completion_tokens or 0,
+                        output_tokens=output_tokens or completion_tokens,
                         cached_tokens=cached_tokens or 0,
                         thinking_tokens=thinking_tokens or 0,
                     )
@@ -338,27 +489,20 @@ class AzureOpenAIProvider:
                 raise
         message = result.choices[0].message.content or ""
         usage = result.usage
-        cached_tokens = 0
-        thinking_tokens = 0
-        if usage:
-            prompt_details = getattr(usage, "prompt_tokens_details", None)
-            cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-                usage, "cached_prompt_tokens", 0
-            )
-            completion_details = getattr(usage, "completion_tokens_details", None)
-            thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-                usage, "reasoning_tokens", 0
-            )
-        prompt_tokens = usage.prompt_tokens or 0
-        input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+        cached_tokens, thinking_tokens = _extract_usage_details(usage)
+        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+            _coalesce_usage_tokens(usage)
+        )
+        if input_tokens == 0:
+            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=message,
             usage=ChatUsage(
                 prompt_tokens=prompt_tokens,
-                completion_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
                 input_tokens=input_tokens,
-                output_tokens=usage.completion_tokens or 0,
+                output_tokens=output_tokens or completion_tokens,
                 cached_tokens=cached_tokens or 0,
                 thinking_tokens=thinking_tokens or 0,
             ),
@@ -424,17 +568,7 @@ class AzureOpenAIProvider:
             else:
                 raise
         usage = result.usage
-        cached_tokens = 0
-        thinking_tokens = 0
-        if usage:
-            prompt_details = getattr(usage, "prompt_tokens_details", None)
-            cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-                usage, "cached_prompt_tokens", 0
-            )
-            completion_details = getattr(usage, "completion_tokens_details", None)
-            thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-                usage, "reasoning_tokens", 0
-            )
+        cached_tokens, thinking_tokens = _extract_usage_details(usage)
         tool_calls: list[ChatToolCall] = []
         finish_reason = None
         if result.choices:
@@ -448,16 +582,19 @@ class AzureOpenAIProvider:
                         arguments=call.function.arguments or {},
                     )
                 )
-        prompt_tokens = usage.prompt_tokens or 0
-        input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+            _coalesce_usage_tokens(usage)
+        )
+        if input_tokens == 0:
+            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=result.choices[0].message.content or "" if result.choices else "",
             usage=ChatUsage(
                 prompt_tokens=prompt_tokens,
-                completion_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
                 input_tokens=input_tokens,
-                output_tokens=usage.completion_tokens or 0,
+                output_tokens=output_tokens or completion_tokens,
                 cached_tokens=cached_tokens or 0,
                 thinking_tokens=thinking_tokens or 0,
             ),
@@ -521,7 +658,7 @@ def _extract_openai_sources(response) -> list[str]:
                             sources.append(url)
     return list(dict.fromkeys(sources))
 
-    async def chat_stream(self, model: str, messages: list[dict]):
+async def chat_stream(self, model: str, messages: list[dict]):
         deployment = settings.azure_openai_deployment or model
         payload = {
             "model": deployment,
@@ -550,25 +687,19 @@ def _extract_openai_sources(response) -> list[str]:
                     yield ChatStreamChunk(content=delta)
             if event.usage:
                 usage_sent = True
-                cached_tokens = 0
-                thinking_tokens = 0
-                prompt_details = getattr(event.usage, "prompt_tokens_details", None)
-                cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-                    event.usage, "cached_prompt_tokens", 0
+                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
+                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                    _coalesce_usage_tokens(event.usage)
                 )
-                completion_details = getattr(event.usage, "completion_tokens_details", None)
-                thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-                    event.usage, "reasoning_tokens", 0
-                )
-                prompt_tokens = event.usage.prompt_tokens or 0
-                input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+                if input_tokens == 0:
+                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
                 yield ChatStreamChunk(
                     usage=ChatUsage(
                         prompt_tokens=prompt_tokens,
-                        completion_tokens=event.usage.completion_tokens or 0,
-                        total_tokens=event.usage.total_tokens or 0,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
                         input_tokens=input_tokens,
-                        output_tokens=event.usage.completion_tokens or 0,
+                        output_tokens=output_tokens or completion_tokens,
                         cached_tokens=cached_tokens or 0,
                         thinking_tokens=thinking_tokens or 0,
                     )

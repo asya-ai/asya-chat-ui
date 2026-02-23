@@ -133,14 +133,72 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
     ...options,
     headers,
   })
+  const refreshedToken = response.headers.get("x-access-token")
+  if (refreshedToken) {
+    tokenStore.set(refreshedToken)
+  }
   if (!response.ok) {
     if (response.status === 401 && !options.skipAuth) {
       tokenStore.clear()
       orgStore.clear()
       window.location.href = "/login"
     }
-    const message = await response.text()
-    throw new Error(message || "Request failed")
+    const contentType = response.headers.get("content-type") || ""
+    let message = "Request failed"
+    if (contentType.includes("application/json")) {
+      try {
+        const data = (await response.json()) as
+          | { detail?: unknown; message?: unknown; error?: unknown }
+          | unknown
+        if (typeof data === "string") {
+          message = data
+        } else if (data && typeof data === "object") {
+          const detail = (data as { detail?: unknown }).detail
+          if (typeof detail === "string") {
+            message = detail
+          } else if (Array.isArray(detail)) {
+            message = detail
+              .map((item) =>
+                typeof item === "string"
+                  ? item
+                  : typeof item?.msg === "string"
+                    ? item.msg
+                    : null
+              )
+              .filter(Boolean)
+              .join("\n")
+          } else if (typeof (data as { message?: unknown }).message === "string") {
+            message = (data as { message?: string }).message as string
+          } else if (typeof (data as { error?: unknown }).error === "string") {
+            message = (data as { error?: string }).error as string
+          }
+        }
+      } catch {
+        // fall back to text
+      }
+    }
+    if (message === "Request failed") {
+      try {
+        const text = await response.text()
+        if (text) {
+          try {
+            const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown }
+            if (typeof parsed?.detail === "string") {
+              message = parsed.detail
+            } else if (typeof parsed?.message === "string") {
+              message = parsed.message
+            } else {
+              message = text
+            }
+          } catch {
+            message = text
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    throw new Error(message)
   }
   if (response.status === 204) {
     return {} as T
@@ -166,6 +224,23 @@ export const authApi = {
       method: "POST",
       skipAuth: true,
       body: JSON.stringify({ token, password }),
+    }),
+  invitePreview: (token: string) =>
+    apiFetch<{ email: string; org_name?: string | null; expires_at: string }>(
+      `/auth/invites/preview?token=${encodeURIComponent(token)}`,
+      { skipAuth: true }
+    ),
+  requestPasswordReset: (email: string) =>
+    apiFetch("/auth/password-reset", {
+      method: "POST",
+      skipAuth: true,
+      body: JSON.stringify({ email }),
+    }),
+  confirmPasswordReset: (token: string, newPassword: string) =>
+    apiFetch("/auth/password-reset/confirm", {
+      method: "POST",
+      skipAuth: true,
+      body: JSON.stringify({ token, new_password: newPassword }),
     }),
   createInvite: (orgId: string, email: string) =>
     apiFetch("/auth/invites", {
@@ -267,6 +342,11 @@ export const modelApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  updateOrder: (payload: { model_id: string; display_order: number }[]) =>
+    apiFetch<ChatModel[]>("/models/order", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   setOrgModels: (
     orgId: string,
     payload: { model_id: string; is_enabled: boolean }[]
@@ -285,23 +365,25 @@ export const chatApi = {
     content: string,
     model_id?: string,
     attachments?: ChatMessageAttachmentInput[],
+    reasoning_effort?: string | null,
     locale?: string
   ) =>
     apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content, model_id, attachments, locale }),
+      body: JSON.stringify({ content, model_id, attachments, reasoning_effort, locale }),
     }),
   sendMessageStream: (
     chatId: string,
     content: string,
     model_id: string | undefined,
     attachments: ChatMessageAttachmentInput[] | undefined,
+    reasoning_effort: string | null | undefined,
     locale: string | undefined,
     onEvent: (event: StreamEvent) => void
   ) =>
     apiWebSocket(
       `/chats/${chatId}/ws`,
-      { content, model_id, attachments, locale },
+      { content, model_id, attachments, reasoning_effort, locale },
       onEvent
     ),
   editMessageStream: (

@@ -6,6 +6,7 @@ import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n } from "@/lib/i18n-context"
 import { LanguageSelect } from "@/components/LanguageSelect"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -19,6 +20,7 @@ export const LoginPage = () => {
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const hasError = Boolean(error)
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -54,6 +56,7 @@ export const LoginPage = () => {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
+                className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
                 required
               />
               <Input
@@ -61,9 +64,14 @@ export const LoginPage = () => {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 type="password"
+                className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
                 required
               />
-              {error ? <p className="text-sm text-red-500">{error}</p> : null}
+              {error ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              ) : null}
               <Button className="w-full" disabled={loading}>
                 {loading ? t("auth_sign_in_loading") : t("auth_sign_in")}
               </Button>
@@ -73,6 +81,11 @@ export const LoginPage = () => {
                   {t("auth_register")}
                 </Link>
               </div>
+            <div className="text-center text-sm">
+              <Link to="/reset-password" className="underline">
+                {t("auth_forgot_password")}
+              </Link>
+            </div>
             </form>
           </CardContent>
         </Card>

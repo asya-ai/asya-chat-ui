@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlmodel import Session, select
+from sqlalchemy import func
 
 from app.api.deps import get_current_user, get_db
 from app.models import ChatModel, Org, OrgModel, OrgMembership, OrgProviderConfig, User
@@ -30,6 +31,7 @@ class ModelRead(BaseModel):
     model_name: str
     display_name: str
     is_active: bool
+    display_order: int
     context_length: int | None = None
     supports_image_input: bool | None = None
     supports_image_output: bool | None = None
@@ -39,6 +41,11 @@ class ModelRead(BaseModel):
 class ModelUpdateRequest(BaseModel):
     display_name: str | None = None
     reasoning_effort: str | None = None
+
+
+class ModelOrderUpdateRequest(BaseModel):
+    model_id: str
+    display_order: int
 
 
 class ModelSuggestionItem(BaseModel):
@@ -76,11 +83,13 @@ def create_model(
 ) -> ModelRead:
     require_super_admin(current_user)
 
+    max_order = session.exec(select(func.max(ChatModel.display_order))).first() or 0
     model = ChatModel(
         provider=payload.provider,
         model_name=payload.model_name,
         display_name=payload.display_name,
         is_active=payload.is_active,
+        display_order=max_order + 1,
         context_length=payload.context_length,
         supports_image_input=payload.supports_image_input,
         supports_image_output=payload.supports_image_output,
@@ -95,6 +104,7 @@ def create_model(
         model_name=model.model_name,
         display_name=model.display_name,
         is_active=model.is_active,
+        display_order=model.display_order,
         context_length=model.context_length,
         supports_image_input=model.supports_image_input,
         supports_image_output=model.supports_image_output,
@@ -116,7 +126,11 @@ def list_models(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
             ) from exc
     elif current_user.is_super_admin and not org_id:
-        models = session.exec(select(ChatModel).where(ChatModel.is_active.is_(True))).all()
+        models = session.exec(
+            select(ChatModel)
+            .where(ChatModel.is_active.is_(True))
+            .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
+        ).all()
         return [
             ModelRead(
                 id=str(model.id),
@@ -124,6 +138,7 @@ def list_models(
                 model_name=model.model_name,
                 display_name=model.display_name,
                 is_active=model.is_active,
+                display_order=model.display_order,
                 context_length=model.context_length,
                 supports_image_input=model.supports_image_input,
                 supports_image_output=model.supports_image_output,
@@ -153,8 +168,10 @@ def list_models(
             OrgProviderConfig.is_enabled.is_(False),
         )
     ).all()
-    models_query = select(ChatModel).where(
-        ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids)
+    models_query = (
+        select(ChatModel)
+        .where(ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids))
+        .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
     )
     if disabled_providers:
         models_query = models_query.where(ChatModel.provider.notin_(disabled_providers))
@@ -166,6 +183,7 @@ def list_models(
             model_name=model.model_name,
             display_name=model.display_name,
             is_active=model.is_active,
+            display_order=model.display_order,
             context_length=model.context_length,
             supports_image_input=model.supports_image_input,
             supports_image_output=model.supports_image_output,
@@ -183,48 +201,83 @@ def list_model_suggestions(
     return get_model_suggestions()
 
 
-@router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{model_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_model(
-    model_id: str,
+    model_id: UUID,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
     require_super_admin(current_user)
-    try:
-        model_uuid = UUID(model_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
-        ) from exc
-    model = session.exec(select(ChatModel).where(ChatModel.id == model_uuid)).first()
+    model = session.exec(select(ChatModel).where(ChatModel.id == model_id)).first()
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     model.is_active = False
     session.add(model)
-    links = session.exec(
-        select(OrgModel).where(OrgModel.model_id == model_uuid)
-    ).all()
+    links = session.exec(select(OrgModel).where(OrgModel.model_id == model_id)).all()
     for link in links:
         link.is_enabled = False
         session.add(link)
     session.commit()
 
 
-@router.patch("/{model_id}", response_model=ModelRead)
+@router.patch("/order", response_model=list[ModelRead])
+def update_model_order(
+    payload: list[ModelOrderUpdateRequest],
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ModelRead]:
+    require_super_admin(current_user)
+    updates: dict[UUID, int] = {}
+    for item in payload:
+        try:
+            model_uuid = UUID(item.model_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
+            ) from exc
+        if item.display_order < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid display order"
+            )
+        updates[model_uuid] = item.display_order
+    if not updates:
+        return []
+    models = session.exec(select(ChatModel).where(ChatModel.id.in_(updates.keys()))).all()
+    for model in models:
+        model.display_order = updates.get(model.id, model.display_order)
+        session.add(model)
+    session.commit()
+    ordered = session.exec(
+        select(ChatModel)
+        .where(ChatModel.is_active.is_(True))
+        .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
+    ).all()
+    return [
+        ModelRead(
+            id=str(model.id),
+            provider=model.provider,
+            model_name=model.model_name,
+            display_name=model.display_name,
+            is_active=model.is_active,
+            display_order=model.display_order,
+            context_length=model.context_length,
+            supports_image_input=model.supports_image_input,
+            supports_image_output=model.supports_image_output,
+            reasoning_effort=model.reasoning_effort,
+        )
+        for model in ordered
+    ]
+
+
+@router.patch("/{model_id:uuid}", response_model=ModelRead)
 def update_model(
-    model_id: str,
+    model_id: UUID,
     payload: ModelUpdateRequest,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ModelRead:
     require_super_admin(current_user)
-    try:
-        model_uuid = UUID(model_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
-        ) from exc
-    model = session.exec(select(ChatModel).where(ChatModel.id == model_uuid)).first()
+    model = session.exec(select(ChatModel).where(ChatModel.id == model_id)).first()
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     if payload.display_name is not None:
@@ -240,6 +293,7 @@ def update_model(
         model_name=model.model_name,
         display_name=model.display_name,
         is_active=model.is_active,
+        display_order=model.display_order,
         context_length=model.context_length,
         supports_image_input=model.supports_image_input,
         supports_image_output=model.supports_image_output,
@@ -307,9 +361,9 @@ def set_org_models(
     if not enabled_model_ids:
         return []
     models = session.exec(
-        select(ChatModel).where(
-            ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids)
-        )
+        select(ChatModel)
+        .where(ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids))
+        .order_by(ChatModel.display_order, ChatModel.created_at)
     ).all()
     return [
         ModelRead(
@@ -318,6 +372,7 @@ def set_org_models(
             model_name=model.model_name,
             display_name=model.display_name,
             is_active=model.is_active,
+            display_order=model.display_order,
             context_length=model.context_length,
             supports_image_input=model.supports_image_input,
             supports_image_output=model.supports_image_output,

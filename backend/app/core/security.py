@@ -4,6 +4,8 @@ from typing import Optional
 from fastapi import HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+import re
+
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -18,6 +20,15 @@ def get_password_hash(password: str) -> str:
 
 def verify_password(password: str, hashed_password: str) -> bool:
     return pwd_context.verify(password, hashed_password)
+
+
+_PASSWORD_POLICY = re.compile(
+    r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{10,}$"
+)
+
+
+def validate_password(password: str) -> bool:
+    return bool(_PASSWORD_POLICY.match(password))
 
 
 def create_access_token(subject: str, expires_minutes: Optional[int] = None) -> str:
