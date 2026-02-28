@@ -76,13 +76,17 @@ const toMarkdown = (html, url) => {
 };
 
 app.post("/scrape", async (req, res) => {
-  const { url } = req.body || {};
+  const { url, output } = req.body || {};
   if (!url || typeof url !== "string") {
     return res.status(400).json({ error: "Missing url" });
   }
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     return res.status(400).json({ error: "Invalid URL scheme" });
   }
+  const outputMode =
+    typeof output === "string" && output.toLowerCase() === "screenshot"
+      ? "screenshot"
+      : "markdown";
 
   try {
     const isValid = await validateUrl(url);
@@ -110,6 +114,16 @@ app.post("/scrape", async (req, res) => {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
     const finalUrl = page.url();
     const title = await page.title();
+    if (outputMode === "screenshot") {
+      const screenshot = await page.screenshot({
+        type: "png",
+        fullPage: true,
+        encoding: "base64",
+      });
+      await page.close();
+      return res.json({ finalUrl, title, screenshot });
+    }
+
     const html = await page.content();
     await page.close();
 

@@ -36,6 +36,7 @@ class ModelRead(BaseModel):
     supports_image_input: bool | None = None
     supports_image_output: bool | None = None
     reasoning_effort: str | None = None
+    is_available: bool = True
 
 
 class ModelUpdateRequest(BaseModel):
@@ -162,19 +163,17 @@ def list_models(
     if not enabled_model_ids:
         return []
 
-    disabled_providers = session.exec(
+    disabled_providers = set(session.exec(
         select(OrgProviderConfig.provider).where(
             OrgProviderConfig.org_id == org_uuid,
             OrgProviderConfig.is_enabled.is_(False),
         )
-    ).all()
+    ).all())
     models_query = (
         select(ChatModel)
         .where(ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids))
         .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
     )
-    if disabled_providers:
-        models_query = models_query.where(ChatModel.provider.notin_(disabled_providers))
     models = session.exec(models_query).all()
     return [
         ModelRead(
@@ -188,6 +187,7 @@ def list_models(
             supports_image_input=model.supports_image_input,
             supports_image_output=model.supports_image_output,
             reasoning_effort=model.reasoning_effort,
+            is_available=model.provider not in disabled_providers,
         )
         for model in models
     ]

@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     gemini_cached_content_max_items: int = Field(
         default=512, validation_alias="GEMINI_CACHED_CONTENT_MAX_ITEMS"
     )
+    google_vertex_project: str | None = Field(default=None, validation_alias="GOOGLE_VERTEX_PROJECT")
+    google_vertex_location: str | None = Field(default=None, validation_alias="GOOGLE_VERTEX_LOCATION")
+    openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     groq_base_url: str = Field(
         default="https://api.groq.com", validation_alias="GROQ_BASE_URL"

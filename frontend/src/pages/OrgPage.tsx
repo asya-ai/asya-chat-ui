@@ -10,6 +10,7 @@ import type {
   Invite,
   ModelSuggestionProvider,
   Org,
+  OrgAuthSettings,
   OrgMember,
   OrgWebSettings,
   ProviderConfig,
@@ -34,7 +35,11 @@ import { ArrowDown, ArrowUp, Image } from "lucide-react"
 
 type SettingsSection = "orgs" | "users" | "models"
 
-const PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic"] as const
+const PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic", "openrouter", "vertex"] as const
+
+type ProviderConfigUI = ProviderConfig & {
+  mode: "disabled" | "default" | "override"
+}
 
 export const OrgPage = () => {
   const navigate = useNavigate()
@@ -44,7 +49,11 @@ export const OrgPage = () => {
   const [models, setModels] = useState<ChatModel[]>([])
   const [members, setMembers] = useState<OrgMember[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
-  const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([])
+  const [providerConfigs, setProviderConfigs] = useState<ProviderConfigUI[]>([])
+  const [authSettings, setAuthSettings] = useState<OrgAuthSettings | null>(null)
+  const [authSecret, setAuthSecret] = useState("")
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [providerModalOpen, setProviderModalOpen] = useState(false)
   const [webSettings, setWebSettings] = useState<OrgWebSettings | null>(null)
   const [accessEnabledIds, setAccessEnabledIds] = useState<string[]>([])
   const [name, setName] = useState("")
@@ -228,13 +237,42 @@ export const OrgPage = () => {
       .providers(orgSettingsId)
       .then((configs) =>
         setProviderConfigs(
-          configs.map((config) => ({
-            ...config,
-            api_key_override: "",
-          }))
+          configs.map((config) => {
+            let mode: ProviderConfigUI["mode"] = "default"
+            if (!config.is_enabled) {
+              mode = "disabled"
+            } else if (
+              config.api_key_override_set ||
+              config.api_key_override ||
+              config.base_url_override ||
+              config.endpoint_override ||
+              config.config_json
+            ) {
+              mode = "override"
+            } else if (!config.has_global_config) {
+              // If no global config and no override, it's effectively disabled or needs override
+              // User said: "disable and do not allow setting to Enabled(Default) Providers that have no api keys/credentials set. Allow only Enabled(override) for those"
+              // If is_enabled was true but no global config, it was likely defaulted to True in backend but actually broken.
+              // We should probably show it as "disabled" initially if no override is set?
+              // Or force user to pick.
+              mode = "disabled"
+            }
+            return {
+              ...config,
+              api_key_override: "",
+              mode,
+            }
+          })
         )
       )
       .catch(() => setProviderConfigs([]))
+    orgApi
+      .authSettings(orgSettingsId)
+      .then((settings) => {
+        setAuthSettings(settings)
+        setAuthSecret("")
+      })
+      .catch(() => setAuthSettings(null))
     orgApi
       .webSettings(orgSettingsId)
       .then(setWebSettings)
@@ -375,9 +413,8 @@ export const OrgPage = () => {
   }
 
   const providerOptions = useMemo(() => {
-    const fromSuggestions = suggestions.map((provider) => provider.provider)
-    return fromSuggestions.length > 0 ? fromSuggestions : [...PROVIDERS]
-  }, [suggestions])
+    return [...PROVIDERS]
+  }, [])
 
   const reasoningOptions = ["none", "low", "medium", "high"]
   const reasoningLabel = (value: string) => {
@@ -465,24 +502,37 @@ export const OrgPage = () => {
     setOrgSettingsName(updated.name)
   }
 
-  const updateProviderConfig = async (config: ProviderConfig) => {
+  const updateProviderConfig = async (config: ProviderConfigUI) => {
     if (!orgSettingsId) return
     const payload = [
       {
         provider: config.provider,
-        is_enabled: config.is_enabled,
-        api_key_override: config.api_key_override ?? "",
-        base_url_override: config.base_url_override ?? "",
-        endpoint_override: config.endpoint_override ?? "",
+        is_enabled: config.mode !== "disabled",
+        api_key_override: config.mode === "override" ? (config.api_key_override ?? "") : "",
+        base_url_override: config.mode === "override" ? (config.base_url_override ?? "") : "",
+        endpoint_override: config.mode === "override" ? (config.endpoint_override ?? "") : "",
+        config_json: config.mode === "override" ? (config.config_json ?? "") : "",
       },
     ]
     const updated = await orgApi.updateProviders(orgSettingsId, payload)
-    setProviderConfigs(
-      updated.map((item) => ({
-        ...item,
-        api_key_override: "",
-      }))
-    )
+    setProviderConfigs((prev) => {
+      // Update the saved config but preserve the UI state (mode) if consistent,
+      // or update it based on response. Actually response reflects what we saved.
+      // But we lose the "api_key_override" value (it comes back masked as api_key_override_set).
+      // So we should re-map.
+      return prev.map((prevConfig) => {
+        const up = updated.find((u) => u.provider === prevConfig.provider)
+        if (!up) return prevConfig
+        // If we just saved "default", mode should be "default".
+        // If "disabled", mode "disabled".
+        // If "override", mode "override".
+        return {
+          ...up,
+          api_key_override: "", // Always clear on save as it's secret
+          mode: config.mode,
+        }
+      })
+    })
   }
 
   const updateWebSettings = async (payload: Partial<OrgWebSettings>) => {
@@ -491,16 +541,42 @@ export const OrgPage = () => {
     setWebSettings(updated)
   }
 
-  const updateProviderField = <K extends keyof ProviderConfig>(
+  const updateProviderField = <K extends keyof ProviderConfigUI>(
     provider: string,
     field: K,
-    value: ProviderConfig[K]
+    value: ProviderConfigUI[K]
   ) => {
     setProviderConfigs((prev) =>
       prev.map((config) =>
         config.provider === provider ? { ...config, [field]: value } : config
       )
     )
+  }
+
+  const updateAuthField = <K extends keyof OrgAuthSettings>(
+    field: K,
+    value: OrgAuthSettings[K]
+  ) => {
+    setAuthSettings((prev) => (prev ? { ...prev, [field]: value } : prev))
+  }
+
+  const saveAuthSettings = async () => {
+    if (!orgSettingsId || !authSettings) return
+    const payload = {
+      slug: authSettings.slug,
+      oidc_enabled: authSettings.oidc_enabled,
+      oidc_issuer: authSettings.oidc_issuer ?? "",
+      oidc_client_id: authSettings.oidc_client_id ?? "",
+      oidc_client_secret: authSecret ? authSecret : undefined,
+      oidc_scopes: authSettings.oidc_scopes,
+      oidc_email_claim: authSettings.oidc_email_claim,
+      oidc_username_claim: authSettings.oidc_username_claim ?? "",
+      oidc_groups_claim: authSettings.oidc_groups_claim ?? "",
+      oidc_auto_create_users: authSettings.oidc_auto_create_users,
+    }
+    const updated = await orgApi.updateAuthSettings(orgSettingsId, payload)
+    setAuthSettings(updated)
+    setAuthSecret("")
   }
 
   if (!authChecked) {
@@ -656,118 +732,16 @@ export const OrgPage = () => {
                       {t("org_save_name")}
                     </Button>
                   </div>
-                  <div className="space-y-4">
-                    {providerConfigs.map((config) => (
-                      <div key={config.provider} className="rounded-md border p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-semibold">{config.provider}</p>
-                          <Select
-                            value={config.is_enabled ? "enabled" : "disabled"}
-                            onValueChange={(value) =>
-                              updateProviderField(
-                                config.provider,
-                                "is_enabled",
-                                value === "enabled"
-                              )
-                            }
-                          >
-                            <SelectTrigger className="w-32">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="enabled">
-                                {t("org_provider_enabled")}
-                              </SelectItem>
-                              <SelectItem value="disabled">
-                                {t("org_provider_disabled")}
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <Textarea
-                          placeholder={
-                            config.api_key_override_set
-                              ? t("org_provider_override_set")
-                              : t("org_provider_override_set_short")
-                          }
-                          value={config.api_key_override ?? ""}
-                          onChange={(event) =>
-                            updateProviderField(
-                              config.provider,
-                              "api_key_override",
-                              event.target.value
-                            )
-                          }
-                        />
-                        {config.provider !== "azure" ? (
-                          <Input
-                            placeholder={t("org_provider_base_url")}
-                            value={config.base_url_override ?? ""}
-                            onChange={(event) =>
-                              updateProviderField(
-                                config.provider,
-                                "base_url_override",
-                                event.target.value
-                              )
-                            }
-                          />
-                        ) : (
-                          <Input
-                            placeholder={t("org_provider_endpoint")}
-                            value={config.endpoint_override ?? ""}
-                            onChange={(event) =>
-                              updateProviderField(
-                                config.provider,
-                                "endpoint_override",
-                                event.target.value
-                              )
-                            }
-                          />
-                        )}
-                        <div className="flex gap-2">
-                          <Button onClick={() => updateProviderConfig(config)}>
-                            {t("common_save")}
-                          </Button>
-                          {config.api_key_override_set ? (
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                updateProviderField(config.provider, "api_key_override", "")
-                                updateProviderConfig({
-                                  ...config,
-                                  api_key_override: "",
-                                })
-                              }}
-                            >
-                              {t("org_provider_clear_key")}
-                            </Button>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                    {providerConfigs.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        {t("org_provider_none")}
-                      </p>
-                    ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => setAuthModalOpen(true)}>
+                      {t("org_auth_open")}
+                    </Button>
+                    <Button variant="outline" onClick={() => setProviderModalOpen(true)}>
+                      {t("org_provider_configure")}
+                    </Button>
                   </div>
                   {webSettings ? (
                     <div className="rounded-md border p-4 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-semibold">{t("org_web_tools")}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {t("org_web_tools_desc")}
-                          </p>
-                        </div>
-                        <Switch
-                          checked={webSettings.web_tools_enabled}
-                          onCheckedChange={(value) =>
-                            updateWebSettings({ web_tools_enabled: value })
-                          }
-                          disabled={!canManageOrgSettings}
-                        />
-                      </div>
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-sm font-medium">{t("org_web_search")}</p>
@@ -780,7 +754,7 @@ export const OrgPage = () => {
                           onCheckedChange={(value) =>
                             updateWebSettings({ web_search_enabled: value })
                           }
-                          disabled={!canManageOrgSettings || !webSettings.web_tools_enabled}
+                          disabled={!canManageOrgSettings}
                         />
                       </div>
                       <div className="flex items-center justify-between">
@@ -795,7 +769,7 @@ export const OrgPage = () => {
                           onCheckedChange={(value) =>
                             updateWebSettings({ web_scrape_enabled: value })
                           }
-                          disabled={!canManageOrgSettings || !webSettings.web_tools_enabled}
+                          disabled={!canManageOrgSettings}
                         />
                       </div>
                       <div className="border-t pt-3 space-y-3">
@@ -1205,10 +1179,17 @@ export const OrgPage = () => {
                     <div className="space-y-2">
                       {orderedModels.map((model) => {
                         const enabled = accessEnabledIds.includes(model.id)
+                        const providerConfig = providerConfigs.find(
+                          (c) => c.provider === model.provider
+                        )
+                        const isProviderDisabled = providerConfig?.mode === "disabled"
+
                         return (
                           <div
                             key={`access-${model.id}`}
-                            className="flex items-center justify-between rounded-md border px-3 py-2"
+                            className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                              isProviderDisabled ? "opacity-50" : ""
+                            }`}
                           >
                             <div>
                               <div className="flex items-center gap-2">
@@ -1219,9 +1200,14 @@ export const OrgPage = () => {
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 {model.provider} · {model.model_name}
+                                {isProviderDisabled ? ` (${t("common_disabled")})` : ""}
                               </p>
                             </div>
-                            <Button variant="outline" onClick={() => toggleModelAccess(model.id)}>
+                            <Button
+                              variant="outline"
+                              onClick={() => toggleModelAccess(model.id)}
+                              disabled={isProviderDisabled}
+                            >
                               {enabled ? t("org_models_enabled") : t("org_models_disabled")}
                             </Button>
                           </div>
@@ -1240,6 +1226,195 @@ export const OrgPage = () => {
           </>
         ) : null}
       </div>
+      <Dialog open={authModalOpen} onOpenChange={(open) => setAuthModalOpen(open)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t("org_auth_settings")}</DialogTitle>
+          </DialogHeader>
+          <div className="rounded-md border p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold">{t("org_auth_settings")}</p>
+              <Switch
+                checked={authSettings?.oidc_enabled ?? false}
+                onCheckedChange={(value) => updateAuthField("oidc_enabled", value)}
+              />
+            </div>
+            <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                {t("org_auth_redirect_url")}:
+              </span>{" "}
+              {`${window.location.origin}/api/auth/oidc/callback`}
+            </div>
+            <Input
+              placeholder={t("org_auth_org_slug")}
+              value={authSettings?.slug ?? ""}
+              onChange={(event) => updateAuthField("slug", event.target.value)}
+            />
+            <Input
+              placeholder={t("org_auth_oidc_issuer")}
+              value={authSettings?.oidc_issuer ?? ""}
+              onChange={(event) => updateAuthField("oidc_issuer", event.target.value)}
+            />
+            <Input
+              placeholder={t("org_auth_oidc_client_id")}
+              value={authSettings?.oidc_client_id ?? ""}
+              onChange={(event) => updateAuthField("oidc_client_id", event.target.value)}
+            />
+            <Input
+              type="password"
+              placeholder={t("org_auth_oidc_client_secret")}
+              value={authSecret}
+              onChange={(event) => setAuthSecret(event.target.value)}
+            />
+            <div className="grid gap-3 md:grid-cols-2">
+              <Input
+                placeholder={t("org_auth_oidc_scopes")}
+                value={authSettings?.oidc_scopes ?? ""}
+                onChange={(event) => updateAuthField("oidc_scopes", event.target.value)}
+              />
+              <Input
+                placeholder={t("org_auth_oidc_email_claim")}
+                value={authSettings?.oidc_email_claim ?? ""}
+                onChange={(event) => updateAuthField("oidc_email_claim", event.target.value)}
+              />
+              <Input
+                placeholder={t("org_auth_oidc_username_claim")}
+                value={authSettings?.oidc_username_claim ?? ""}
+                onChange={(event) =>
+                  updateAuthField("oidc_username_claim", event.target.value)
+                }
+              />
+              <Input
+                placeholder={t("org_auth_oidc_groups_claim")}
+                value={authSettings?.oidc_groups_claim ?? ""}
+                onChange={(event) =>
+                  updateAuthField("oidc_groups_claim", event.target.value)
+                }
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-medium">{t("org_auth_oidc_auto_create")}</p>
+              <Switch
+                checked={authSettings?.oidc_auto_create_users ?? false}
+                onCheckedChange={(value) =>
+                  updateAuthField("oidc_auto_create_users", value)
+                }
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={saveAuthSettings}>{t("common_save")}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={providerModalOpen}
+        onOpenChange={(open) => setProviderModalOpen(open)}
+      >
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t("org_provider_settings")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {providerConfigs.map((config) => (
+              <div key={config.provider} className="rounded-md border p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold">{config.provider}</p>
+                  <Select
+                    value={config.mode}
+                    onValueChange={(value) =>
+                      updateProviderField(
+                        config.provider,
+                        "mode",
+                        value as ProviderConfigUI["mode"]
+                      )
+                    }
+                  >
+                    <SelectTrigger className="w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="disabled">Disabled</SelectItem>
+                      <SelectItem value="default" disabled={!config.has_global_config}>
+                        Enabled (Defaults)
+                      </SelectItem>
+                      <SelectItem value="override">Enabled (Override)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {config.mode === "override" ? (
+                  <>
+                    <Input
+                      type="password"
+                      placeholder={
+                        config.api_key_override_set
+                          ? t("org_provider_override_set")
+                          : t("org_provider_override_set_short")
+                      }
+                      value={config.api_key_override ?? ""}
+                      onChange={(event) =>
+                        updateProviderField(
+                          config.provider,
+                          "api_key_override",
+                          event.target.value
+                        )
+                      }
+                    />
+                    {config.provider === "vertex" ? (
+                      <Textarea
+                        placeholder='Config JSON (e.g. {"project": "...", "location": "..."})'
+                        value={config.config_json ?? ""}
+                        onChange={(event) =>
+                          updateProviderField(
+                            config.provider,
+                            "config_json",
+                            event.target.value
+                          )
+                        }
+                        className="font-mono text-xs h-24"
+                      />
+                    ) : config.provider === "azure" ? (
+                      <Input
+                        placeholder={t("org_provider_endpoint")}
+                        value={config.endpoint_override ?? ""}
+                        onChange={(event) =>
+                          updateProviderField(
+                            config.provider,
+                            "endpoint_override",
+                            event.target.value
+                          )
+                        }
+                      />
+                    ) : (
+                      <Input
+                        placeholder={t("org_provider_base_url")}
+                        value={config.base_url_override ?? ""}
+                        onChange={(event) =>
+                          updateProviderField(
+                            config.provider,
+                            "base_url_override",
+                            event.target.value
+                          )
+                        }
+                      />
+                    )}
+                  </>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button onClick={() => updateProviderConfig(config)}>
+                    {t("common_save")}
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {providerConfigs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("org_provider_none")}</p>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={Boolean(renameOrgId)}
         onOpenChange={(open) => (!open ? closeRenameDialog() : null)}

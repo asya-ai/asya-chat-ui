@@ -29,6 +29,7 @@ class OrgCreateRequest(BaseModel):
 class OrgRead(BaseModel):
     id: str
     name: str
+    slug: str | None = None
     is_active: bool
     is_frozen: bool
 
@@ -46,6 +47,7 @@ class OrgMemberUpdateRequest(BaseModel):
 
 class OrgUpdateRequest(BaseModel):
     name: str | None = None
+    slug: str | None = None
     is_active: bool | None = None
     is_frozen: bool | None = None
 
@@ -70,12 +72,40 @@ class OrgWebSettingsUpdate(BaseModel):
     exec_policy: str | None = None
 
 
+class OrgAuthSettingsRead(BaseModel):
+    slug: str
+    oidc_enabled: bool
+    oidc_issuer: str | None
+    oidc_client_id: str | None
+    oidc_client_secret_set: bool
+    oidc_scopes: str
+    oidc_email_claim: str
+    oidc_username_claim: str | None
+    oidc_groups_claim: str | None
+    oidc_auto_create_users: bool
+
+
+class OrgAuthSettingsUpdate(BaseModel):
+    slug: str | None = None
+    oidc_enabled: bool | None = None
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_scopes: str | None = None
+    oidc_email_claim: str | None = None
+    oidc_username_claim: str | None = None
+    oidc_groups_claim: str | None = None
+    oidc_auto_create_users: bool | None = None
+
+
 class ProviderConfigRead(BaseModel):
     provider: str
     is_enabled: bool
     api_key_override_set: bool
     base_url_override: str | None
     endpoint_override: str | None
+    config_json: str | None
+    has_global_config: bool
 
 
 class ProviderConfigUpdate(BaseModel):
@@ -84,9 +114,50 @@ class ProviderConfigUpdate(BaseModel):
     api_key_override: str | None = None
     base_url_override: str | None = None
     endpoint_override: str | None = None
+    config_json: str | None = None
 
 
-PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic"]
+from app.core.config import settings
+
+PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic", "openrouter", "vertex"]
+
+
+def _has_global_config(provider: str) -> bool:
+    match provider:
+        case "openai":
+            return bool(settings.openai_api_key)
+        case "azure":
+            return bool(settings.azure_openai_api_key)
+        case "gemini":
+            return bool(settings.gemini_api_key)
+        case "groq":
+            return bool(settings.groq_api_key)
+        case "anthropic":
+            return bool(settings.anthropic_api_key)
+        case "openrouter":
+            return bool(settings.openrouter_api_key)
+        case "vertex":
+            return bool(settings.google_vertex_project and settings.google_vertex_location)
+        case _:
+            return False
+
+
+def _slugify(value: str) -> str:
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "org"
+
+
+def _ensure_unique_slug(session: Session, base: str, org_id: UUID | None = None) -> str:
+    slug = base
+    suffix = 1
+    while True:
+        existing = session.exec(select(Org).where(Org.slug == slug)).first()
+        if not existing or (org_id and existing.id == org_id):
+            return slug
+        slug = f"{base}-{suffix}"
+        suffix += 1
 
 
 @router.post("", response_model=OrgRead)
@@ -110,7 +181,8 @@ def create_org(
             status_code=status.HTTP_409_CONFLICT, detail="Org name already exists"
         )
 
-    org = Org(name=payload.name)
+    slug = _ensure_unique_slug(session, _slugify(payload.name))
+    org = Org(name=payload.name, slug=slug)
     session.add(org)
     session.commit()
     session.refresh(org)
@@ -136,6 +208,7 @@ def create_org(
     return OrgRead(
         id=str(org.id),
         name=org.name,
+        slug=org.slug,
         is_active=org.is_active,
         is_frozen=org.is_frozen,
     )
@@ -152,6 +225,7 @@ def list_orgs(
             OrgRead(
                 id=str(org.id),
                 name=org.name,
+                slug=org.slug,
                 is_active=org.is_active,
                 is_frozen=org.is_frozen,
             )
@@ -172,6 +246,7 @@ def list_orgs(
         OrgRead(
             id=str(org.id),
             name=org.name,
+            slug=org.slug,
             is_active=org.is_active,
             is_frozen=org.is_frozen,
         )
@@ -192,6 +267,7 @@ def list_my_orgs(
         OrgRead(
             id=str(org.id),
             name=org.name,
+            slug=org.slug,
             is_active=org.is_active,
             is_frozen=org.is_frozen,
         )
@@ -389,6 +465,9 @@ def update_org(
 
     if payload.name is not None:
         org.name = payload.name.strip() or org.name
+    if payload.slug is not None:
+        slug_candidate = _slugify(payload.slug)
+        org.slug = _ensure_unique_slug(session, slug_candidate, org.id)
 
     session.add(org)
     session.commit()
@@ -396,6 +475,7 @@ def update_org(
     return OrgRead(
         id=str(org.id),
         name=org.name,
+        slug=org.slug,
         is_active=org.is_active,
         is_frozen=org.is_frozen,
     )
@@ -460,9 +540,91 @@ def list_provider_configs(
                 api_key_override_set=bool(config and config.api_key_override),
                 base_url_override=config.base_url_override if config else None,
                 endpoint_override=config.endpoint_override if config else None,
+                config_json=config.config_json if config else None,
+                has_global_config=_has_global_config(provider),
             )
         )
     return results
+
+
+@router.get("/{org_id}/auth-settings", response_model=OrgAuthSettingsRead)
+def get_auth_settings(
+    org_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> OrgAuthSettingsRead:
+    try:
+        org_uuid = UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    _ensure_org_admin_or_super(session, org_uuid, current_user)
+    org = session.exec(select(Org).where(Org.id == org_uuid)).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    return OrgAuthSettingsRead(
+        slug=org.slug or "",
+        oidc_enabled=org.oidc_enabled,
+        oidc_issuer=org.oidc_issuer,
+        oidc_client_id=org.oidc_client_id,
+        oidc_client_secret_set=bool(org.oidc_client_secret),
+        oidc_scopes=org.oidc_scopes,
+        oidc_email_claim=org.oidc_email_claim,
+        oidc_username_claim=org.oidc_username_claim,
+        oidc_groups_claim=org.oidc_groups_claim,
+        oidc_auto_create_users=org.oidc_auto_create_users,
+    )
+
+
+@router.put("/{org_id}/auth-settings", response_model=OrgAuthSettingsRead)
+def update_auth_settings(
+    org_id: str,
+    payload: OrgAuthSettingsUpdate,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> OrgAuthSettingsRead:
+    try:
+        org_uuid = UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    _ensure_org_admin_or_super(session, org_uuid, current_user)
+    org = session.exec(select(Org).where(Org.id == org_uuid)).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if "slug" in updates:
+        slug_candidate = _slugify(updates.pop("slug") or "")
+        org.slug = _ensure_unique_slug(session, slug_candidate, org.id)
+    if "oidc_issuer" in updates:
+        issuer = updates.pop("oidc_issuer")
+        org.oidc_issuer = issuer.strip() or None if issuer is not None else None
+    if "oidc_client_id" in updates:
+        client_id = updates.pop("oidc_client_id")
+        org.oidc_client_id = client_id.strip() or None if client_id is not None else None
+    if "oidc_client_secret" in updates:
+        secret = updates.pop("oidc_client_secret")
+        org.oidc_client_secret = secret.strip() or None if secret is not None else None
+    if "oidc_scopes" in updates:
+        scopes = updates.pop("oidc_scopes")
+        org.oidc_scopes = scopes.strip() if isinstance(scopes, str) else scopes
+    if "oidc_email_claim" in updates:
+        claim = updates.pop("oidc_email_claim")
+        org.oidc_email_claim = claim.strip() or "email" if isinstance(claim, str) else claim
+    if "oidc_username_claim" in updates:
+        claim = updates.pop("oidc_username_claim")
+        org.oidc_username_claim = claim.strip() or None if isinstance(claim, str) else claim
+    if "oidc_groups_claim" in updates:
+        claim = updates.pop("oidc_groups_claim")
+        org.oidc_groups_claim = claim.strip() or None if isinstance(claim, str) else claim
+    for key, value in updates.items():
+        setattr(org, key, value)
+    session.add(org)
+    session.commit()
+    session.refresh(org)
+    return get_auth_settings(org_id, session, current_user)
 
 
 @router.put("/{org_id}/providers", response_model=list[ProviderConfigRead])
@@ -507,6 +669,8 @@ def update_provider_configs(
             config.base_url_override = item.base_url_override.strip() or None
         if item.endpoint_override is not None:
             config.endpoint_override = item.endpoint_override.strip() or None
+        if item.config_json is not None:
+            config.config_json = item.config_json.strip() or None
         session.add(config)
 
     session.commit()

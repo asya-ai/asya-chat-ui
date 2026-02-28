@@ -1,8 +1,10 @@
-import { useRef } from "react"
+import { useMemo, useRef } from "react"
 import type { CSSProperties } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
+import remarkMath from "remark-math"
+import rehypeKatex from "rehype-katex"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { Pencil, Trash2, Plus, X } from "lucide-react"
 
@@ -58,6 +60,13 @@ export const MessageBubble = ({
 }: MessageBubbleProps) => {
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const isEditing = editingMessageId === msg.id
+  const content = useMemo(() => {
+    // Normalize bracketed math blocks into KaTeX-friendly $$...$$
+    return msg.content.replace(
+      /\n\[\n([\s\S]*?)\n\]\n/g,
+      (_, body) => `\n$$\n${body}\n$$\n`
+    )
+  }, [msg.content])
 
   const handleEditPickFiles = () => {
     editFileInputRef.current?.click()
@@ -150,7 +159,7 @@ export const MessageBubble = ({
                           <img
                             src={`data:${file.content_type};base64,${file.data_base64}`}
                             alt={file.file_name}
-                            className="rounded-md w-20 h-20 object-cover"
+                            className="rounded-md max-w-32 max-h-32 w-auto h-auto object-contain bg-muted/50"
                           />
                         </Button>
                       ))}
@@ -272,7 +281,8 @@ export const MessageBubble = ({
                 </div>
               ) : (
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks]}
+                  remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
                   components={{
                     p({ children, node, ...rest }) {
                       void node
@@ -441,7 +451,7 @@ export const MessageBubble = ({
                     },
                   }}
                 >
-                  {msg.content}
+                  {content}
                 </ReactMarkdown>
               )}
               {msg.attachments && msg.attachments.length > 0 ? (
@@ -467,7 +477,7 @@ export const MessageBubble = ({
                           <img
                             src={`data:${attachment.content_type};base64,${attachment.data_base64}`}
                             alt={attachment.file_name}
-                            className="rounded-md w-20 h-20 object-cover"
+                            className="rounded-md max-w-32 max-h-32 w-auto h-auto object-contain bg-muted/50"
                           />
                         </Button>
                       )

@@ -63,6 +63,7 @@ export const ChatPage = () => {
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const { locale, t } = useI18n()
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => {
     return theme === "dark" ? oneDark : oneLight
@@ -75,18 +76,36 @@ export const ChatPage = () => {
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
 
-  const appendToolEvent = (event: ChatMessage["tool_event"]) => {
+  const appendToolEvent = (event: NonNullable<ChatMessage["tool_event"]>) => {
     if (!event) return
-    setToolEvents((prev) => [
-      ...prev,
-      {
-        id: `tool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        role: "tool",
-        content: "",
-        created_at: new Date().toISOString(),
-        tool_event: event,
-      },
-    ])
+    setToolEvents((prev) => {
+      // If event has an ID, try to update existing one
+      if (event.id) {
+        const existingIndex = prev.findIndex((msg) => msg.tool_event?.id === event.id)
+        if (existingIndex >= 0) {
+          const next = [...prev]
+          const existing = next[existingIndex]
+          if (existing.tool_event) {
+            next[existingIndex] = {
+              ...existing,
+              tool_event: { ...existing.tool_event, ...event },
+            }
+            return next
+          }
+        }
+      }
+      // Otherwise append new
+      return [
+        ...prev,
+        {
+          id: `tool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          role: "tool",
+          content: "",
+          created_at: new Date().toISOString(),
+          tool_event: event,
+        },
+      ]
+    })
   }
 
   const currentCancelRef = useRef<null | (() => void)>(null)
@@ -487,13 +506,57 @@ export const ChatPage = () => {
     setPendingAttachments((prev) => [...prev, ...next])
   }
 
+  const isLikelyCode = (text: string) => {
+    if (!text.includes("\n")) return false
+    if (text.includes("```")) return false
+    const codeRegex =
+      /(^|\n)\s*(def |class |import |from |function |const |let |var |if |for |while |return |#include |SELECT |INSERT |UPDATE |DELETE |WITH |-- |\/\/)/i
+    const hasBracesOrSemicolons = /[{};]/.test(text)
+    const hasIndentation = /(\n\t|\n {4,})/.test(text)
+    return codeRegex.test(text) || hasBracesOrSemicolons || hasIndentation
+  }
+
+  const wrapInCodeFence = (text: string) => {
+    const trimmed = text.replace(/\s+$/, "")
+    return `\`\`\`\n${trimmed}\n\`\`\``
+  }
+
+  const insertAtCursor = (
+    current: string,
+    insert: string,
+    start: number,
+    end: number
+  ) => {
+    return current.slice(0, start) + insert + current.slice(end)
+  }
+
   const handlePasteAttachments = async (
     event: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
-    const next = await readClipboardImagesAsAttachments(event.clipboardData.items)
-    if (next.length === 0) return
+    const items = event.clipboardData.items
+    const next = await readClipboardImagesAsAttachments(items)
+    if (next.length > 0) {
+      event.preventDefault()
+      setPendingAttachments((prev) => [...prev, ...next])
+      return
+    }
+
+    const text = event.clipboardData.getData("text")
+    if (!text || !isLikelyCode(text)) return
+
     event.preventDefault()
-    setPendingAttachments((prev) => [...prev, ...next])
+    const input = composerInputRef.current
+    const start = input?.selectionStart ?? message.length
+    const end = input?.selectionEnd ?? message.length
+    const wrapped = wrapInCodeFence(text)
+    const nextValue = insertAtCursor(message, wrapped, start, end)
+    setMessage(nextValue)
+    requestAnimationFrame(() => {
+      if (!input) return
+      const nextPos = start + wrapped.length
+      input.selectionStart = nextPos
+      input.selectionEnd = nextPos
+    })
   }
 
   const removePendingAttachment = (index: number) => {
@@ -541,10 +604,27 @@ export const ChatPage = () => {
   const handleEditPasteAttachments = async (
     event: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
-    const next = await readClipboardImagesAsAttachments(event.clipboardData.items)
-    if (next.length === 0) return
+    const items = event.clipboardData.items
+    const next = await readClipboardImagesAsAttachments(items)
+    if (next.length > 0) {
+      event.preventDefault()
+      setEditingAttachments((prev) => [...prev, ...next])
+      return
+    }
+
+    const text = event.clipboardData.getData("text")
+    if (!text || !isLikelyCode(text)) return
+
     event.preventDefault()
-    setEditingAttachments((prev) => [...prev, ...next])
+    const start = event.currentTarget.selectionStart ?? editingContent.length
+    const end = event.currentTarget.selectionEnd ?? editingContent.length
+    const wrapped = wrapInCodeFence(text)
+    const nextValue = insertAtCursor(editingContent, wrapped, start, end)
+    setEditingContent(nextValue)
+    requestAnimationFrame(() => {
+      event.currentTarget.selectionStart = start + wrapped.length
+      event.currentTarget.selectionEnd = start + wrapped.length
+    })
   }
 
   const removeEditingAttachment = (index: number) => {
@@ -802,8 +882,13 @@ export const ChatPage = () => {
             </SelectTrigger>
             <SelectContent className="max-h-96">
               {models.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.display_name} ({model.provider})
+                <SelectItem
+                  key={model.id}
+                  value={model.id}
+                  disabled={model.is_available === false}
+                >
+                  {model.display_name} ({model.provider}){" "}
+                  {model.is_available === false ? `(${t("common_disabled")})` : ""}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -867,6 +952,7 @@ export const ChatPage = () => {
           isDragActive={isDragActive}
           pendingAttachments={pendingAttachments}
           reasoningEffort={reasoningEffort}
+          inputRef={composerInputRef}
           onMessageChange={setMessage}
           onSend={sendMessage}
           onStop={stopGeneration}
@@ -888,12 +974,12 @@ export const ChatPage = () => {
             if (!open) setPreviewAttachment(null)
           }}
         >
-          <DialogContent className="p-2 max-w-[90vw] max-h-[90vh]">
+          <DialogContent className="flex justify-center items-center p-2 w-auto max-w-[90vw] sm:max-w-[90vw] h-auto max-h-[90vh]">
             {previewAttachment && previewAttachment.content_type.startsWith("image/") ? (
               <img
                 src={`data:${previewAttachment.content_type};base64,${previewAttachment.data_base64}`}
                 alt={previewAttachment.file_name}
-                className="max-w-[90vw] max-h-[90vh] object-contain"
+                className="w-auto max-w-[90vw] h-auto max-h-[90vh] object-contain"
               />
             ) : null}
           </DialogContent>

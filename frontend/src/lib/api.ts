@@ -13,7 +13,10 @@ import type {
   ToolEvent,
   ProviderConfig,
   ProviderConfigUpdate,
+  OrgAuthSettings,
+  OrgAuthSettingsUpdate,
   UsageSlice,
+  ApiKey,
 } from "@/lib/types"
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api"
@@ -213,11 +216,17 @@ export const authApi = {
       skipAuth: true,
       body: JSON.stringify({ email, password }),
     }),
-  login: (email: string, password: string) =>
+  login: (identifier: string, password: string, org?: string | null) =>
     apiFetch<{ access_token: string }>("/auth/login", {
       method: "POST",
       skipAuth: true,
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ identifier, password, org }),
+    }),
+  loginResolve: (identifier: string, org?: string | null) =>
+    apiFetch<{ action: string; redirect_url?: string | null }>("/auth/login-resolve", {
+      method: "POST",
+      skipAuth: true,
+      body: JSON.stringify({ identifier, org }),
     }),
   acceptInvite: (token: string, password?: string) =>
     apiFetch<{ access_token: string }>("/auth/invites/accept", {
@@ -270,6 +279,18 @@ export const authApi = {
   cancelInvite: (inviteId: string) => apiFetch(`/auth/invites/${inviteId}`, { method: "DELETE" }),
 }
 
+export const apiKeyApi = {
+  list: () => apiFetch<ApiKey[]>("/api-keys"),
+  create: (name: string, orgId?: string) =>
+    apiFetch<ApiKey & { api_key: string }>("/api-keys", {
+      method: "POST",
+      headers: orgId ? { "X-Org-Id": orgId } : undefined,
+      body: JSON.stringify({ name }),
+    }),
+  revoke: (keyId: string) =>
+    apiFetch(`/api-keys/${keyId}`, { method: "DELETE" }),
+}
+
 export const orgApi = {
   list: () => apiFetch<Org[]>("/orgs"),
   mine: () => apiFetch<Org[]>("/orgs/mine"),
@@ -293,6 +314,13 @@ export const orgApi = {
   webSettings: (orgId: string) => apiFetch<OrgWebSettings>(`/orgs/${orgId}/web-settings`),
   updateWebSettings: (orgId: string, payload: Partial<OrgWebSettings>) =>
     apiFetch<OrgWebSettings>(`/orgs/${orgId}/web-settings`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  authSettings: (orgId: string) =>
+    apiFetch<OrgAuthSettings>(`/orgs/${orgId}/auth-settings`),
+  updateAuthSettings: (orgId: string, payload: OrgAuthSettingsUpdate) =>
+    apiFetch<OrgAuthSettings>(`/orgs/${orgId}/auth-settings`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),

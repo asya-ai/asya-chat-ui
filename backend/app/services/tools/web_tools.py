@@ -153,7 +153,13 @@ def _is_private_hostname(hostname: str) -> bool:
     return False
 
 
-async def web_scrape(context: WebToolContext, *, url: str | None = None, urls: list[str] | None = None) -> ToolResult:
+async def web_scrape(
+    context: WebToolContext,
+    *,
+    url: str | None = None,
+    urls: list[str] | None = None,
+    output: str | None = None,
+) -> ToolResult:
     url_list = _ensure_list(urls) or _ensure_list(url)
     if not url_list:
         return ToolResult(name="web_scrape", output={"error": "No URL provided"})
@@ -163,6 +169,13 @@ async def web_scrape(context: WebToolContext, *, url: str | None = None, urls: l
 
     parallel_limit = settings.scrape_parallel_max
     text_limit = settings.scrape_text_limit
+    output_mode = (output or "markdown").strip().lower()
+    if output_mode not in {"markdown", "screenshot"}:
+        output_mode = "markdown"
+
+    def _estimate_bytes(value: str) -> int:
+        padding = value.count("=")
+        return max(len(value) * 3 // 4 - padding, 0)
 
     async def _scrape_one(item: str) -> dict:
         if not item.startswith(("http://", "https://")):
@@ -171,7 +184,7 @@ async def web_scrape(context: WebToolContext, *, url: str | None = None, urls: l
         hostname = parsed.hostname
         if not hostname or _is_private_hostname(hostname):
             return {"url": item, "error": "Blocked host"}
-        payload = {"url": item}
+        payload = {"url": item, "output": output_mode}
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
@@ -180,14 +193,28 @@ async def web_scrape(context: WebToolContext, *, url: str | None = None, urls: l
                 if response.status_code >= 400:
                     return {"url": item, "error": f"Scrape failed ({response.status_code})"}
                 data = response.json()
+                base_output = {
+                    "url": data.get("finalUrl") or item,
+                    "title": data.get("title"),
+                }
+                if output_mode == "screenshot":
+                    screenshot_base64 = data.get("screenshot", "") or ""
+                    if not screenshot_base64:
+                        return {**base_output, "error": "Screenshot missing"}
+                    if _estimate_bytes(screenshot_base64) > settings.attachments_max_file_bytes:
+                        return {**base_output, "error": "Screenshot exceeds maximum size"}
+                    attachments = [
+                        {
+                            "file_name": "screenshot.png",
+                            "content_type": "image/png",
+                            "data_base64": screenshot_base64,
+                        }
+                    ]
+                    return {**base_output, "output": "screenshot", "attachments": attachments}
                 markdown = data.get("markdown", "") or ""
                 if len(markdown) > text_limit:
                     markdown = markdown[:text_limit]
-                return {
-                    "url": data.get("finalUrl") or item,
-                    "title": data.get("title"),
-                    "markdown": markdown,
-                }
+                return {**base_output, "markdown": markdown, "output": "markdown"}
         except Exception as exc:
             logger.warning("web_scrape error url=%s err=%s", item, exc)
             return {"url": item, "error": str(exc)}
@@ -199,4 +226,21 @@ async def web_scrape(context: WebToolContext, *, url: str | None = None, urls: l
         context.org_id,
         sum(1 for item in results if isinstance(item, dict) and item.get("markdown")),
     )
-    return ToolResult(name="web_scrape", output={"results": results})
+    attachments: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        item_attachments = item.pop("attachments", None)
+        if isinstance(item_attachments, list):
+            attachments.extend(
+                [
+                    attachment
+                    for attachment in item_attachments
+                    if isinstance(attachment, dict)
+                ]
+            )
+    return ToolResult(
+        name="web_scrape",
+        output={"results": results},
+        attachments=attachments or None,
+    )

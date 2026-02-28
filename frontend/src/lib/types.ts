@@ -1,6 +1,7 @@
 export type Org = {
   id: string
   name: string
+  slug?: string | null
   is_active: boolean
   is_frozen: boolean
 }
@@ -15,6 +16,41 @@ export type OrgWebSettings = {
   exec_policy: "off" | "prompt" | "always"
 }
 
+export type OrgAuthSettings = {
+  slug: string
+  oidc_enabled: boolean
+  oidc_issuer?: string | null
+  oidc_client_id?: string | null
+  oidc_client_secret_set: boolean
+  oidc_scopes: string
+  oidc_email_claim: string
+  oidc_username_claim?: string | null
+  oidc_groups_claim?: string | null
+  oidc_auto_create_users: boolean
+}
+
+export type OrgAuthSettingsUpdate = {
+  slug?: string | null
+  oidc_enabled?: boolean
+  oidc_issuer?: string | null
+  oidc_client_id?: string | null
+  oidc_client_secret?: string | null
+  oidc_scopes?: string | null
+  oidc_email_claim?: string | null
+  oidc_username_claim?: string | null
+  oidc_groups_claim?: string | null
+  oidc_auto_create_users?: boolean
+}
+
+export type ApiKey = {
+  id: string
+  name: string
+  prefix: string
+  created_at: string
+  last_used_at?: string | null
+  revoked_at?: string | null
+}
+
 export type ChatModel = {
   id: string
   provider: string
@@ -26,6 +62,7 @@ export type ChatModel = {
   supports_image_input?: boolean | null
   supports_image_output?: boolean | null
   reasoning_effort?: string | null
+  is_available?: boolean
 }
 
 export type ModelSuggestionItem = {
@@ -72,6 +109,7 @@ export type SourceItem = {
 
 export type ToolEvent = {
   type: "code_execution"
+  id?: string
   code: string
   output: {
     stdout?: string | null
@@ -131,6 +169,8 @@ export type ProviderConfig = {
   base_url_override?: string | null
   endpoint_override?: string | null
   api_key_override?: string
+  config_json?: string | null
+  has_global_config: boolean
 }
 
 export type ProviderConfigUpdate = {
@@ -139,6 +179,7 @@ export type ProviderConfigUpdate = {
   api_key_override?: string | null
   base_url_override?: string | null
   endpoint_override?: string | null
+  config_json?: string | null
 }
 
 export type Invite = {

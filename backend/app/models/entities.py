@@ -14,6 +14,7 @@ class User(SQLModel, table=True):
     username: Optional[str] = Field(default=None, index=True, sa_column_kwargs={"unique": True})
     display_name: Optional[str] = Field(default=None)
     hashed_password: str
+    auth_provider: str = Field(default="local", index=True)
     is_active: bool = Field(default=True)
     is_super_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
@@ -21,6 +22,7 @@ class User(SQLModel, table=True):
     memberships: List["OrgMembership"] = Relationship(back_populates="user")
     chats: List["Chat"] = Relationship(back_populates="user")
     usage_events: List["UsageEvent"] = Relationship(back_populates="user")
+    api_keys: List["ApiKey"] = Relationship(back_populates="user")
 
 
 class Org(SQLModel, table=True):
@@ -28,6 +30,7 @@ class Org(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     name: str = Field(index=True, sa_column_kwargs={"unique": True})
+    slug: Optional[str] = Field(default=None, index=True, sa_column_kwargs={"unique": True})
     is_active: bool = Field(default=True)
     is_frozen: bool = Field(default=False)
     web_tools_enabled: bool = Field(default=False)
@@ -37,6 +40,15 @@ class Org(SQLModel, table=True):
     web_grounding_gemini: bool = Field(default=False)
     exec_network_enabled: bool = Field(default=False)
     exec_policy: str = Field(default="off")
+    oidc_enabled: bool = Field(default=False)
+    oidc_issuer: Optional[str] = Field(default=None)
+    oidc_client_id: Optional[str] = Field(default=None)
+    oidc_client_secret: Optional[str] = Field(default=None)
+    oidc_scopes: str = Field(default="openid email profile")
+    oidc_email_claim: str = Field(default="email")
+    oidc_username_claim: Optional[str] = Field(default="preferred_username")
+    oidc_groups_claim: Optional[str] = Field(default=None)
+    oidc_auto_create_users: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     memberships: List["OrgMembership"] = Relationship(back_populates="org")
@@ -44,6 +56,24 @@ class Org(SQLModel, table=True):
     invites: List["Invite"] = Relationship(back_populates="org")
     chats: List["Chat"] = Relationship(back_populates="org")
     usage_events: List["UsageEvent"] = Relationship(back_populates="org")
+    api_keys: List["ApiKey"] = Relationship(back_populates="org")
+
+
+class ApiKey(SQLModel, table=True):
+    __tablename__ = "api_keys"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    name: str
+    prefix: str = Field(index=True, sa_column_kwargs={"unique": True})
+    key_hash: str = Field(index=True, sa_column_kwargs={"unique": True})
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    last_used_at: Optional[datetime] = Field(default=None, nullable=True)
+    revoked_at: Optional[datetime] = Field(default=None, nullable=True)
+
+    user: "User" = Relationship(back_populates="api_keys")
+    org: "Org" = Relationship(back_populates="api_keys")
 
 
 class Role(SQLModel, table=True):
@@ -156,6 +186,7 @@ class OrgProviderConfig(SQLModel, table=True):
     api_key_override: Optional[str] = Field(default=None)
     base_url_override: Optional[str] = Field(default=None)
     endpoint_override: Optional[str] = Field(default=None)
+    config_json: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     org: Org = Relationship()

@@ -1,9 +1,16 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import secrets
+import re
+from typing import Any
+from urllib.parse import urlencode
 from uuid import UUID
 
+import httpx
+from jose import JWTError, jwt
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlmodel import Session, select
 
@@ -22,6 +29,9 @@ from app.services.org_service import ensure_default_roles, require_org_admin
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 
+OIDC_CACHE: dict[str, dict[str, Any]] = {}
+OIDC_JWKS: dict[str, dict[str, Any]] = {}
+
 
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -29,8 +39,19 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    identifier: str
     password: str
+    org: str | None = None
+
+
+class LoginResolveRequest(BaseModel):
+    identifier: str | None = None
+    org: str | None = None
+
+
+class LoginResolveResponse(BaseModel):
+    action: str
+    redirect_url: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -93,14 +114,173 @@ class InvitePreview(BaseModel):
     expires_at: datetime
 
 
+def _normalize_identifier(value: str) -> str:
+    return value.strip().lower()
+
+
+def _get_user_by_identifier(session: Session, identifier: str) -> User | None:
+    normalized = _normalize_identifier(identifier)
+    return session.exec(
+        select(User).where(
+            (User.email == normalized) | (User.username == normalized)
+        )
+    ).first()
+
+
+def _get_org_by_slug(session: Session, slug_or_name: str) -> Org | None:
+    normalized = slug_or_name.strip().lower()
+    return session.exec(
+        select(Org).where(
+            Org.is_active == True,
+            (Org.slug == normalized) | (Org.name.ilike(normalized)),
+        )
+    ).first()
+
+
+def _get_membership_orgs(session: Session, user_id: UUID) -> list[Org]:
+    return session.exec(
+        select(Org)
+        .join(OrgMembership, OrgMembership.org_id == Org.id)
+        .where(OrgMembership.user_id == user_id, Org.is_active == True)
+    ).all()
+
+
+def _build_frontend_base(request: Request) -> str:
+    origin = request.headers.get("origin")
+    if origin:
+        return origin.rstrip("/")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if forwarded_host:
+        scheme = forwarded_proto or request.url.scheme
+        base = f"{scheme}://{forwarded_host}"
+        forwarded_prefix = request.headers.get("x-forwarded-prefix")
+        if forwarded_prefix:
+            base = base.rstrip("/") + "/" + forwarded_prefix.strip("/")
+        return base.rstrip("/")
+    base = str(request.base_url).rstrip("/")
+    if base.endswith("/api"):
+        base = base[: -len("/api")]
+    return base.rstrip("/")
+
+
+def _suggest_username(session: Session, email: str) -> str | None:
+    base = email.split("@", 1)[0].strip().lower()
+    if not base:
+        return None
+    candidate = re.sub(r"[^a-z0-9._-]+", "", base)
+    if not candidate:
+        return None
+    existing = session.exec(select(User).where(User.username == candidate)).first()
+    if not existing:
+        return candidate
+    suffix = 1
+    while suffix < 1000:
+        next_candidate = f"{candidate}{suffix}"
+        existing = session.exec(
+            select(User).where(User.username == next_candidate)
+        ).first()
+        if not existing:
+            return next_candidate
+        suffix += 1
+    return None
+
+
+def _slugify_org_name(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "org"
+
+
+def _ensure_unique_org_slug(session: Session, base: str) -> str:
+    slug = base
+    suffix = 1
+    while True:
+        existing = session.exec(select(Org).where(Org.slug == slug)).first()
+        if not existing:
+            return slug
+        slug = f"{base}-{suffix}"
+        suffix += 1
+
+
+def _normalize_oidc_config_url(value: str) -> str:
+    trimmed = value.strip()
+    if "/.well-known/openid-configuration" in trimmed:
+        return trimmed
+    return trimmed.rstrip("/") + "/.well-known/openid-configuration"
+
+
+async def _get_oidc_config(issuer_or_config: str) -> dict[str, Any]:
+    config_url = _normalize_oidc_config_url(issuer_or_config)
+    if config_url in OIDC_CACHE:
+        return OIDC_CACHE[config_url]
+    url = config_url
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        config = response.json()
+    OIDC_CACHE[config_url] = config
+    return config
+
+
+async def _get_oidc_jwks(jwks_uri: str) -> dict[str, Any]:
+    if jwks_uri in OIDC_JWKS:
+        return OIDC_JWKS[jwks_uri]
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(jwks_uri)
+        response.raise_for_status()
+        jwks = response.json()
+    OIDC_JWKS[jwks_uri] = jwks
+    return jwks
+
+
+def _encode_oidc_state(*, org_id: UUID, nonce: str, redirect_base: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=10)
+    payload = {
+        "org_id": str(org_id),
+        "nonce": nonce,
+        "redirect_base": redirect_base,
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+
+def _decode_oidc_state(state: str) -> dict[str, Any]:
+    return jwt.decode(state, settings.secret_key, algorithms=[settings.jwt_algorithm])
+
+
+async def _build_oidc_authorize_url(request: Request, org: Org) -> str:
+    oidc_issuer = (org.oidc_issuer or "").strip()
+    oidc_client_id = (org.oidc_client_id or "").strip()
+    if not oidc_issuer or not oidc_client_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO not configured")
+    config = await _get_oidc_config(oidc_issuer)
+    auth_endpoint = config.get("authorization_endpoint")
+    if not auth_endpoint:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO not configured")
+    nonce = secrets.token_urlsafe(16)
+    redirect_base = _build_frontend_base(request)
+    state = _encode_oidc_state(org_id=org.id, nonce=nonce, redirect_base=redirect_base)
+    callback_url = _build_frontend_base(request).rstrip("/") + "/api/auth/oidc/callback"
+    params = {
+        "response_type": "code",
+        "client_id": oidc_client_id,
+        "redirect_uri": callback_url,
+        "scope": org.oidc_scopes,
+        "state": state,
+        "nonce": nonce,
+    }
+    return auth_endpoint + "?" + urlencode(params)
+
+
 @router.post("/register", response_model=TokenResponse)
 def register(payload: RegisterRequest, session: Session = Depends(get_db)) -> TokenResponse:
+    email = payload.email.strip().lower()
     if not validate_password(payload.password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
         )
-    existing_user = session.exec(select(User).where(User.email == payload.email)).first()
+    existing_user = session.exec(select(User).where(User.email == email)).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
@@ -113,8 +293,10 @@ def register(payload: RegisterRequest, session: Session = Depends(get_db)) -> To
             detail="Registration disabled",
         )
 
+    username = _suggest_username(session, email)
     user = User(
-        email=payload.email,
+        email=email,
+        username=username,
         hashed_password=get_password_hash(payload.password),
         is_super_admin=True,
     )
@@ -122,8 +304,9 @@ def register(payload: RegisterRequest, session: Session = Depends(get_db)) -> To
     session.commit()
     session.refresh(user)
 
-    org_name = payload.email.split("@", 1)[0] or "Default"
-    org = Org(name=org_name)
+    org_name = email.split("@", 1)[0] or "Default"
+    slug = _ensure_unique_org_slug(session, _slugify_org_name(org_name))
+    org = Org(name=org_name, slug=slug)
     session.add(org)
     session.commit()
     session.refresh(org)
@@ -147,17 +330,308 @@ def registration_enabled(session: Session = Depends(get_db)) -> RegistrationStat
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, session: Session = Depends(get_db)) -> TokenResponse:
-    user = session.exec(select(User).where(User.email == payload.email)).first()
+    user = _get_user_by_identifier(session, payload.identifier)
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
+    if user.auth_provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SSO required",
         )
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
         )
+    if payload.org:
+        org = _get_org_by_slug(session, payload.org)
+        if not org:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        membership = session.exec(
+            select(OrgMembership).where(
+                OrgMembership.user_id == user.id, OrgMembership.org_id == org.id
+            )
+        ).first()
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
     token = create_access_token(str(user.id))
     return TokenResponse(access_token=token)
+
+
+@router.post("/login-resolve", response_model=LoginResolveResponse)
+async def login_resolve(
+    payload: LoginResolveRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> LoginResolveResponse:
+    org: Org | None = None
+    if payload.org:
+        org = _get_org_by_slug(session, payload.org.strip())
+        if not org or not org.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        if not payload.identifier:
+            if org.oidc_enabled:
+                redirect_url = await _build_oidc_authorize_url(request, org)
+                return LoginResolveResponse(action="sso", redirect_url=redirect_url)
+            return LoginResolveResponse(action="local")
+        identifier = payload.identifier.strip()
+        if not identifier:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
+        user = _get_user_by_identifier(session, identifier)
+        if user:
+            membership = session.exec(
+                select(OrgMembership).where(
+                    OrgMembership.user_id == user.id, OrgMembership.org_id == org.id
+                )
+            ).first()
+            if membership and user.auth_provider == "local":
+                return LoginResolveResponse(action="local")
+        if org.oidc_enabled:
+            redirect_url = await _build_oidc_authorize_url(request, org)
+            return LoginResolveResponse(action="sso", redirect_url=redirect_url)
+        return LoginResolveResponse(action="local")
+
+    if not payload.identifier:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization required")
+    identifier = payload.identifier.strip()
+    if not identifier:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
+    user = _get_user_by_identifier(session, identifier)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    orgs = _get_membership_orgs(session, user.id)
+    if len(orgs) != 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization required")
+
+    org = orgs[0]
+    if org.oidc_enabled and user.auth_provider != "local":
+        redirect_url = await _build_oidc_authorize_url(request, org)
+        return LoginResolveResponse(action="sso", redirect_url=redirect_url)
+    return LoginResolveResponse(action="local")
+
+
+@router.get("/oidc/start")
+async def oidc_start(
+    org: str,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> RedirectResponse:
+    org_record = _get_org_by_slug(session, org)
+    if not org_record or not org_record.oidc_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO not configured")
+    redirect_url = await _build_oidc_authorize_url(request, org_record)
+    return RedirectResponse(redirect_url)
+
+
+@router.get("/oidc/callback")
+async def oidc_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    session: Session = Depends(get_db),
+) -> RedirectResponse:
+    if error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_description or error)
+    if not code or not state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO response")
+    try:
+        state_payload = _decode_oidc_state(state)
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO state") from exc
+
+    org_id = state_payload.get("org_id")
+    nonce = state_payload.get("nonce")
+    redirect_base = state_payload.get("redirect_base") or _build_frontend_base(request)
+    if not org_id or not nonce:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO state")
+
+    org = session.exec(select(Org).where(Org.id == UUID(org_id))).first()
+    if not org or not org.oidc_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO not configured")
+
+    oidc_issuer = (org.oidc_issuer or "").strip()
+    oidc_client_id = (org.oidc_client_id or "").strip()
+    oidc_client_secret = (org.oidc_client_secret or "").strip()
+    config = await _get_oidc_config(oidc_issuer)
+    config_issuer = (config.get("issuer") or oidc_issuer).strip()
+    token_endpoint = config.get("token_endpoint")
+    jwks_uri = config.get("jwks_uri")
+    if not token_endpoint or not jwks_uri:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO not configured")
+
+    callback_url = redirect_base.rstrip("/") + "/api/auth/oidc/callback"
+    supported_methods = config.get("token_endpoint_auth_methods_supported") or []
+    if isinstance(supported_methods, list):
+        supported_methods = [str(method) for method in supported_methods]
+    logger.info(
+        "OIDC token exchange: token_endpoint=%s client_id=%s secret_len=%d "
+        "redirect_uri=%s supported_methods=%s",
+        token_endpoint,
+        oidc_client_id,
+        len(oidc_client_secret),
+        callback_url,
+        supported_methods,
+    )
+    async with httpx.AsyncClient(timeout=10) as client:
+        token_payload = None
+        last_exc: httpx.HTTPStatusError | None = None
+        auth_methods = []
+        if not supported_methods or "client_secret_basic" in supported_methods:
+            if oidc_client_secret:
+                auth_methods.append(
+                    (
+                        "basic",
+                        {
+                            "auth": (oidc_client_id, oidc_client_secret),
+                            "data": {
+                                "client_id": oidc_client_id,
+                                "client_secret": oidc_client_secret,
+                            },
+                        },
+                    )
+                )
+        if not supported_methods or "client_secret_post" in supported_methods:
+            auth_methods.append(
+                (
+                    "post",
+                    {
+                        "data": {
+                            "client_id": oidc_client_id,
+                            "client_secret": oidc_client_secret,
+                        }
+                    },
+                )
+            )
+        if not supported_methods or "none" in supported_methods:
+            auth_methods.append(
+                (
+                    "none",
+                    {
+                        "data": {
+                            "client_id": oidc_client_id,
+                        }
+                    },
+                )
+            )
+        for label, extra in auth_methods:
+            try:
+                response = await client.post(
+                    token_endpoint,
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": callback_url,
+                        **(extra.get("data") or {}),
+                    },
+                    **{k: v for k, v in extra.items() if k != "data"},
+                )
+                response.raise_for_status()
+                token_payload = response.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                logger.error(
+                    "OIDC token exchange failed (%s): %s",
+                    label,
+                    exc.response.text,
+                    exc_info=True,
+                )
+        if token_payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="SSO token exchange failed",
+            ) from last_exc
+
+    id_token = token_payload.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO response")
+
+    jwks = await _get_oidc_jwks(jwks_uri)
+    header = jwt.get_unverified_header(id_token)
+    kid = header.get("kid")
+    keys = jwks.get("keys", [])
+    key = next((item for item in keys if item.get("kid") == kid), None) or (keys[0] if keys else None)
+    if not key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO response")
+
+    claims = jwt.decode(
+        id_token,
+        key,
+        algorithms=[header.get("alg", "RS256")],
+        audience=oidc_client_id,
+        issuer=config_issuer,
+    )
+    if claims.get("nonce") != nonce:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO response")
+
+    email_claim = org.oidc_email_claim or "email"
+    username_claim = org.oidc_username_claim or "preferred_username"
+    email = claims.get(email_claim)
+    username = claims.get(username_claim)
+    if isinstance(email, str):
+        email = email.strip().lower()
+    if isinstance(username, str):
+        username = username.strip().lower()
+
+    user = None
+    if email:
+        user = session.exec(select(User).where(User.email == email)).first()
+    if not user and username:
+        user = session.exec(select(User).where(User.username == username)).first()
+
+    if user:
+        membership = session.exec(
+            select(OrgMembership).where(OrgMembership.user_id == user.id)
+        ).first()
+        if membership and membership.org_id != org.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User already belongs to another organization",
+            )
+    else:
+        if not org.oidc_auto_create_users:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not allowed")
+        if not email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing email claim")
+        if not username:
+            username = _suggest_username(session, email)
+        user = User(
+            email=email,
+            username=username,
+            hashed_password=get_password_hash(secrets.token_urlsafe(32)),
+            auth_provider="oidc",
+            is_super_admin=email.lower() in get_super_admin_emails(),
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    org_membership = session.exec(
+        select(OrgMembership).where(
+            OrgMembership.org_id == org.id, OrgMembership.user_id == user.id
+        )
+    ).first()
+    if not org_membership:
+        _, member_role = ensure_default_roles(session, org.id)
+        membership = OrgMembership(
+            org_id=org.id, user_id=user.id, role_id=member_role.id
+        )
+        session.add(membership)
+        session.commit()
+
+    token = create_access_token(str(user.id))
+    redirect_url = f"{redirect_base}/sso-callback?token={token}"
+    return RedirectResponse(redirect_url)
 
 
 @router.get("/me", response_model=MeResponse)
@@ -445,7 +919,8 @@ def accept_invite(
     if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite expired")
 
-    user = session.exec(select(User).where(User.email == invite.email)).first()
+    email = invite.email.strip().lower()
+    user = session.exec(select(User).where(User.email == email)).first()
     if not user:
         if not payload.password:
             raise HTTPException(
@@ -457,10 +932,13 @@ def accept_invite(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
             )
+        username = _suggest_username(session, email)
         user = User(
-            email=invite.email,
+            email=email,
+            username=username,
             hashed_password=get_password_hash(payload.password),
-            is_super_admin=invite.email.lower() in get_super_admin_emails(),
+            auth_provider="local",
+            is_super_admin=email.lower() in get_super_admin_emails(),
         )
         session.add(user)
         session.commit()
@@ -514,7 +992,10 @@ def request_password_reset(
     )
     session.add(reset)
     session.commit()
-    reset_url = f"{request.headers.get('origin') or request.base_url}reset-password?token={token}"
+    base = request.headers.get("origin") or str(request.base_url)
+    if not base.endswith("/"):
+        base += "/"
+    reset_url = f"{base}reset-password?token={token}"
     try:
         send_password_reset_email(to_email=user.email, reset_url=reset_url)
     except Exception as exc:

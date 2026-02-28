@@ -1,4 +1,5 @@
 from app.models.entities import (
+    ApiKey,
     Chat,
     ChatMessage,
     ChatMessageAttachment,
@@ -17,6 +18,7 @@ from app.models.entities import (
 
 __all__ = [
     "Chat",
+    "ApiKey",
     "ChatMessage",
     "ChatMessageAttachment",
     "ChatModel",

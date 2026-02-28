@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.auth import router as auth_router
+from app.api.api_keys import router as api_keys_router
 from app.api.chats import router as chats_router
 from app.api.models import router as models_router
 from app.api.openai_compat import router as openai_compat_router
@@ -9,6 +10,7 @@ from app.api.usage import router as usage_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
+api_router.include_router(api_keys_router)
 api_router.include_router(chats_router)
 api_router.include_router(models_router)
 api_router.include_router(openai_compat_router)

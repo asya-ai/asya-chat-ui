@@ -11,6 +11,7 @@ import { MePage } from "@/pages/MePage"
 import { OrgPage } from "@/pages/OrgPage"
 import { RegisterPage } from "@/pages/Register"
 import { ResetPasswordPage } from "@/pages/ResetPassword"
+import { SsoCallbackPage } from "@/pages/SsoCallback"
 import { UsagePage } from "@/pages/UsagePage"
 
 const RequireAuth = ({ children }: { children: ReactNode }) => {
@@ -49,6 +50,7 @@ const App = () => {
           element={token ? <Navigate to="/chat" replace /> : <Navigate to="/login" replace />}
         />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/sso-callback" element={<SsoCallbackPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/invite" element={<InviteAcceptPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />

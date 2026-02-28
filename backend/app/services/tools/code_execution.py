@@ -136,6 +136,13 @@ def _prepare_run_dirs(chat_id: str) -> tuple[Path, Path, Path, Path, Path, Path]
     host_inputs_dir = host_base / rel_path / "inputs"
     host_work_dir = host_base / rel_path / "work"
     host_outputs_dir = host_base / rel_path / "outputs"
+    
+    # Ensure directories are writable by the container user (65534)
+    # We set mode to 777 to allow read/write access for any user in the container
+    inputs_dir.chmod(0o777)
+    work_dir.chmod(0o777)
+    outputs_dir.chmod(0o777)
+    
     return (
         inputs_dir,
         work_dir,
@@ -202,6 +209,31 @@ def _cleanup_stale_containers(client: docker.DockerClient) -> None:
             continue
 
 
+def _build_executor_image(client: docker.DockerClient) -> None:
+    logger.info("Building executor image: %s", settings.exec_docker_image)
+    executor_path = Path("/app/executor")
+    if not executor_path.exists():
+        # Fallback checks
+        if Path("executor").exists():
+            executor_path = Path("executor")
+        elif Path("backend/executor").exists():
+            executor_path = Path("backend/executor")
+    
+    if not executor_path.exists():
+        raise FileNotFoundError(f"Executor build context not found. Expected at {executor_path}")
+
+    try:
+        client.images.build(
+            path=str(executor_path.absolute()),
+            tag=settings.exec_docker_image,
+            rm=True,
+        )
+        logger.info("Executor image built successfully")
+    except Exception as exc:
+        logger.error("Failed to build executor image: %s", exc)
+        raise
+
+
 def _run_container(
     *,
     host_inputs_dir: Path,
@@ -217,8 +249,9 @@ def _run_container(
     container = None
     timed_out = False
     exit_code = None
-    try:
-        container = client.containers.run(
+
+    def _start_container():
+        return client.containers.run(
             settings.exec_docker_image,
             command=["python", "/workspace/main.py"],
             detach=True,
@@ -231,6 +264,7 @@ def _run_container(
             read_only=True,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
+            environment={"MPLCONFIGDIR": "/tmp/matplotlib", "HOME": "/tmp"},
             volumes={
                 str(host_inputs_dir): {"bind": "/inputs", "mode": "ro"},
                 str(host_work_dir): {"bind": "/workspace", "mode": "rw"},
@@ -238,34 +272,44 @@ def _run_container(
                 "/tmp": {"bind": "/tmp", "mode": "rw"},  # Needed for some python ops
             },
         )
+
+    try:
+        container = _start_container()
+    except ImageNotFound:
+        logger.info("Execution image not found, attempting to build...")
+        _build_executor_image(client)
+        container = _start_container()
+
+    try:
+        result = container.wait(timeout=timeout_seconds)
+        exit_code = result.get("StatusCode", 1)
+    except Exception:
+        timed_out = True
         try:
-            result = container.wait(timeout=timeout_seconds)
-            exit_code = result.get("StatusCode", 1)
-        except Exception:
-            timed_out = True
-            try:
-                container.kill()
-            except Exception:
-                pass
-        stdout_logs = (
-            container.logs(stdout=True, stderr=False) if container else b""
-        )
-        stderr_logs = (
-            container.logs(stdout=False, stderr=True) if container else b""
-        )
-        stdout = stdout_logs.decode("utf-8", errors="replace")
-        stderr = stderr_logs.decode("utf-8", errors="replace")
-        return stdout, stderr, exit_code, timed_out
-    finally:
-        if container:
-            try:
-                container.remove(force=True)
-            except (NotFound, APIError):
-                pass
-        try:
-            client.close()
+            container.kill()
         except Exception:
             pass
+    stdout_logs = (
+        container.logs(stdout=True, stderr=False) if container else b""
+    )
+    stderr_logs = (
+        container.logs(stdout=False, stderr=True) if container else b""
+    )
+    stdout = stdout_logs.decode("utf-8", errors="replace")
+    stderr = stderr_logs.decode("utf-8", errors="replace")
+    
+    if container:
+        try:
+            container.remove(force=True)
+        except (NotFound, APIError):
+            pass
+    
+    try:
+        client.close()
+    except Exception:
+        pass
+        
+    return stdout, stderr, exit_code, timed_out
 
 
 async def run_code_execution(

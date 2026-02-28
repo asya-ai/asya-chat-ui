@@ -203,6 +203,84 @@ def _azure_models() -> tuple[list[dict[str, object]], str | None]:
         return [], f"Azure error: {exc}"
 
 
+def _openrouter_models() -> tuple[list[dict[str, object]], str | None]:
+    if not settings.openrouter_api_key:
+        return [], "OPENROUTER_API_KEY not set"
+    try:
+        client = OpenAI(
+            api_key=settings.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+        )
+        models = client.models.list()
+        items = []
+        for model in models.data:
+            inferred_input, inferred_output = _infer_image_support(model.id)
+            items.append(
+                {
+                    "model_name": model.id,
+                    "display_name": model.id,
+                    "context_length": getattr(model, "context_length", None),
+                    "supports_image_input": inferred_input,
+                    "supports_image_output": inferred_output,
+                }
+            )
+        return items, None
+    except Exception as exc:  # pragma: no cover - external API call
+        return [], f"OpenRouter error: {exc}"
+
+
+def _vertex_models() -> tuple[list[dict[str, object]], str | None]:
+    if not settings.google_vertex_project or not settings.google_vertex_location:
+        return [], "GOOGLE_VERTEX_PROJECT or GOOGLE_VERTEX_LOCATION not set"
+    try:
+        # Vertex AI uses the same google.genai client but initialized with vertexai=True
+        # However, the current google-genai package supports vertex via common initialization
+        # or specific vertexai client. Let's try standard genai client configured for vertex.
+        # But wait, standard genai client (google.genai.Client) usually defaults to AI Studio.
+        # For Vertex, we need to pass project and location.
+        client = genai.Client(
+            vertexai=True,
+            project=settings.google_vertex_project,
+            location=settings.google_vertex_location,
+        )
+        items = []
+        # Vertex models list might differ.
+        for model in client.models.list():
+             name = _normalize_gemini_name(getattr(model, "name", "") or "")
+             if not name:
+                 continue
+             display_name = getattr(model, "display_name", None) or name
+             input_modalities = _detect_modalities(
+                 getattr(model, "input_modalities", None)
+                 or getattr(model, "supported_input_modalities", None)
+             )
+             output_modalities = _detect_modalities(
+                 getattr(model, "output_modalities", None)
+                 or getattr(model, "supported_output_modalities", None)
+             )
+             supports_image_input = "image" in input_modalities if input_modalities else None
+             supports_image_output = (
+                 "image" in output_modalities if output_modalities else None
+             )
+             inferred_input, inferred_output = _infer_image_support(name)
+             if supports_image_input is None:
+                 supports_image_input = inferred_input
+             if supports_image_output is None:
+                 supports_image_output = inferred_output
+             items.append(
+                 {
+                     "model_name": name,
+                     "display_name": display_name,
+                     "context_length": getattr(model, "input_token_limit", None),
+                     "supports_image_input": supports_image_input,
+                     "supports_image_output": supports_image_output,
+                 }
+             )
+        return items, None
+    except Exception as exc:  # pragma: no cover - external API call
+        return [], f"Vertex error: {exc}"
+
+
 def _dedupe(items: Iterable[dict[str, object]]) -> list[dict[str, object]]:
     seen = set()
     results = []
@@ -222,6 +300,8 @@ def get_model_suggestions() -> list[dict[str, object]]:
         ("gemini", _gemini_models),
         ("groq", _groq_models),
         ("anthropic", _anthropic_models),
+        ("openrouter", _openrouter_models),
+        ("vertex", _vertex_models),
     ]
     results: list[dict[str, object]] = []
     for provider, fn in providers:

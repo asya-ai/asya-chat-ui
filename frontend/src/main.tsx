@@ -8,6 +8,7 @@ import { I18nProvider } from "@/lib/i18n-context"
 import { applyTheme, getTheme } from "@/lib/theme"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import App from "@/App"
+import "katex/dist/katex.min.css"
 import "@/index.css"
 
 const queryClient = new QueryClient({

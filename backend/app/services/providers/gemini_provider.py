@@ -68,6 +68,21 @@ class GeminiProvider:
             name=name, expires_at=expires_at
         )
 
+    def _is_cacheable_content(self, item: dict) -> bool:
+        role = item.get("role")
+        if role not in {"user", "model"}:
+            return False
+        parts = item.get("parts")
+        if not isinstance(parts, list) or not parts:
+            return False
+        for part in parts:
+            if not isinstance(part, dict):
+                return False
+            if "text" in part or "inline_data" in part:
+                continue
+            return False
+        return True
+
     def _maybe_cached_content_config(
         self, model: str, contents: list[dict]
     ) -> tuple[list[dict], types.GenerateContentConfig | None]:
@@ -77,14 +92,23 @@ class GeminiProvider:
             return contents, None
         prefix = contents[:-1]
         suffix = contents[-1:]
+        if not all(self._is_cacheable_content(item) for item in prefix):
+            return contents, None
         cache_key = self._cache_key_for_contents(model, prefix)
         cached_name = self._get_cached_content_name(cache_key)
         if not cached_name:
             try:
+                prefix_contents = []
+                for item in prefix:
+                    role = item.get("role")
+                    parts = item.get("parts")
+                    if not role or not parts:
+                        return contents, None
+                    prefix_contents.append(types.Content(role=role, parts=parts))
                 cached = self.client.caches.create(
                     model=model,
                     config=types.CreateCachedContentConfig(
-                        contents=prefix,
+                        contents=prefix_contents,
                         ttl=f"{settings.gemini_cached_content_ttl_seconds}s",
                     ),
                 )

@@ -18,6 +18,7 @@ type ChatComposerProps = {
   isDragActive: boolean
   pendingAttachments: ChatMessageAttachmentInput[]
   reasoningEffort: string | null
+  inputRef?: React.RefObject<HTMLTextAreaElement | null>
   onMessageChange: (value: string) => void
   onSend: () => void
   onStop: () => void
@@ -41,6 +42,7 @@ export const ChatComposer = ({
   isDragActive,
   pendingAttachments,
   reasoningEffort,
+  inputRef,
   onMessageChange,
   onSend,
   onStop,
@@ -91,6 +93,7 @@ export const ChatComposer = ({
         onDrop={onDrop}
       >
         <Textarea
+          ref={inputRef}
           value={message}
           onChange={(event) => onMessageChange(event.target.value)}
           onPaste={onPasteAttachments}

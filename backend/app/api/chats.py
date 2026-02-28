@@ -278,12 +278,16 @@ def _build_tool_registry(
                 WebToolContext(org_id=str(org_id), locale=locale),
                 url=args.get("url"),
                 urls=args.get("urls"),
+                output=args.get("output"),
             )
 
         registry.register(
             ToolSpec(
                 name="web_scrape",
-                description="Fetch a web page and return markdown content (only if needed; keep it minimal).",
+                description=(
+                    "Fetch a web page and return markdown or a full-page screenshot "
+                    "(only if needed; keep it minimal). Use output=markdown or output=screenshot."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
@@ -292,6 +296,11 @@ def _build_tool_registry(
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Multiple URLs to scrape",
+                        },
+                        "output": {
+                            "type": "string",
+                            "enum": ["markdown", "screenshot"],
+                            "description": "Choose markdown text or a full-page screenshot",
                         },
                     },
                 },
@@ -331,6 +340,7 @@ def _build_tool_registry(
                     "Use this for any data analysis, plotting, or file-based tasks."
                     "All files from this chat are available as read-only under /inputs."
                     "Write any output files to /outputs to return them to the user (images, resulting csv etc.)."
+                    "YOu dont need to tell user where the file was created, it will be sent together with your response to them."
                     "You can call this tool multiple times. Filenames are <attachment_id>_<sanitized_name>."
                     "Calls do not reuse same sandbox, so any created files will be lost after the call."
                 ),
@@ -675,24 +685,38 @@ async def _run_agentic_loop(
                             await _emit(label, "start")
                         scrape_calls += 1
                         result = await tool_registry.execute(call.name, call.arguments)
+                elif call.name == "code_execution":
+                    await _emit_tool_event(
+                        {
+                            "type": "code_execution",
+                            "id": call.id,
+                            "code": call.arguments.get("code", ""),
+                            "output": {},
+                        }
+                    )
+                    labels = _labels_for_call(call.name, call.arguments)
+                    for label in labels:
+                        await _emit(label, "start")
+                    result = await tool_registry.execute(call.name, call.arguments)
                 else:
                     labels = _labels_for_call(call.name, call.arguments)
                     for label in labels:
                         await _emit(label, "start")
                     result = await tool_registry.execute(call.name, call.arguments)
                 if call.name == "code_execution":
-                    await _emit_tool_event(
-                        {
-                            "type": "code_execution",
-                            "code": call.arguments.get("code", ""),
-                            "output": result.output,
-                        }
-                    )
                     logger.info(
                         "Code execution output keys=%s",
                         list(result.output.keys())
                         if isinstance(result.output, dict)
                         else [],
+                    )
+                    await _emit_tool_event(
+                        {
+                            "type": "code_execution",
+                            "id": call.id,
+                            "code": call.arguments.get("code", ""),
+                            "output": result.output,
+                        }
                     )
                 if "error" in result.output:
                     logger.info(
@@ -848,6 +872,7 @@ class ChatMessageRead(BaseModel):
 class ChatMessageEditRequest(BaseModel):
     content: str
     attachments: list[ChatMessageAttachmentCreate] | None = None
+    reasoning_effort: str | None = None
     locale: str | None = None
 
     @model_validator(mode="after")
@@ -1026,6 +1051,12 @@ async def _stream_message_ws(
         return
 
     provider_config = require_provider_enabled(session, chat.org_id, model.provider)
+    config = None
+    if provider_config and provider_config.config_json:
+        try:
+            config = json.loads(provider_config.config_json)
+        except json.JSONDecodeError:
+            pass
     prompt_cache_key = f"chat:{chat.id}"
     provider = get_provider(
         model.provider,
@@ -1035,6 +1066,7 @@ async def _stream_message_ws(
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
+        config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
     tool_registry = _build_tool_registry(
@@ -1042,7 +1074,7 @@ async def _stream_message_ws(
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
-        web_tools_enabled=org.web_tools_enabled and not grounding_enabled,
+        web_tools_enabled=not grounding_enabled,
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         exec_policy=org.exec_policy,
@@ -1586,6 +1618,12 @@ async def _stream_edit_ws(
         return
 
     provider_config = require_provider_enabled(session, chat.org_id, model.provider)
+    config = None
+    if provider_config and provider_config.config_json:
+        try:
+            config = json.loads(provider_config.config_json)
+        except json.JSONDecodeError:
+            pass
     prompt_cache_key = f"chat:{chat.id}"
     provider = get_provider(
         model.provider,
@@ -1595,6 +1633,7 @@ async def _stream_edit_ws(
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
+        config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
     tool_registry = _build_tool_registry(
@@ -1602,7 +1641,7 @@ async def _stream_edit_ws(
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
-        web_tools_enabled=org.web_tools_enabled and not grounding_enabled,
+        web_tools_enabled=not grounding_enabled,
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         exec_policy=org.exec_policy,
@@ -2290,6 +2329,12 @@ async def create_message(
     )
 
     provider_config = require_provider_enabled(session, chat.org_id, model.provider)
+    config = None
+    if provider_config and provider_config.config_json:
+        try:
+            config = json.loads(provider_config.config_json)
+        except json.JSONDecodeError:
+            pass
     prompt_cache_key = f"chat:{chat.id}"
     provider = get_provider(
         model.provider,
@@ -2299,6 +2344,7 @@ async def create_message(
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
+        config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
     tool_registry = _build_tool_registry(
@@ -2306,7 +2352,7 @@ async def create_message(
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
-        web_tools_enabled=org.web_tools_enabled and not grounding_enabled,
+        web_tools_enabled=not grounding_enabled,
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         exec_policy=org.exec_policy,
@@ -3031,6 +3077,12 @@ async def edit_message(
     )
 
     provider_config = require_provider_enabled(session, chat.org_id, model.provider)
+    config = None
+    if provider_config and provider_config.config_json:
+        try:
+            config = json.loads(provider_config.config_json)
+        except json.JSONDecodeError:
+            pass
     prompt_cache_key = f"chat:{chat.id}"
     provider = get_provider(
         model.provider,
@@ -3040,6 +3092,7 @@ async def edit_message(
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
+        config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
     tool_registry = _build_tool_registry(
@@ -3047,7 +3100,7 @@ async def edit_message(
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
-        web_tools_enabled=org.web_tools_enabled and not grounding_enabled,
+        web_tools_enabled=not grounding_enabled,
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         exec_policy=org.exec_policy,
