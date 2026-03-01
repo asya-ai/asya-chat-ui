@@ -286,8 +286,12 @@ export const ChatPage = () => {
     [chatId, chats]
   )
 
+  const isChatSwitchRef = useRef(false)
+
   useEffect(() => {
     setToolEvents([])
+    lastScrolledIdRef.current = null
+    isChatSwitchRef.current = true
   }, [chatId])
 
   useEffect(() => {
@@ -301,6 +305,15 @@ export const ChatPage = () => {
     [mergeToolEvents, serverMessages, toolEvents]
   )
 
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    const container = messagesContainerRef.current
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior })
+      return
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" })
+  }
+
   useEffect(() => {
     if (!autoScrollEnabled && !loading) return
 
@@ -310,16 +323,20 @@ export const ChatPage = () => {
     const isNew = lastMsg.id !== lastScrolledIdRef.current
     if (isNew) {
       lastScrolledIdRef.current = lastMsg.id
+      const behavior: ScrollBehavior = isChatSwitchRef.current ? "instant" : "smooth"
+      isChatSwitchRef.current = false
       if (lastMsg.role === "user") {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+        scrollToBottom(behavior)
       } else if (lastMsg.role === "assistant") {
-        const target = messagesContainerRef.current?.querySelector(
+        const container = messagesContainerRef.current
+        const target = container?.querySelector(
           `[data-message-id="${lastMsg.id}"]`
         )
-        if (target) {
-          target.scrollIntoView({ behavior: "smooth", block: "start" })
+        if (target && container) {
+          const top = (target as HTMLElement).offsetTop - container.offsetTop
+          container.scrollTo({ top, behavior })
         } else {
-          messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+          scrollToBottom(behavior)
         }
       }
     }
@@ -823,7 +840,7 @@ export const ChatPage = () => {
   )
 
   return (
-    <div className="flex bg-background h-screen">
+    <div className="flex bg-background h-screen overflow-hidden">
       <aside className="hidden md:flex flex-col bg-background p-4 border-r w-72 min-h-0">
         <ChatSidebar
           title={t("chat_title")}
@@ -843,7 +860,7 @@ export const ChatPage = () => {
           getChatActivityDate={getChatActivityDate}
         />
       </aside>
-      <main className="flex flex-col flex-1 bg-background min-h-0">
+      <main className="flex flex-col flex-1 bg-background min-h-0 overflow-hidden">
         <div className="flex items-center gap-3 p-4 border-b">
           <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
             <SheetTrigger asChild>
