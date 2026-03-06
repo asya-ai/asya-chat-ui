@@ -473,6 +473,53 @@ async def _maybe_update_chat_title(
             content = "[image generated]"
         prompt_lines.append(f"{item.role.upper()}: {content}")
     title_prompt = "\n".join(prompt_lines)
+
+    title_model = model
+    title_provider = provider
+
+    # Image-output models can't do text chat. Find the nearest chat model from
+    # the same provider (same org) and use that for title generation instead.
+    if _is_image_output_model(model):
+        fallback = session.exec(
+            select(ChatModel)
+            .where(
+                ChatModel.provider == model.provider,
+                ChatModel.is_active == True,  # noqa: E712
+                ChatModel.supports_image_output.is_(None)
+                | (ChatModel.supports_image_output == False),  # noqa: E712
+            )
+            .limit(1)
+        ).first()
+        if fallback:
+            try:
+                provider_config = require_provider_enabled(
+                    session, chat.org_id, fallback.provider
+                )
+                config = None
+                if provider_config and provider_config.config_json:
+                    try:
+                        config = json.loads(provider_config.config_json)
+                    except json.JSONDecodeError:
+                        pass
+                title_provider = get_provider(
+                    fallback.provider,
+                    api_key=provider_config.api_key_override if provider_config else None,
+                    base_url=provider_config.base_url_override if provider_config else None,
+                    endpoint=provider_config.endpoint_override if provider_config else None,
+                    config=config,
+                )
+                title_model = fallback
+            except Exception:
+                logger.warning(
+                    "Could not build fallback title provider for chat_id=%s", chat.id
+                )
+                return
+        else:
+            logger.warning(
+                "No chat model found for title generation (provider=%s)", model.provider
+            )
+            return
+
     title_messages = [
         {
             "role": "system",
@@ -480,12 +527,20 @@ async def _maybe_update_chat_title(
         },
         {"role": "user", "content": title_prompt},
     ]
-    title_response = await provider.chat(model.model_name, title_messages)
-    title = title_response.content.strip().strip('"').strip("'")
-    if title:
-        chat.title = title
-        session.add(chat)
-        session.commit()
+    try:
+        title_response = await title_provider.chat(title_model.model_name, title_messages)
+        title = title_response.content.strip().strip('"').strip("'")
+        if title:
+            chat.title = title
+            session.add(chat)
+            session.commit()
+    except Exception:
+        logger.warning(
+            "Failed to generate chat title for chat_id=%s model=%s",
+            chat.id,
+            title_model.model_name,
+            exc_info=True,
+        )
 
 
 def _extract_ws_token(websocket: WebSocket) -> str | None:

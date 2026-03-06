@@ -46,7 +46,7 @@ export const ChatSidebar = ({
   getChatActivityDate,
   footer,
 }: ChatSidebarProps) => {
-  return (
+    return (
     <div className="flex flex-col gap-4 h-full min-h-0">
       <div className="flex justify-between items-center">
         <h2 className="font-semibold text-base">{title}</h2>
@@ -69,11 +69,11 @@ export const ChatSidebar = ({
                   }`}
                   onClick={() => onSelectChat(chat)}
                 >
-                  <div className="relative flex items-center gap-2 w-full pr-8">
-                    <p className="flex-1 min-w-0 font-medium text-sm truncate">
+                  <div className="relative flex items-center gap-2 w-full">
+                    <p className="flex-1 min-w-0 max-w-48 font-medium truncate">
                       {chat.title || labels.untitled}
                     </p>
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <span className="text-muted-foreground text-xs">
                         {formatRelativeAge(getChatActivityDate(chat))}
                       </span>
