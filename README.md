@@ -8,6 +8,14 @@ Developed by [asya.ai](https://asya.ai) authors of https://eldigen.com (automate
 
 ![image-20260306190633867](https://share.yellowrobot.xyz/quick/c839fa1f698a46768e2a9c4ae8472484_1772816793997.png)
 
+## Roadmap
+
+- [ ] UX improvements (larger visuals, left side panel CSS)
+- [ ] UX button to enable/disable Web Search (DuckDuckGo & Perplexity API)
+- [ ] Function to share public chat
+- [ ] Group chats (groups that see each other chats)
+- [ ] … Add your own feature requests in Github Issues
+
 ## License
 
 This project is released under **GNU GPL v3.0**. See `LICENSE` for the full text.
