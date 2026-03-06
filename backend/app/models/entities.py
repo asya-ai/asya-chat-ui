@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
 
@@ -225,6 +226,10 @@ class ChatMessage(SQLModel, table=True):
     sources: Optional[List[dict]] = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
+    status: str = Field(default="done", index=True)
+    started_at: Optional[datetime] = Field(default=None, nullable=True)
+    completed_at: Optional[datetime] = Field(default=None, nullable=True)
+    error_message: Optional[str] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     chat: Chat = Relationship(back_populates="messages")
@@ -238,6 +243,41 @@ class ChatMessageAttachment(SQLModel, table=True):
     file_name: str
     content_type: str
     data_base64: str
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class GenerationStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    streaming = "streaming"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class ChatGenerationTask(SQLModel, table=True):
+    __tablename__ = "chat_generation_tasks"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    chat_id: UUID = Field(foreign_key="chats.id", index=True)
+    user_message_id: UUID = Field(foreign_key="chat_messages.id", index=True)
+    assistant_message_id: UUID = Field(foreign_key="chat_messages.id", index=True)
+    status: GenerationStatus = Field(index=True)
+    error: Optional[str] = Field(default=None)
+    metadata_json: Optional[dict] = Field(default=None, sa_column=Column(JSON, nullable=True))
+    started_at: Optional[datetime] = Field(default=None, nullable=True)
+    completed_at: Optional[datetime] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class ChatGenerationEvent(SQLModel, table=True):
+    __tablename__ = "chat_generation_events"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    task_id: UUID = Field(foreign_key="chat_generation_tasks.id", index=True)
+    event_type: str = Field(index=True)
+    payload_json: Optional[dict] = Field(default=None, sa_column=Column(JSON, nullable=True))
+    sequence: int = Field(default=0, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 

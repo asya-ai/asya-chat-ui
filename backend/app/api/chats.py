@@ -20,9 +20,12 @@ from app.core.security import decode_access_token
 from app.db.session import engine
 from app.models import (
     Chat,
+    ChatGenerationEvent,
+    ChatGenerationTask,
     ChatMessage,
     ChatMessageAttachment,
     ChatModel,
+    GenerationStatus,
     Org,
     OrgModel,
     UsageEvent,
@@ -41,6 +44,7 @@ from app.services.tools.code_execution import CodeExecutionContext, run_code_exe
 from app.services.tools.registry import ToolRegistry, ToolSpec, ToolResult
 from app.services.tools.time_tool import TimeToolContext, get_time
 from app.services.tools.web_tools import WebToolContext, web_scrape, web_search
+from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 logger = logging.getLogger(__name__)
@@ -523,6 +527,75 @@ def _format_model_error(exc: Exception) -> str:
     return f"Model error: {message}"
 
 
+def _enqueue_generation_task(task_id: UUID) -> None:
+    celery_app.send_task("chatui.generate_chat_response", args=[str(task_id)])
+
+
+def _event_payload_from_record(event: ChatGenerationEvent) -> dict:
+    payload = event.payload_json or {}
+    if event.event_type == "activity":
+        payload = {"activity": payload}
+    elif event.event_type == "tool_event":
+        payload = {"tool_event": payload}
+    payload.setdefault("task_id", str(event.task_id))
+    return payload
+
+
+async def _stream_task_events_ws(
+    websocket: WebSocket, task_id: UUID, *, after_sequence: int = 0
+) -> None:
+    last_sequence = after_sequence
+    while True:
+        with Session(engine) as stream_session:
+            events = stream_session.exec(
+                select(ChatGenerationEvent)
+                .where(ChatGenerationEvent.task_id == task_id)
+                .where(ChatGenerationEvent.sequence > last_sequence)
+                .order_by(ChatGenerationEvent.sequence)
+            ).all()
+            for event in events:
+                last_sequence = event.sequence
+                await _ws_send_event(websocket, _event_payload_from_record(event))
+
+            task = stream_session.exec(
+                select(ChatGenerationTask).where(ChatGenerationTask.id == task_id)
+            ).first()
+            if (
+                task
+                and task.status in {GenerationStatus.completed, GenerationStatus.failed, GenerationStatus.cancelled}
+                and not events
+            ):
+                return
+        await anyio.sleep(0.5)
+
+
+async def _stream_task_events_sse(task_id: UUID, *, after_sequence: int = 0):
+    last_sequence = after_sequence
+    while True:
+        with Session(engine) as stream_session:
+            events = stream_session.exec(
+                select(ChatGenerationEvent)
+                .where(ChatGenerationEvent.task_id == task_id)
+                .where(ChatGenerationEvent.sequence > last_sequence)
+                .order_by(ChatGenerationEvent.sequence)
+            ).all()
+            for event in events:
+                last_sequence = event.sequence
+                payload = _event_payload_from_record(event)
+                yield f"data: {json.dumps(payload)}\n\n"
+
+            task = stream_session.exec(
+                select(ChatGenerationTask).where(ChatGenerationTask.id == task_id)
+            ).first()
+            if (
+                task
+                and task.status in {GenerationStatus.completed, GenerationStatus.failed, GenerationStatus.cancelled}
+                and not events
+            ):
+                return
+        await anyio.sleep(0.5)
+
+
 async def _run_agentic_loop(
     *,
     provider,
@@ -867,6 +940,30 @@ class ChatMessageRead(BaseModel):
     model_name: str | None = None
     attachments: list[ChatMessageAttachmentRead] | None = None
     sources: list[dict] | None = None
+    task_id: str | None = None
+    generation_status: str | None = None
+
+
+class ChatGenerationTaskRead(BaseModel):
+    id: str
+    chat_id: str
+    user_message_id: str
+    assistant_message_id: str
+    status: str
+    error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    model_id: str | None = None
+    model_name: str | None = None
+
+
+class ChatGenerationEventRead(BaseModel):
+    id: str
+    event_type: str
+    payload: dict | None = None
+    sequence: int
+    created_at: datetime
 
 
 class ChatMessageEditRequest(BaseModel):
@@ -946,7 +1043,12 @@ async def _stream_message_ws(
         )
         return
 
-    user_message = ChatMessage(chat_id=chat.id, role="user", content=payload.content)
+    user_message = ChatMessage(
+        chat_id=chat.id,
+        role="user",
+        content=payload.content,
+        status="done",
+    )
     session.add(user_message)
     session.commit()
     session.refresh(user_message)
@@ -966,6 +1068,42 @@ async def _stream_message_ws(
         session.commit()
 
     await _ws_send_event(websocket, {"user_message_id": str(user_message.id)})
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        model_id=model.id,
+        status="generating",
+        started_at=datetime.utcnow(),
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    task = ChatGenerationTask(
+        chat_id=chat.id,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant_message.id,
+        status=GenerationStatus.queued,
+        metadata_json={
+            "model_id": str(model.id),
+            "model_name": model.display_name,
+            "locale": payload.locale,
+            "reasoning_effort": payload.reasoning_effort,
+        },
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    await _ws_send_event(
+        websocket,
+        {"task_id": str(task.id), "assistant_message_id": str(assistant_message.id)},
+    )
+    _enqueue_generation_task(task.id)
+    await _stream_task_events_ws(websocket, task.id)
+    return
 
     history = session.exec(
         select(ChatMessage)
@@ -1490,6 +1628,7 @@ async def _stream_edit_ws(
         parent_id=message.id,
         branch_id=uuid4(),
         is_current=True,
+        status="done",
     )
     session.add(new_message)
     session.commit()
@@ -1533,6 +1672,42 @@ async def _stream_edit_ws(
         websocket,
         {"edited_message_id": message_id, "user_message_id": str(new_message.id)},
     )
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        model_id=model.id,
+        status="generating",
+        started_at=datetime.utcnow(),
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    task = ChatGenerationTask(
+        chat_id=chat.id,
+        user_message_id=new_message.id,
+        assistant_message_id=assistant_message.id,
+        status=GenerationStatus.queued,
+        metadata_json={
+            "model_id": str(model.id),
+            "model_name": model.display_name,
+            "locale": payload.locale,
+            "reasoning_effort": payload.reasoning_effort,
+        },
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    await _ws_send_event(
+        websocket,
+        {"task_id": str(task.id), "assistant_message_id": str(assistant_message.id)},
+    )
+    _enqueue_generation_task(task.id)
+    await _stream_task_events_ws(websocket, task.id)
+    return
 
     history = session.exec(
         select(ChatMessage)
@@ -2104,6 +2279,16 @@ def list_messages(
                 )
             )
         ).all()
+    task_map: dict[UUID, ChatGenerationTask] = {}
+    if messages:
+        tasks = session.exec(
+            select(ChatGenerationTask).where(
+                ChatGenerationTask.assistant_message_id.in_(
+                    [message.id for message in messages]
+                )
+            )
+        ).all()
+        task_map = {task.assistant_message_id: task for task in tasks}
     attachments_by_message: dict[UUID, list[ChatMessageAttachmentRead]] = {}
     for attachment in attachments:
         attachments_by_message.setdefault(attachment.message_id, []).append(
@@ -2124,8 +2309,142 @@ def list_messages(
             model_name=model_map.get(message.model_id),
             attachments=attachments_by_message.get(message.id),
             sources=message.sources,
+            task_id=str(task_map[message.id].id) if message.id in task_map else None,
+            generation_status=task_map[message.id].status.value
+            if message.id in task_map
+            else None,
         )
         for message in messages
+    ]
+
+
+@router.get("/{chat_id}/generation", response_model=list[ChatGenerationTaskRead])
+def list_generation_tasks(
+    chat_id: str,
+    active_only: bool = True,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatGenerationTaskRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    query = select(ChatGenerationTask).where(ChatGenerationTask.chat_id == chat.id)
+    if active_only:
+        query = query.where(
+            ChatGenerationTask.status.notin_(
+                [
+                    GenerationStatus.completed,
+                    GenerationStatus.failed,
+                    GenerationStatus.cancelled,
+                ]
+            )
+        )
+    tasks = session.exec(query.order_by(ChatGenerationTask.created_at)).all()
+    return [
+        ChatGenerationTaskRead(
+            id=str(task.id),
+            chat_id=str(task.chat_id),
+            user_message_id=str(task.user_message_id),
+            assistant_message_id=str(task.assistant_message_id),
+            status=task.status.value,
+            error=task.error,
+            created_at=task.created_at,
+            started_at=task.started_at,
+            completed_at=task.completed_at,
+            model_id=(task.metadata_json or {}).get("model_id"),
+            model_name=(task.metadata_json or {}).get("model_name"),
+        )
+        for task in tasks
+    ]
+
+
+@router.get("/{chat_id}/generation/{task_id}", response_model=ChatGenerationTaskRead)
+def get_generation_task(
+    chat_id: str,
+    task_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatGenerationTaskRead:
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    return ChatGenerationTaskRead(
+        id=str(task.id),
+        chat_id=str(task.chat_id),
+        user_message_id=str(task.user_message_id),
+        assistant_message_id=str(task.assistant_message_id),
+        status=task.status.value,
+        error=task.error,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
+        model_id=(task.metadata_json or {}).get("model_id"),
+        model_name=(task.metadata_json or {}).get("model_name"),
+    )
+
+
+@router.get(
+    "/{chat_id}/generation/{task_id}/events",
+    response_model=list[ChatGenerationEventRead],
+)
+def list_generation_events(
+    chat_id: str,
+    task_id: str,
+    after: int | None = None,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatGenerationEventRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    query = select(ChatGenerationEvent).where(ChatGenerationEvent.task_id == task_uuid)
+    if after is not None:
+        query = query.where(ChatGenerationEvent.sequence > after)
+    events = session.exec(query.order_by(ChatGenerationEvent.sequence)).all()
+    return [
+        ChatGenerationEventRead(
+            id=str(event.id),
+            event_type=event.event_type,
+            payload=event.payload_json,
+            sequence=event.sequence,
+            created_at=event.created_at,
+        )
+        for event in events
     ]
 
 
@@ -2222,7 +2541,12 @@ async def create_message(
             detail="Model is not enabled for this organization",
         )
 
-    user_message = ChatMessage(chat_id=chat.id, role="user", content=payload.content)
+    user_message = ChatMessage(
+        chat_id=chat.id,
+        role="user",
+        content=payload.content,
+        status="done",
+    )
     session.add(user_message)
     session.commit()
     session.refresh(user_message)
@@ -2248,6 +2572,64 @@ async def create_message(
             data_base64=attachment.data_base64,
         )
         for attachment in attachments
+    ]
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        model_id=model.id,
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    task = ChatGenerationTask(
+        chat_id=chat.id,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant_message.id,
+        status=GenerationStatus.queued,
+        metadata_json={
+            "model_id": str(model.id),
+            "model_name": model.display_name,
+            "locale": payload.locale,
+            "reasoning_effort": payload.reasoning_effort,
+        },
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    _enqueue_generation_task(task.id)
+
+    if payload.stream:
+        async def event_stream():
+            yield (
+                f"data: {json.dumps({'user_message_id': str(user_message.id), 'task_id': str(task.id), 'assistant_message_id': str(assistant_message.id)})}\n\n"
+            )
+            async for chunk in _stream_task_events_sse(task.id):
+                yield chunk
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    return [
+        ChatMessageRead(
+            id=str(user_message.id),
+            role=user_message.role,
+            content=user_message.content,
+            created_at=user_message.created_at,
+            attachments=attachment_reads,
+        ),
+        ChatMessageRead(
+            id=str(assistant_message.id),
+            role=assistant_message.role,
+            content=assistant_message.content,
+            created_at=assistant_message.created_at,
+            model_id=str(model.id),
+            model_name=model.display_name,
+            task_id=str(task.id),
+            generation_status=task.status.value,
+        ),
     ]
 
     history = session.exec(
@@ -2798,12 +3180,22 @@ async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
     subprotocol = "chatui" if "chatui" in requested else None
     await websocket.accept(subprotocol=subprotocol)
     try:
-        with Session(engine) as session:
-            current_user = _get_user_from_token(session, token)
-            while True:
-                payload = await websocket.receive_json()
-                message_type = payload.get("type")
-                message_payload = payload.get("payload") or {}
+        with Session(engine) as auth_session:
+            auth_user = _get_user_from_token(auth_session, token)
+            current_user_id = auth_user.id
+
+        while True:
+            payload = await websocket.receive_json()
+            message_type = payload.get("type")
+            message_payload = payload.get("payload") or {}
+
+            with Session(engine) as session:
+                current_user = session.get(User, current_user_id)
+                if not current_user or not current_user.is_active:
+                    await _ws_send_event(websocket, {"error": "User not found"})
+                    await websocket.close(code=4401)
+                    return
+
                 if message_type == "send":
                     try:
                         request = ChatMessageCreateRequest(**message_payload)
@@ -2833,6 +3225,31 @@ async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
                         continue
                     await _stream_edit_ws(
                         websocket, session, current_user, chat_id, message_id, request
+                    )
+                elif message_type == "subscribe":
+                    task_id = message_payload.get("task_id")
+                    after = message_payload.get("after", 0)
+                    if not task_id:
+                        await _ws_send_event(websocket, {"error": "Task id is required"})
+                        continue
+                    try:
+                        task_uuid = UUID(task_id)
+                        chat_uuid = UUID(chat_id)
+                        after_sequence = int(after or 0)
+                    except ValueError:
+                        await _ws_send_event(websocket, {"error": "Invalid id"})
+                        continue
+                    task = session.exec(
+                        select(ChatGenerationTask).where(
+                            ChatGenerationTask.id == task_uuid,
+                            ChatGenerationTask.chat_id == chat_uuid,
+                        )
+                    ).first()
+                    if not task:
+                        await _ws_send_event(websocket, {"error": "Task not found"})
+                        continue
+                    await _stream_task_events_ws(
+                        websocket, task.id, after_sequence=after_sequence
                     )
                 else:
                     await _ws_send_event(websocket, {"error": "Unsupported message type"})
@@ -2944,6 +3361,7 @@ async def edit_message(
         parent_id=message.id,
         branch_id=uuid4(),
         is_current=True,
+        status="done",
     )
     session.add(new_message)
     session.commit()
@@ -2997,6 +3415,57 @@ async def edit_message(
         )
         for attachment in edited_attachments
     ]
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        model_id=model.id,
+        is_current=True,
+        status="generating",
+        started_at=datetime.utcnow(),
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    task = ChatGenerationTask(
+        chat_id=chat.id,
+        user_message_id=new_message.id,
+        assistant_message_id=assistant_message.id,
+        status=GenerationStatus.queued,
+        metadata_json={
+            "model_id": str(model.id),
+            "model_name": model.display_name,
+            "locale": payload.locale,
+            "reasoning_effort": payload.reasoning_effort,
+        },
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    _enqueue_generation_task(task.id)
+
+    return ChatMessageEditResponse(
+        user_message=ChatMessageRead(
+            id=str(new_message.id),
+            role=new_message.role,
+            content=new_message.content,
+            created_at=new_message.created_at,
+            attachments=attachment_reads,
+        ),
+        assistant_message=ChatMessageRead(
+            id=str(assistant_message.id),
+            role=assistant_message.role,
+            content=assistant_message.content,
+            created_at=assistant_message.created_at,
+            model_id=str(model.id),
+            model_name=model.display_name,
+            task_id=str(task.id),
+            generation_status=task.status.value,
+        ),
+    )
 
     history = session.exec(
         select(ChatMessage)

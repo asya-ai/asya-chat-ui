@@ -238,6 +238,7 @@ async def chat_completions(
                 chat_id=chat.id,
                 role=message.role,
                 content=message.content,
+                status="done",
             )
         )
     session.commit()
@@ -277,7 +278,10 @@ async def chat_completions(
         )
 
     assistant_message = ChatMessage(
-        chat_id=chat.id, role="assistant", content=response.content
+        chat_id=chat.id,
+        role="assistant",
+        content=response.content,
+        status="done",
     )
     session.add(assistant_message)
     session.commit()

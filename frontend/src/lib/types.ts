@@ -99,6 +99,8 @@ export type ChatMessage = {
   sources?: SourceItem[] | null
   thinking_steps?: string[] | null
   tool_event?: ToolEvent | null
+  task_id?: string | null
+  generation_status?: GenerationStatus | null
 }
 
 export type SourceItem = {
@@ -125,6 +127,36 @@ export type ToolEvent = {
       data_base64: string
     }[] | null
   }
+}
+
+export type GenerationStatus =
+  | "queued"
+  | "running"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export type ChatGenerationTask = {
+  id: string
+  chat_id: string
+  user_message_id: string
+  assistant_message_id: string
+  status: GenerationStatus
+  error?: string | null
+  created_at: string
+  started_at?: string | null
+  completed_at?: string | null
+  model_id?: string | null
+  model_name?: string | null
+}
+
+export type ChatGenerationEvent = {
+  id: string
+  event_type: string
+  payload?: Record<string, unknown> | null
+  sequence: number
+  created_at: string
 }
 
 export type ChatMessageAttachment = {

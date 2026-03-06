@@ -55,7 +55,8 @@ export const OrgPage = () => {
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [providerModalOpen, setProviderModalOpen] = useState(false)
   const [webSettings, setWebSettings] = useState<OrgWebSettings | null>(null)
-  const [accessEnabledIds, setAccessEnabledIds] = useState<string[]>([])
+  const [accessByOrgId, setAccessByOrgId] = useState<Record<string, string[]>>({})
+  const [updatingAccess, setUpdatingAccess] = useState<Record<string, boolean>>({})
   const [name, setName] = useState("")
   const [inviteEmail, setInviteEmail] = useState("")
   const [modelProvider, setModelProvider] = useState("openai")
@@ -67,7 +68,6 @@ export const OrgPage = () => {
   const [orgSettingsId, setOrgSettingsId] = useState<string | null>(orgStore.get())
   const [orgSettingsName, setOrgSettingsName] = useState("")
   const [usersOrgId, setUsersOrgId] = useState<string | null>(orgStore.get())
-  const [modelsOrgId, setModelsOrgId] = useState<string | null>(orgStore.get())
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
@@ -130,7 +130,6 @@ export const OrgPage = () => {
     setSelectedOrg(orgId)
     setOrgSettingsId(orgId)
     setUsersOrgId(orgId)
-    setModelsOrgId(orgId)
   }
 
   const loadOrgs = async () => {
@@ -210,12 +209,35 @@ export const OrgPage = () => {
   }, [selectedOrg, isSuperAdmin])
 
   useEffect(() => {
-    if (!isSuperAdmin || !modelsOrgId) return
-    modelApi
-      .list(modelsOrgId)
-      .then((orgModels) => setAccessEnabledIds(orgModels.map((model) => model.id)))
-      .catch(() => setAccessEnabledIds([]))
-  }, [modelsOrgId, isSuperAdmin])
+    if (!isSuperAdmin || activeSection !== "models" || orgs.length === 0) {
+      setAccessByOrgId({})
+      return
+    }
+    let cancelled = false
+    const loadAccessMatrix = async () => {
+      const entries = await Promise.all(
+        orgs.map(async (org) => {
+          try {
+            const orgModels = await modelApi.list(org.id)
+            return [org.id, orgModels.map((model) => model.id)] as const
+          } catch {
+            return [org.id, []] as const
+          }
+        })
+      )
+      if (!cancelled) {
+        setAccessByOrgId(Object.fromEntries(entries))
+      }
+    }
+    loadAccessMatrix().catch(() => {
+      if (!cancelled) {
+        setAccessByOrgId({})
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeSection, isSuperAdmin, orgs])
 
   useEffect(() => {
     if (!usersOrgId) return
@@ -358,8 +380,11 @@ export const OrgPage = () => {
       is_active: true,
     })
     setModels((prev) => [...prev, model])
-    if (modelsOrgId) {
-      setAccessEnabledIds((prev) => Array.from(new Set([...prev, model.id])))
+    if (selectedOrg) {
+      setAccessByOrgId((prev) => ({
+        ...prev,
+        [selectedOrg]: Array.from(new Set([...(prev[selectedOrg] ?? []), model.id])),
+      }))
     }
     setModelName("")
     setModelDisplayName("")
@@ -369,7 +394,14 @@ export const OrgPage = () => {
   const removeModel = async (modelId: string) => {
     await modelApi.remove(modelId)
     setModels((prev) => prev.filter((model) => model.id !== modelId))
-    setAccessEnabledIds((prev) => prev.filter((id) => id !== modelId))
+    setAccessByOrgId((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([orgId, enabledIds]) => [
+          orgId,
+          enabledIds.filter((id) => id !== modelId),
+        ])
+      )
+    )
   }
 
   const startRename = (model: ChatModel) => {
@@ -403,13 +435,31 @@ export const OrgPage = () => {
     )
   }
 
-  const toggleModelAccess = async (modelId: string) => {
-    if (!modelsOrgId) return
-    const enabled = accessEnabledIds.includes(modelId)
-    await modelApi.setOrgModels(modelsOrgId, [{ model_id: modelId, is_enabled: !enabled }])
-    setAccessEnabledIds((prev) =>
-      enabled ? prev.filter((id) => id !== modelId) : [...prev, modelId]
-    )
+  const toggleModelAccess = async (orgId: string, modelId: string) => {
+    const key = `${orgId}:${modelId}`
+    const wasEnabled = (accessByOrgId[orgId] ?? []).includes(modelId)
+    setUpdatingAccess((prev) => ({ ...prev, [key]: true }))
+    setAccessByOrgId((prev) => {
+      const current = prev[orgId] ?? []
+      const next = wasEnabled
+        ? current.filter((id) => id !== modelId)
+        : Array.from(new Set([...current, modelId]))
+      return { ...prev, [orgId]: next }
+    })
+    try {
+      await modelApi.setOrgModels(orgId, [{ model_id: modelId, is_enabled: !wasEnabled }])
+    } catch (err) {
+      setAccessByOrgId((prev) => {
+        const current = prev[orgId] ?? []
+        const rolledBack = wasEnabled
+          ? Array.from(new Set([...current, modelId]))
+          : current.filter((id) => id !== modelId)
+        return { ...prev, [orgId]: rolledBack }
+      })
+      setError(err instanceof Error ? err.message : t("common_save_failed"))
+    } finally {
+      setUpdatingAccess((prev) => ({ ...prev, [key]: false }))
+    }
   }
 
   const providerOptions = useMemo(() => {
@@ -1175,49 +1225,64 @@ export const OrgPage = () => {
                   <CardTitle>{t("org_models_access")}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {modelsOrgId ? (
-                    <div className="space-y-2">
-                      {orderedModels.map((model) => {
-                        const enabled = accessEnabledIds.includes(model.id)
-                        const providerConfig = providerConfigs.find(
-                          (c) => c.provider === model.provider
-                        )
-                        const isProviderDisabled = providerConfig?.mode === "disabled"
-
-                        return (
-                          <div
-                            key={`access-${model.id}`}
-                            className={`flex items-center justify-between rounded-md border px-3 py-2 ${
-                              isProviderDisabled ? "opacity-50" : ""
-                            }`}
-                          >
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-medium">{model.display_name}</p>
-                                {isImageModel(model) ? (
-                                  <Image className="h-4 w-4 text-muted-foreground" />
-                                ) : null}
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                {model.provider} · {model.model_name}
-                                {isProviderDisabled ? ` (${t("common_disabled")})` : ""}
-                              </p>
-                            </div>
-                            <Button
-                              variant="outline"
-                              onClick={() => toggleModelAccess(model.id)}
-                              disabled={isProviderDisabled}
-                            >
-                              {enabled ? t("org_models_enabled") : t("org_models_disabled")}
-                            </Button>
-                          </div>
-                        )
-                      })}
-                      {orderedModels.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          {t("org_models_no_access")}
-                        </p>
-                      ) : null}
+                  {orgs.length > 0 ? (
+                    <div className="w-full overflow-x-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="sticky left-0 z-10 bg-card min-w-64">
+                              Model
+                            </TableHead>
+                            {orgs.map((org) => (
+                              <TableHead key={org.id} className="min-w-44 text-center">
+                                {org.name}
+                              </TableHead>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {orderedModels.map((model) => (
+                            <TableRow key={`access-${model.id}`}>
+                              <TableCell className="sticky left-0 z-10 bg-card">
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm font-medium">{model.display_name}</p>
+                                  {isImageModel(model) ? (
+                                    <Image className="h-4 w-4 text-muted-foreground" />
+                                  ) : null}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  {model.provider} · {model.model_name}
+                                </p>
+                              </TableCell>
+                              {orgs.map((org) => {
+                                const enabled = (accessByOrgId[org.id] ?? []).includes(model.id)
+                                const key = `${org.id}:${model.id}`
+                                return (
+                                  <TableCell key={key} className="text-center">
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4 accent-primary"
+                                      checked={enabled}
+                                      onChange={() => toggleModelAccess(org.id, model.id)}
+                                      disabled={Boolean(updatingAccess[key]) || !org.is_active}
+                                    />
+                                  </TableCell>
+                                )
+                              })}
+                            </TableRow>
+                          ))}
+                          {orderedModels.length === 0 ? (
+                            <TableRow>
+                              <TableCell
+                                colSpan={Math.max(orgs.length + 1, 2)}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {t("org_models_no_access")}
+                              </TableCell>
+                            </TableRow>
+                          ) : null}
+                        </TableBody>
+                      </Table>
                     </div>
                   ) : null}
                 </CardContent>

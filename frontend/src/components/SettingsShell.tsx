@@ -48,13 +48,13 @@ export const SettingsShell = ({ title, items, actions, children }: SettingsShell
           </SidebarMenu>
         </SidebarContent>
       </Sidebar>
-      <SidebarInset className="flex min-h-svh flex-col">
+      <SidebarInset className="flex min-h-svh flex-col overflow-hidden">
         <header className="flex items-center gap-3 border-b px-6 py-4">
           <SidebarTrigger className="md:hidden" />
           <h1 className="text-xl font-semibold">{title}</h1>
           <div className="ml-auto flex items-center gap-2">{actions}</div>
         </header>
-        <div className="flex-1 p-6">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-6">{children}</div>
       </SidebarInset>
     </SidebarProvider>
   )

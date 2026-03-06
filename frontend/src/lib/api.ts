@@ -3,6 +3,8 @@ import type {
   Chat,
   ChatMessage,
   ChatModel,
+  ChatGenerationEvent,
+  ChatGenerationTask,
   ChatMessageAttachmentInput,
   Invite,
   ModelSuggestionProvider,
@@ -26,6 +28,7 @@ type RequestOptions = RequestInit & { skipAuth?: boolean }
 type StreamEvent =
   | { delta: string }
   | { user_message_id: string; edited_message_id?: string }
+  | { task_id: string; assistant_message_id?: string }
   | { activity: { label: string; state: "start" | "end" } }
   | { tool_event: ToolEvent }
   | { error: string; status?: number }
@@ -51,7 +54,7 @@ const apiWebSocket = (
   path: string,
   payload: Record<string, unknown>,
   onEvent: (event: StreamEvent) => void,
-  messageType: "send" | "edit" = "send"
+  messageType: "send" | "edit" | "subscribe" = "send"
 ) => {
   let ws: WebSocket | null = null
   let cancelled = false
@@ -441,6 +444,30 @@ export const chatApi = {
       method: "PATCH",
         body: JSON.stringify({ content, attachments, locale }),
       }
+    ),
+  listGenerationTasks: (chatId: string, activeOnly = true) =>
+    apiFetch<ChatGenerationTask[]>(
+      `/chats/${chatId}/generation?active_only=${String(activeOnly)}`
+    ),
+  listGenerationEvents: (chatId: string, taskId: string, after?: number) => {
+    const qs = after !== undefined ? `?after=${after}` : ""
+    return apiFetch<ChatGenerationEvent[]>(
+      `/chats/${chatId}/generation/${taskId}/events${qs}`
+    )
+  },
+  getGenerationTask: (chatId: string, taskId: string) =>
+    apiFetch<ChatGenerationTask>(`/chats/${chatId}/generation/${taskId}`),
+  subscribeGenerationTask: (
+    chatId: string,
+    taskId: string,
+    after: number | undefined,
+    onEvent: (event: StreamEvent) => void
+  ) =>
+    apiWebSocket(
+      `/chats/${chatId}/ws`,
+      { task_id: taskId, after },
+      onEvent,
+      "subscribe"
     ),
   deleteBranchFromMessage: (chatId: string, messageId: string) =>
     apiFetch(`/chats/${chatId}/messages/${messageId}/branch`, {

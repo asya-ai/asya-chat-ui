@@ -54,8 +54,8 @@ export const ChatSidebar = ({
           {labels.newChat}
         </Button>
       </div>
-      <ScrollArea className="flex-1 pr-1 min-h-0">
-        <div className="space-y-3">
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="space-y-3 pr-3">
           {groups.map((group) => (
             <div key={group.label} className="space-y-2">
               <p className="text-muted-foreground text-xs uppercase tracking-wide">
@@ -69,11 +69,11 @@ export const ChatSidebar = ({
                   }`}
                   onClick={() => onSelectChat(chat)}
                 >
-                  <div className="relative flex justify-between items-center gap-2 w-full">
-                    <p className="max-w-50 font-medium text-sm truncate">
+                  <div className="relative flex items-center gap-2 w-full pr-8">
+                    <p className="flex-1 min-w-0 font-medium text-sm truncate">
                       {chat.title || labels.untitled}
                     </p>
-                    <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2">
                       <span className="text-muted-foreground text-xs">
                         {formatRelativeAge(getChatActivityDate(chat))}
                       </span>

@@ -9,6 +9,7 @@ import type {
   Chat,
   ChatMessage,
   ChatMessageAttachmentInput,
+  GenerationStatus,
 } from "@/lib/types"
 import { getTheme } from "@/lib/theme"
 import { useI18n } from "@/lib/i18n-context"
@@ -44,7 +45,7 @@ export const ChatPage = () => {
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     modelStore.get() ?? undefined
   )
-  const [loading, setLoading] = useState(false)
+  const [loadingByChat, setLoadingByChat] = useState<Record<string, boolean>>({})
   const theme = getTheme()
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState("")
@@ -72,11 +73,14 @@ export const ChatPage = () => {
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
   const { data: models = [] } = useModels(orgId)
   const { data: chats = [], refetch: refetchChats } = useChats(orgId)
-  const { data: serverMessages = [], isLoading: isMessagesLoading } = useChatMessages(chatId ?? null)
+  const {
+    data: serverMessages = [],
+    isLoading: isMessagesLoading,
+  } = useChatMessages(chatId ?? null)
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
 
-  const appendToolEvent = (event: NonNullable<ChatMessage["tool_event"]>) => {
+  const appendToolEvent = useCallback((event: NonNullable<ChatMessage["tool_event"]>) => {
     if (!event) return
     setToolEvents((prev) => {
       // If event has an ID, try to update existing one
@@ -106,17 +110,23 @@ export const ChatPage = () => {
         },
       ]
     })
-  }
+  }, [])
 
   const currentCancelRef = useRef<null | (() => void)>(null)
+  const taskCursorRef = useRef<Record<string, number>>({})
+  const taskSubscriptionsRef = useRef<Record<string, () => void>>({})
+  const taskPollingRef = useRef<Record<string, number>>({})
 
   const stopGeneration = () => {
     if (currentCancelRef.current) {
       currentCancelRef.current()
       currentCancelRef.current = null
     }
-    setLoading(false)
+    if (chatId) {
+      setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
+    }
   }
+
 
   const getSourceLabel = (source: { url: string; title?: string | null; host?: string | null }) => {
     const host = source.host || (() => {
@@ -157,6 +167,245 @@ export const ChatPage = () => {
       )
     },
     [queryClient]
+  )
+
+  const isTerminalStatus = useCallback(
+    (status?: GenerationStatus | null) =>
+      status === "completed" || status === "failed" || status === "cancelled",
+    []
+  )
+
+  const applyStreamEvent = useCallback(
+    (targetChatId: string, assistantId: string, event: Record<string, unknown>) => {
+      const matchesAssistant = (msg: ChatMessage) =>
+        msg.id === assistantId ||
+        ("task_id" in event && msg.task_id === event.task_id) ||
+        ("message_id" in event && msg.id === event.message_id) ||
+        ("assistant_message_id" in event && msg.id === event.assistant_message_id)
+
+      if ("delta" in event && typeof event.delta === "string") {
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) =>
+            matchesAssistant(msg)
+              ? {
+                  ...msg,
+                  content: msg.content + event.delta,
+                  generation_status: "streaming",
+                }
+              : msg
+          )
+        )
+        return
+      }
+      if ("user_message_id" in event && typeof event.user_message_id === "string") {
+        const userMessageId = event.user_message_id
+        const editedMessageId =
+          "edited_message_id" in event && typeof event.edited_message_id === "string"
+            ? event.edited_message_id
+            : null
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) =>
+            editedMessageId
+              ? msg.id === editedMessageId
+                ? { ...msg, id: userMessageId }
+                : msg
+              : msg.id.startsWith("temp-user-")
+                ? { ...msg, id: userMessageId }
+                : msg
+          )
+        )
+        return
+      }
+      if ("task_id" in event && typeof event.task_id === "string") {
+        const taskId = event.task_id
+        const assistantMessageId =
+          "assistant_message_id" in event &&
+          typeof event.assistant_message_id === "string"
+            ? event.assistant_message_id
+            : null
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) => {
+            if (!matchesAssistant(msg)) return msg
+            const nextId = assistantMessageId ?? msg.id
+            return {
+              ...msg,
+              id: nextId,
+              task_id: taskId,
+              generation_status: msg.generation_status ?? "queued",
+            }
+          })
+        )
+        return
+      }
+      if (
+        "activity" in event &&
+        typeof event.activity === "object" &&
+        event.activity
+      ) {
+        const activity = event.activity as { label: string; state: "start" | "end" }
+        const isStep = /^Step \d+\/\d+$/.test(activity.label)
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) => {
+            if (!matchesAssistant(msg)) return msg
+            const current = msg.thinking_steps ?? []
+            if (activity.state === "start") {
+              const withoutSteps = isStep
+                ? current.filter((label) => !/^Step \d+\/\d+$/.test(label))
+                : current
+              const next = Array.from(new Set([...withoutSteps, activity.label]))
+              return { ...msg, thinking_steps: next }
+            }
+            if (isStep) {
+              return msg
+            }
+            if (msg.content.trim().length === 0) {
+              return msg
+            }
+            return {
+              ...msg,
+              thinking_steps: current.filter((label) => label !== activity.label),
+            }
+          })
+        )
+        return
+      }
+      if ("tool_event" in event) {
+        const toolEvent = event.tool_event as ChatMessage["tool_event"]
+        if (toolEvent) {
+          appendToolEvent(toolEvent)
+        }
+        return
+      }
+      if ("error" in event && typeof event.error === "string") {
+        const errorText = event.error
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) =>
+            matchesAssistant(msg)
+              ? {
+                  ...msg,
+                  content: errorText,
+                  thinking_steps: [],
+                  generation_status: "failed",
+                }
+              : msg
+          )
+        )
+        return
+      }
+      if ("done" in event && event.done === true) {
+        const messageId = typeof event.message_id === "string" ? event.message_id : null
+        const content = typeof event.content === "string" ? event.content : null
+        const modelName = typeof event.model_name === "string" ? event.model_name : null
+        const modelId = typeof event.model_id === "string" ? event.model_id : null
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) =>
+            matchesAssistant(msg)
+              ? {
+                  ...msg,
+                  id: messageId ?? msg.id,
+                  content: content && content.length > 0 ? content : msg.content || "",
+                  model_name: modelName ?? msg.model_name ?? null,
+                  model_id: modelId ?? msg.model_id ?? null,
+                  attachments:
+                    (event.attachments as ChatMessage["attachments"]) ??
+                    msg.attachments,
+                  sources:
+                    (event.sources as ChatMessage["sources"]) ?? msg.sources,
+                  thinking_steps: [],
+                  generation_status: "completed",
+                }
+              : msg
+          )
+        )
+      }
+    },
+    [appendToolEvent, updateChatMessagesFor]
+  )
+
+  const normalizeTaskEvent = useCallback(
+    (event: { event_type: string; payload?: Record<string, unknown> | null }) => {
+      if (!event) return null
+      if (event.event_type === "activity") {
+        return { activity: event.payload }
+      }
+      if (event.event_type === "tool_event") {
+        return { tool_event: event.payload }
+      }
+      if (event.event_type === "delta") {
+        return event.payload
+      }
+      if (event.event_type === "done") {
+        return event.payload
+      }
+      if (event.event_type === "error") {
+        return event.payload
+      }
+      return null
+    },
+    []
+  )
+
+  const fetchTaskEvents = useCallback(
+    async (targetChatId: string, taskId: string, assistantId: string) => {
+      const after = taskCursorRef.current[taskId] ?? 0
+      const events = await chatApi.listGenerationEvents(targetChatId, taskId, after)
+      if (events.length > 0) {
+        taskCursorRef.current[taskId] = events[events.length - 1].sequence
+        events.forEach((event) => {
+          const normalized = normalizeTaskEvent(event)
+          if (normalized) {
+            applyStreamEvent(targetChatId, assistantId, normalized as Record<string, unknown>)
+          }
+        })
+      }
+    },
+    [applyStreamEvent, normalizeTaskEvent]
+  )
+
+  const pollTaskEvents = useCallback(
+    async (targetChatId: string, taskId: string, assistantId: string) => {
+      if (taskPollingRef.current[taskId]) return
+      const run = async () => {
+        try {
+          await fetchTaskEvents(targetChatId, taskId, assistantId)
+          const task = await chatApi.getGenerationTask(targetChatId, taskId)
+          if (isTerminalStatus(task.status)) {
+            delete taskPollingRef.current[taskId]
+            return
+          }
+        } catch {
+          delete taskPollingRef.current[taskId]
+          return
+        }
+        taskPollingRef.current[taskId] = window.setTimeout(run, 2000)
+      }
+      taskPollingRef.current[taskId] = window.setTimeout(run, 2000)
+    },
+    [fetchTaskEvents, isTerminalStatus]
+  )
+
+  const subscribeToTask = useCallback(
+    (targetChatId: string, taskId: string, assistantId: string) => {
+      if (taskSubscriptionsRef.current[taskId]) return
+      const after = taskCursorRef.current[taskId]
+      const { promise, cancel } = chatApi.subscribeGenerationTask(
+        targetChatId,
+        taskId,
+        after,
+        (event) => {
+          applyStreamEvent(targetChatId, assistantId, event as Record<string, unknown>)
+        }
+      )
+      taskSubscriptionsRef.current[taskId] = cancel
+      promise
+        .catch(() => {
+          pollTaskEvents(targetChatId, taskId, assistantId)
+        })
+        .finally(() => {
+          delete taskSubscriptionsRef.current[taskId]
+        })
+    },
+    [applyStreamEvent, pollTaskEvents]
   )
 
   const replaceChatMessagesFor = useCallback(
@@ -285,6 +534,7 @@ export const ChatPage = () => {
     () => chats.find((item) => item.id === chatId) ?? null,
     [chatId, chats]
   )
+  const currentChatLoading = Boolean(chatId && loadingByChat[chatId])
 
   const isChatSwitchRef = useRef(false)
 
@@ -292,6 +542,13 @@ export const ChatPage = () => {
     setToolEvents([])
     lastScrolledIdRef.current = null
     isChatSwitchRef.current = true
+    Object.values(taskSubscriptionsRef.current).forEach((cancel) => cancel())
+    taskSubscriptionsRef.current = {}
+    Object.values(taskPollingRef.current).forEach((timeoutId) =>
+      window.clearTimeout(timeoutId)
+    )
+    taskPollingRef.current = {}
+    taskCursorRef.current = {}
   }, [chatId])
 
   useEffect(() => {
@@ -299,6 +556,60 @@ export const ChatPage = () => {
       modelStore.set(selectedModel)
     }
   }, [selectedModel])
+
+  useEffect(() => {
+    if (!chatId) return
+    if (loadingByChat[chatId]) return
+    let cancelled = false
+    const resumeTasks = async () => {
+      try {
+        const tasks = await chatApi.listGenerationTasks(chatId, true)
+        if (cancelled) return
+        if (tasks.length === 0) {
+          const cachedMessages =
+            queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
+          if (cachedMessages.length > 0) {
+            return
+          }
+          const freshMessages = await chatApi.messages(chatId)
+          if (!cancelled) {
+            replaceChatMessagesFor(chatId, freshMessages)
+          }
+          return
+        }
+        tasks.forEach((task) => {
+          taskCursorRef.current[task.id] = taskCursorRef.current[task.id] ?? 0
+          updateChatMessagesFor(chatId, (prev) =>
+            prev.map((msg) =>
+              msg.id === task.assistant_message_id
+                ? {
+                    ...msg,
+                    task_id: task.id,
+                    generation_status: task.status,
+                  }
+                : msg
+            )
+          )
+          fetchTaskEvents(chatId, task.id, task.assistant_message_id).catch(() => null)
+          subscribeToTask(chatId, task.id, task.assistant_message_id)
+        })
+      } catch {
+        // ignore resume errors
+      }
+    }
+    resumeTasks()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    chatId,
+    fetchTaskEvents,
+    subscribeToTask,
+    updateChatMessagesFor,
+    replaceChatMessagesFor,
+    loadingByChat,
+    queryClient,
+  ])
 
   const visibleMessages = useMemo(
     () => mergeToolEvents(serverMessages, toolEvents),
@@ -315,7 +626,7 @@ export const ChatPage = () => {
   }
 
   useEffect(() => {
-    if (!autoScrollEnabled && !loading) return
+    if (!autoScrollEnabled && !currentChatLoading) return
 
     const lastMsg = visibleMessages[visibleMessages.length - 1]
     if (!lastMsg) return
@@ -340,7 +651,7 @@ export const ChatPage = () => {
         }
       }
     }
-  }, [visibleMessages, autoScrollEnabled, loading])
+  }, [visibleMessages, autoScrollEnabled, currentChatLoading])
 
   const handleMessagesScroll = () => {
     const container = messagesContainerRef.current
@@ -368,6 +679,7 @@ export const ChatPage = () => {
     })
     navigate(`/chat/${chat.id}`, { replace: true })
     replaceChatMessagesFor(chat.id, [])
+    refetchChats().catch(() => null)
     return chat
   }
 
@@ -381,17 +693,20 @@ export const ChatPage = () => {
   }
 
   const sendMessage = async () => {
-    if (loading) return
+    if (chatId && loadingByChat[chatId]) return
     const trimmed = message.trim()
     if (!trimmed && pendingAttachments.length === 0) return
     setAutoScrollEnabled(true)
-    setLoading(true)
+    let requestChatId: string | null = null
     try {
       let chat = activeChat
       if (!chat) {
         chat = await createChat()
       }
       if (!chat) return
+      requestChatId = chat.id
+      await queryClient.cancelQueries({ queryKey: ["chatMessages", chat.id] })
+      setLoadingByChat((prev) => ({ ...prev, [chat.id]: true }))
       const updateMessages = (updater: (prev: ChatMessage[]) => ChatMessage[]) =>
         updateChatMessagesFor(chat.id, updater)
       const activityAt = new Date().toISOString()
@@ -412,6 +727,7 @@ export const ChatPage = () => {
         created_at: activityAt,
         model_id: selectedModel ?? null,
         model_name: selectedModel ? modelNameById[selectedModel] ?? null : null,
+        generation_status: "queued",
       }
       updateMessages((prev) => [...prev, userMessage, assistantMessage])
       setMessage("")
@@ -424,80 +740,8 @@ export const ChatPage = () => {
         reasoningEffort,
         locale,
         (event) => {
-        if ("delta" in event) {
-          updateMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantId
-                ? { ...msg, content: msg.content + event.delta }
-                : msg
-            )
-          )
-        } else if ("user_message_id" in event) {
-          updateMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === tempUserId
-                ? { ...msg, id: event.user_message_id }
-                : msg
-            )
-          )
-        } else if ("activity" in event) {
-          const isStep = /^Step \d+\/\d+$/.test(event.activity.label)
-          updateMessages((prev) =>
-            prev.map((msg) => {
-              if (msg.id !== assistantId) return msg
-              const current = msg.thinking_steps ?? []
-              if (event.activity.state === "start") {
-                const withoutSteps = isStep
-                  ? current.filter((label) => !/^Step \d+\/\d+$/.test(label))
-                  : current
-                const next = Array.from(
-                  new Set([...withoutSteps, event.activity.label])
-                )
-                return { ...msg, thinking_steps: next }
-              }
-              if (isStep) {
-                return msg
-              }
-              if (msg.content.trim().length === 0) {
-                return msg
-              }
-              return {
-                ...msg,
-                thinking_steps: current.filter(
-                  (label) => label !== event.activity.label
-                ),
-              }
-            })
-          )
-        } else if ("tool_event" in event) {
-          appendToolEvent(event.tool_event)
-        } else if ("error" in event) {
-          updateMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantId
-                ? { ...msg, content: event.error, thinking_steps: [] }
-                : msg
-            )
-          )
-          return
-        } else if ("done" in event && event.done) {
-          updateMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantId
-                ? {
-                    ...msg,
-                    content: msg.content || event.content || "",
-                    model_name: event.model_name ?? msg.model_name ?? null,
-                    model_id: event.model_id ?? msg.model_id ?? null,
-                    attachments: event.attachments ?? msg.attachments,
-                    sources: event.sources ?? msg.sources,
-                    thinking_steps: [],
-                  }
-                : msg
-            )
-          )
+          applyStreamEvent(chat.id, assistantId, event)
         }
-      }
       )
       currentCancelRef.current = cancel
       try {
@@ -513,7 +757,9 @@ export const ChatPage = () => {
       }
     } finally {
       currentCancelRef.current = null
-      setLoading(false)
+      if (requestChatId) {
+        setLoadingByChat((prev) => ({ ...prev, [requestChatId as string]: false }))
+      }
     }
   }
 
@@ -673,12 +919,12 @@ export const ChatPage = () => {
     if (!trimmed && editingAttachments.length === 0) return
     stopGeneration()
     setAutoScrollEnabled(true)
-    setLoading(true)
+    await queryClient.cancelQueries({ queryKey: ["chatMessages", activeChat.id] })
+    setLoadingByChat((prev) => ({ ...prev, [activeChat.id]: true }))
     setToolEvents([])
     const activityAt = new Date().toISOString()
     bumpChatActivity(activeChat.id, activityAt)
     const tempAssistantId = `temp-assistant-edit-${Date.now()}`
-    let updatedUserId = msg.id
     const updateMessages = (updater: (prev: ChatMessage[]) => ChatMessage[]) =>
       updateChatMessagesFor(activeChat.id, updater)
     updateMessages((prev) => {
@@ -697,6 +943,7 @@ export const ChatPage = () => {
         model_id: selectedModel ?? null,
         model_name: selectedModel ? modelNameById[selectedModel] ?? null : null,
         thinking_steps: [],
+        generation_status: "queued",
       }
       return [...prev.slice(0, index), updated, placeholder]
     })
@@ -708,101 +955,7 @@ export const ChatPage = () => {
       editingAttachments,
       locale,
       (event) => {
-        if ("delta" in event) {
-          updateMessages((prev) =>
-            prev.map((item) =>
-              item.id === tempAssistantId
-                ? { ...item, content: item.content + event.delta }
-                : item
-            )
-          )
-          return
-        }
-        if ("activity" in event) {
-          const isStep = /^Step \d+\/\d+$/.test(event.activity.label)
-          updateMessages((prev) =>
-            prev.map((item) => {
-              if (item.id !== tempAssistantId) return item
-              const current = item.thinking_steps ?? []
-              if (event.activity.state === "start") {
-                const withoutSteps = isStep
-                  ? current.filter((label) => !/^Step \d+\/\d+$/.test(label))
-                  : current
-                const next = Array.from(
-                  new Set([...withoutSteps, event.activity.label])
-                )
-                return { ...item, thinking_steps: next }
-              }
-              if (isStep) {
-                return item
-              }
-              if (item.content.trim().length === 0) {
-                return item
-              }
-              return {
-                ...item,
-                thinking_steps: current.filter(
-                  (label) => label !== event.activity.label
-                ),
-              }
-            })
-          )
-          return
-        }
-        if ("tool_event" in event) {
-          appendToolEvent(event.tool_event)
-          return
-        }
-        if ("user_message_id" in event) {
-          if (event.edited_message_id && event.edited_message_id !== msg.id) {
-            return
-          }
-          updatedUserId = event.user_message_id
-          updateMessages((prev) =>
-            prev.map((item) =>
-              item.id === msg.id ? { ...item, id: updatedUserId } : item
-            )
-          )
-          return
-        }
-        if ("error" in event) {
-          updateMessages((prev) =>
-            prev.map((item) =>
-              item.id === tempAssistantId
-                ? { ...item, content: event.error, thinking_steps: [] }
-                : item
-            )
-          )
-          return
-        }
-        if (event.done) {
-          updateMessages((prev) => {
-            const index = prev.findIndex(
-              (item) => item.id === updatedUserId || item.id === msg.id
-            )
-            if (index === -1) return prev
-            const userMessage: ChatMessage = {
-              ...prev[index],
-              id: updatedUserId,
-              content: trimmed,
-              attachments: editingAttachments,
-            }
-            const assistantMessage: ChatMessage = {
-              id: event.message_id ?? tempAssistantId,
-              role: "assistant",
-              content: event.content ?? "",
-              created_at: new Date().toISOString(),
-              model_id: event.model_id ?? selectedModel ?? null,
-              model_name:
-                event.model_name ??
-                (selectedModel ? modelNameById[selectedModel] ?? null : null),
-              attachments: event.attachments ?? [],
-              sources: event.sources ?? [],
-              thinking_steps: [],
-            }
-            return [...prev.slice(0, index), userMessage, assistantMessage]
-          })
-        }
+        applyStreamEvent(activeChat.id, tempAssistantId, event)
       }
     )
     currentCancelRef.current = cancel
@@ -816,7 +969,7 @@ export const ChatPage = () => {
         .catch(() => null)
     } finally {
       currentCancelRef.current = null
-      setLoading(false)
+      setLoadingByChat((prev) => ({ ...prev, [activeChat.id]: false }))
     }
   }
 
@@ -841,7 +994,7 @@ export const ChatPage = () => {
 
   return (
     <div className="flex bg-background h-screen overflow-hidden">
-      <aside className="hidden md:flex flex-col bg-background p-4 border-r w-72 min-h-0">
+      <aside className="hidden md:flex shrink-0 flex-col bg-background p-4 border-r w-72 min-h-0">
         <ChatSidebar
           title={t("chat_title")}
           labels={{
@@ -965,7 +1118,7 @@ export const ChatPage = () => {
         <ChatComposer
           message={message}
           placeholder={t("chat_message_placeholder")}
-          loading={loading}
+          loading={currentChatLoading}
           isDragActive={isDragActive}
           pendingAttachments={pendingAttachments}
           reasoningEffort={reasoningEffort}

@@ -363,7 +363,7 @@ def set_org_models(
     models = session.exec(
         select(ChatModel)
         .where(ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids))
-        .order_by(ChatModel.display_order, ChatModel.created_at)
+        .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
     ).all()
     return [
         ModelRead(
