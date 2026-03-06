@@ -1,9 +1,20 @@
-# asya-chat-ui
+# AsyaChatUI
 
-Open source multi-provider LLM chat platform with organization management, model routing, tool execution, usage analytics, and OpenAI-compatible APIs.
+Open source multi-provider LLM chat platform with organization management, model routing, tool execution, usage analytics, and OpenAI-compatible APIs alternative to WebChat UI and LibreChat.
 
-Published repository: [github.com/asya-ai/asya-chat-ui](https://github.com/asya-ai/asya-chat-ui)  
-Developed by [asya.ai](https://asya.ai)
+Developed by [asya.ai](https://asya.ai) authors of https://eldigen.com (automated e-mail and document support system) and https://pitchpatterns.com (automated call centre analytics and robocalls)
+
+## Screen Shot
+
+![image-20260306190633867](https://share.yellowrobot.xyz/quick/c839fa1f698a46768e2a9c4ae8472484_1772816793997.png)
+
+## Roadmap
+
+- [ ] UX improvements (larger visuals, left side panel CSS)
+- [ ] UX button to enable/disable Web Search (DuckDuckGo & Perplexity API)
+- [ ] Function to share public chat
+- [ ] Group chats (groups that see each other chats)
+- [ ] … Add your own feature requests in Github Issues
 
 ## License
 
