@@ -1,6 +1,6 @@
 # AsyaChatUI
 
-Open source multi-provider LLM chat platform with organization management, model routing, tool execution, usage analytics, and OpenAI-compatible APIs alternative to WebChat UI and LibreChat.
+Open source multi-provider LLM chat platform with organization management, model routing, tool execution, usage analytics, and OpenAI-compatible APIs alternative to Open WebUI and LibreChat.
 
 Developed by [asya.ai](https://asya.ai) authors of https://eldigen.com (automated e-mail and document support system) and https://pitchpatterns.com (automated call centre analytics and robocalls)
 
