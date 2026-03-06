@@ -183,6 +183,33 @@ export const ChatPage = () => {
         ("message_id" in event && msg.id === event.message_id) ||
         ("assistant_message_id" in event && msg.id === event.assistant_message_id)
 
+      if ("done" in event && event.done === true) {
+        const messageId = typeof event.message_id === "string" ? event.message_id : null
+        const content = typeof event.content === "string" ? event.content : null
+        const modelName = typeof event.model_name === "string" ? event.model_name : null
+        const modelId = typeof event.model_id === "string" ? event.model_id : null
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) =>
+            matchesAssistant(msg)
+              ? {
+                  ...msg,
+                  id: messageId ?? msg.id,
+                  content: content && content.length > 0 ? content : msg.content || "",
+                  model_name: modelName ?? msg.model_name ?? null,
+                  model_id: modelId ?? msg.model_id ?? null,
+                  attachments:
+                    (event.attachments as ChatMessage["attachments"]) ??
+                    msg.attachments,
+                  sources:
+                    (event.sources as ChatMessage["sources"]) ?? msg.sources,
+                  thinking_steps: [],
+                  generation_status: "completed",
+                }
+              : msg
+          )
+        )
+        return
+      }
       if ("delta" in event && typeof event.delta === "string") {
         updateChatMessagesFor(targetChatId, (prev) =>
           prev.map((msg) =>
@@ -291,32 +318,6 @@ export const ChatPage = () => {
           )
         )
         return
-      }
-      if ("done" in event && event.done === true) {
-        const messageId = typeof event.message_id === "string" ? event.message_id : null
-        const content = typeof event.content === "string" ? event.content : null
-        const modelName = typeof event.model_name === "string" ? event.model_name : null
-        const modelId = typeof event.model_id === "string" ? event.model_id : null
-        updateChatMessagesFor(targetChatId, (prev) =>
-          prev.map((msg) =>
-            matchesAssistant(msg)
-              ? {
-                  ...msg,
-                  id: messageId ?? msg.id,
-                  content: content && content.length > 0 ? content : msg.content || "",
-                  model_name: modelName ?? msg.model_name ?? null,
-                  model_id: modelId ?? msg.model_id ?? null,
-                  attachments:
-                    (event.attachments as ChatMessage["attachments"]) ??
-                    msg.attachments,
-                  sources:
-                    (event.sources as ChatMessage["sources"]) ?? msg.sources,
-                  thinking_steps: [],
-                  generation_status: "completed",
-                }
-              : msg
-          )
-        )
       }
     },
     [appendToolEvent, updateChatMessagesFor]
