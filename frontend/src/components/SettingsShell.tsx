@@ -31,7 +31,7 @@ export const SettingsShell = ({ title, items, actions, children }: SettingsShell
   const visibleItems = items.filter((item) => item.visible !== false)
 
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-svh overflow-hidden">
       <Sidebar>
         <SidebarContent className="px-2 py-4">
           <SidebarMenu>
@@ -48,7 +48,7 @@ export const SettingsShell = ({ title, items, actions, children }: SettingsShell
           </SidebarMenu>
         </SidebarContent>
       </Sidebar>
-      <SidebarInset className="flex min-h-svh flex-col overflow-hidden">
+      <SidebarInset className="flex h-svh min-h-0 flex-col overflow-hidden">
         <header className="flex items-center gap-3 border-b px-6 py-4">
           <SidebarTrigger className="md:hidden" />
           <h1 className="text-xl font-semibold">{title}</h1>
