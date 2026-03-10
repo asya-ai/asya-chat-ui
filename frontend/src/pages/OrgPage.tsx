@@ -310,9 +310,29 @@ export const OrgPage = () => {
 
   const sendInvite = async () => {
     if (!usersOrgId) return
-    await authApi.createInvite(usersOrgId, inviteEmail)
+    const emails = Array.from(
+      new Set(
+        inviteEmail
+          .split(/[\s,]+/g)
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean)
+      )
+    )
+    if (emails.length === 0) return
+    const results = await Promise.allSettled(
+      emails.map((email) => authApi.createInvite(usersOrgId, email))
+    )
+    const failedEmails = results
+      .map((result, index) => ({ result, email: emails[index] }))
+      .filter((item) => item.result.status === "rejected")
+      .map((item) => item.email)
     const updated = await authApi.invites(usersOrgId)
     setInvites(updated)
+    if (failedEmails.length > 0) {
+      setError(`Failed to send invites: ${failedEmails.join(", ")}`)
+      return
+    }
+    setError(null)
     setInviteEmail("")
   }
 
@@ -946,7 +966,10 @@ export const OrgPage = () => {
                   value={inviteEmail}
                   onChange={(event) => setInviteEmail(event.target.value)}
                 />
-                <Button disabled={!inviteEmail || !usersOrgId} onClick={sendInvite}>
+                <Button
+                  disabled={!usersOrgId || inviteEmail.split(/[\s,]+/g).every((item) => !item.trim())}
+                  onClick={sendInvite}
+                >
                   {t("org_users_generate_invite")}
                 </Button>
               </div>
