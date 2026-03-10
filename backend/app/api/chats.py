@@ -995,6 +995,7 @@ class ChatMessageRead(BaseModel):
     model_name: str | None = None
     attachments: list[ChatMessageAttachmentRead] | None = None
     sources: list[dict] | None = None
+    tool_event: dict | None = None
     task_id: str | None = None
     generation_status: str | None = None
 
@@ -2335,6 +2336,7 @@ def list_messages(
             )
         ).all()
     task_map: dict[UUID, ChatGenerationTask] = {}
+    task_by_id: dict[UUID, ChatGenerationTask] = {}
     if messages:
         tasks = session.exec(
             select(ChatGenerationTask).where(
@@ -2344,6 +2346,7 @@ def list_messages(
             )
         ).all()
         task_map = {task.assistant_message_id: task for task in tasks}
+        task_by_id = {task.id: task for task in tasks}
     attachments_by_message: dict[UUID, list[ChatMessageAttachmentRead]] = {}
     for attachment in attachments:
         attachments_by_message.setdefault(attachment.message_id, []).append(
@@ -2354,23 +2357,56 @@ def list_messages(
                 data_base64=attachment.data_base64,
             )
         )
-    return [
-        ChatMessageRead(
-            id=str(message.id),
-            role=message.role,
-            content=message.content,
-            created_at=message.created_at,
-            model_id=str(message.model_id) if message.model_id else None,
-            model_name=model_map.get(message.model_id),
-            attachments=attachments_by_message.get(message.id),
-            sources=message.sources,
-            task_id=str(task_map[message.id].id) if message.id in task_map else None,
-            generation_status=task_map[message.id].status.value
-            if message.id in task_map
-            else None,
+    tool_events_by_assistant: dict[UUID, list[ChatGenerationEvent]] = {}
+    if task_by_id:
+        tool_events = session.exec(
+            select(ChatGenerationEvent)
+            .where(ChatGenerationEvent.task_id.in_(list(task_by_id.keys())))
+            .where(ChatGenerationEvent.event_type == "tool_event")
+            .order_by(ChatGenerationEvent.sequence, ChatGenerationEvent.created_at)
+        ).all()
+        for event in tool_events:
+            task = task_by_id.get(event.task_id)
+            if not task:
+                continue
+            if not isinstance(event.payload_json, dict):
+                continue
+            tool_events_by_assistant.setdefault(task.assistant_message_id, []).append(event)
+
+    results: list[ChatMessageRead] = []
+    for message in messages:
+        results.append(
+            ChatMessageRead(
+                id=str(message.id),
+                role=message.role,
+                content=message.content,
+                created_at=message.created_at,
+                model_id=str(message.model_id) if message.model_id else None,
+                model_name=model_map.get(message.model_id),
+                attachments=attachments_by_message.get(message.id),
+                sources=message.sources,
+                task_id=str(task_map[message.id].id) if message.id in task_map else None,
+                generation_status=task_map[message.id].status.value
+                if message.id in task_map
+                else None,
+            )
         )
-        for message in messages
-    ]
+        if message.role != "assistant":
+            continue
+        for event in tool_events_by_assistant.get(message.id, []):
+            payload = event.payload_json if isinstance(event.payload_json, dict) else None
+            if payload is None:
+                continue
+            results.append(
+                ChatMessageRead(
+                    id=str(event.id),
+                    role="tool",
+                    content="",
+                    created_at=event.created_at,
+                    tool_event=payload,
+                )
+            )
+    return sorted(results, key=lambda item: item.created_at)
 
 
 @router.get("/{chat_id}/generation", response_model=list[ChatGenerationTaskRead])

@@ -6,7 +6,7 @@ import remarkBreaks from "remark-breaks"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { Pencil, Trash2, Plus, X } from "lucide-react"
+import { Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ChatMessage, ChatMessageAttachmentInput } from "@/lib/types"
@@ -27,6 +27,7 @@ type MessageBubbleProps = {
   getSourceLabel: (source: { url: string; title?: string | null; host?: string | null }) => string
   onStartEdit: (msg: ChatMessage) => void
   onDeleteFromMessage: (msg: ChatMessage) => void
+  onRetryMessage: (msg: ChatMessage) => void
   onSaveEditedMessage: (msg: ChatMessage) => void
   onCancelEdit: () => void
   onEditContentChange: (value: string) => void
@@ -50,6 +51,7 @@ export const MessageBubble = ({
   getSourceLabel,
   onStartEdit,
   onDeleteFromMessage,
+  onRetryMessage,
   onSaveEditedMessage,
   onCancelEdit,
   onEditContentChange,
@@ -517,6 +519,20 @@ export const MessageBubble = ({
             </>
           )}
         </div>
+        {!isUser && !isEditing && msg.generation_status === "failed" ? (
+          <div className="flex justify-start gap-2 opacity-0 group-hover:opacity-100 mt-2 transition">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => onRetryMessage(msg)}
+            >
+              <RotateCcw className="w-3.5 h-3.5 mr-1" />
+              {t("chat_retry")}
+            </Button>
+          </div>
+        ) : null}
         {isUser && !isEditing ? (
           <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 mt-2 transition">
             <Button

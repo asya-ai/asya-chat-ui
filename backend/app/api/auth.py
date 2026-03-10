@@ -12,6 +12,7 @@ from jose import JWTError, jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
@@ -118,11 +119,15 @@ def _normalize_identifier(value: str) -> str:
     return value.strip().lower()
 
 
+def _normalize_email(value: str) -> str:
+    return value.strip().lower()
+
+
 def _get_user_by_identifier(session: Session, identifier: str) -> User | None:
     normalized = _normalize_identifier(identifier)
     return session.exec(
         select(User).where(
-            (User.email == normalized) | (User.username == normalized)
+            (func.lower(User.email) == normalized) | (func.lower(User.username) == normalized)
         )
     ).first()
 
@@ -274,13 +279,15 @@ async def _build_oidc_authorize_url(request: Request, org: Org) -> str:
 
 @router.post("/register", response_model=TokenResponse)
 def register(payload: RegisterRequest, session: Session = Depends(get_db)) -> TokenResponse:
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     if not validate_password(payload.password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
         )
-    existing_user = session.exec(select(User).where(User.email == email)).first()
+    existing_user = session.exec(
+        select(User).where(func.lower(User.email) == email)
+    ).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
@@ -585,7 +592,7 @@ async def oidc_callback(
 
     user = None
     if email:
-        user = session.exec(select(User).where(User.email == email)).first()
+        user = session.exec(select(User).where(func.lower(User.email) == email)).first()
     if not user and username:
         user = session.exec(select(User).where(User.username == username)).first()
 
@@ -737,10 +744,11 @@ def create_invite(
     if not current_user.is_super_admin:
         require_org_admin(session, org.id, current_user.id)
 
+    invite_email = _normalize_email(payload.email)
     token = secrets.token_urlsafe(32)
     invite = Invite(
         org_id=org.id,
-        email=payload.email,
+        email=invite_email,
         token=token,
         expires_at=datetime.now(timezone.utc)
         + timedelta(hours=settings.invite_expire_hours),
@@ -749,7 +757,11 @@ def create_invite(
     session.add(invite)
     session.commit()
     session.refresh(invite)
-    invite_url = f"{request.base_url}invite?token={invite.token}"
+    org_hint = (org.slug or org.name or "").strip().lower()
+    params = {"token": invite.token}
+    if org_hint:
+        params["org"] = org_hint
+    invite_url = f"{request.base_url}invite?{urlencode(params)}"
     try:
         send_invite_email(
             to_email=invite.email,
@@ -853,7 +865,11 @@ def resend_invite(
     session.commit()
     session.refresh(invite)
     org = session.exec(select(Org).where(Org.id == invite.org_id)).first()
-    invite_url = f"{request.base_url}invite?token={invite.token}"
+    org_hint = ((org.slug if org else None) or (org.name if org else None) or "").strip().lower()
+    params = {"token": invite.token}
+    if org_hint:
+        params["org"] = org_hint
+    invite_url = f"{request.base_url}invite?{urlencode(params)}"
     try:
         send_invite_email(
             to_email=invite.email,
@@ -920,7 +936,7 @@ def accept_invite(
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite expired")
 
     email = invite.email.strip().lower()
-    user = session.exec(select(User).where(User.email == email)).first()
+    user = session.exec(select(User).where(func.lower(User.email) == email)).first()
     if not user:
         if not payload.password:
             raise HTTPException(
@@ -980,7 +996,8 @@ def request_password_reset(
     request: Request,
     session: Session = Depends(get_db),
 ) -> None:
-    user = session.exec(select(User).where(User.email == payload.email)).first()
+    email = _normalize_email(payload.email)
+    user = session.exec(select(User).where(func.lower(User.email) == email)).first()
     if not user:
         return
     token = secrets.token_urlsafe(32)

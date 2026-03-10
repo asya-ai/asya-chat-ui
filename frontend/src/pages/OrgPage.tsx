@@ -330,7 +330,13 @@ export const OrgPage = () => {
   }
 
   const copyInviteLink = async (invite: Invite) => {
-    const url = `${window.location.origin}/invite?token=${invite.token}`
+    const inviteOrg = orgs.find((org) => org.id === invite.org_id)
+    const orgHint = (inviteOrg?.slug ?? inviteOrg?.name ?? "").trim().toLowerCase()
+    const params = new URLSearchParams({ token: invite.token })
+    if (orgHint) {
+      params.set("org", orgHint)
+    }
+    const url = `${window.location.origin}/invite?${params.toString()}`
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(url)
     } else {

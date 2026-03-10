@@ -210,6 +210,22 @@ export const ChatPage = () => {
         )
         return
       }
+      if ("error" in event && typeof event.error === "string") {
+        const errorText = event.error.trim() || t("chat_generation_failed")
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) =>
+            matchesAssistant(msg)
+              ? {
+                  ...msg,
+                  content: errorText,
+                  thinking_steps: [],
+                  generation_status: "failed",
+                }
+              : msg
+          )
+        )
+        return
+      }
       if ("delta" in event && typeof event.delta === "string") {
         updateChatMessagesFor(targetChatId, (prev) =>
           prev.map((msg) =>
@@ -243,7 +259,13 @@ export const ChatPage = () => {
         )
         return
       }
-      if ("task_id" in event && typeof event.task_id === "string") {
+      if (
+        "task_id" in event &&
+        typeof event.task_id === "string" &&
+        !("error" in event) &&
+        !("delta" in event) &&
+        !("done" in event)
+      ) {
         const taskId = event.task_id
         const assistantMessageId =
           "assistant_message_id" in event &&
@@ -303,24 +325,8 @@ export const ChatPage = () => {
         }
         return
       }
-      if ("error" in event && typeof event.error === "string") {
-        const errorText = event.error
-        updateChatMessagesFor(targetChatId, (prev) =>
-          prev.map((msg) =>
-            matchesAssistant(msg)
-              ? {
-                  ...msg,
-                  content: errorText,
-                  thinking_steps: [],
-                  generation_status: "failed",
-                }
-              : msg
-          )
-        )
-        return
-      }
     },
-    [appendToolEvent, updateChatMessagesFor]
+    [appendToolEvent, t, updateChatMessagesFor]
   )
 
   const normalizeTaskEvent = useCallback(
@@ -442,9 +448,19 @@ export const ChatPage = () => {
     (baseMessages: ChatMessage[], toolMessages: ChatMessage[]): ChatMessage[] => {
       if (toolMessages.length === 0) return baseMessages
       const baseIds = new Set(baseMessages.map((msg) => msg.id))
+      const baseToolEventIds = new Set(
+        baseMessages
+          .map((msg) => msg.tool_event?.id)
+          .filter((eventId): eventId is string => Boolean(eventId))
+      )
       const merged = [
         ...baseMessages,
-        ...toolMessages.filter((msg) => !baseIds.has(msg.id)),
+        ...toolMessages.filter((msg) => {
+          if (baseIds.has(msg.id)) return false
+          const toolEventId = msg.tool_event?.id
+          if (!toolEventId) return true
+          return !baseToolEventIds.has(toolEventId)
+        }),
       ]
       return merged.sort(
         (a, b) => parseChatDate(a.created_at).getTime() - parseChatDate(b.created_at).getTime()
@@ -985,6 +1001,77 @@ export const ChatPage = () => {
     })
   }
 
+  const retryFailedMessage = async (failedMessage: ChatMessage) => {
+    if (!chatId || !activeChat) return
+    if (loadingByChat[chatId]) return
+    const messages = queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
+    const failedIndex = messages.findIndex((msg) => msg.id === failedMessage.id)
+    if (failedIndex < 0) return
+    const sourceUser = [...messages.slice(0, failedIndex)]
+      .reverse()
+      .find((msg) => msg.role === "user")
+    if (!sourceUser || sourceUser.id.startsWith("temp-")) return
+
+    stopGeneration()
+    setAutoScrollEnabled(true)
+    await queryClient.cancelQueries({ queryKey: ["chatMessages", chatId] })
+    setLoadingByChat((prev) => ({ ...prev, [chatId]: true }))
+    setToolEvents([])
+    const activityAt = new Date().toISOString()
+    bumpChatActivity(chatId, activityAt)
+    const tempAssistantId = `temp-assistant-retry-${Date.now()}`
+    const placeholder: ChatMessage = {
+      id: tempAssistantId,
+      role: "assistant",
+      content: "",
+      created_at: activityAt,
+      model_id: selectedModel ?? null,
+      model_name: selectedModel ? modelNameById[selectedModel] ?? null : null,
+      thinking_steps: [],
+      generation_status: "queued",
+    }
+    updateChatMessagesFor(chatId, (prev) => {
+      const userIndex = prev.findIndex((msg) => msg.id === sourceUser.id)
+      if (userIndex < 0) return prev
+      return [...prev.slice(0, userIndex + 1), placeholder]
+    })
+    const retryAttachments = (sourceUser.attachments ?? []).map((attachment) => ({
+      file_name: attachment.file_name,
+      content_type: attachment.content_type,
+      data_base64: attachment.data_base64,
+    }))
+    const { promise, cancel } = chatApi.editMessageStream(
+      chatId,
+      sourceUser.id,
+      sourceUser.content,
+      retryAttachments,
+      locale,
+      (event) => {
+        applyStreamEvent(chatId, tempAssistantId, event)
+      }
+    )
+    currentCancelRef.current = cancel
+    try {
+      await promise
+      refetchChats()
+    } catch {
+      updateChatMessagesFor(chatId, (prev) =>
+        prev.map((msg) =>
+          msg.id === tempAssistantId
+            ? {
+                ...msg,
+                content: msg.content?.trim() ? msg.content : t("chat_generation_failed"),
+                generation_status: "failed",
+              }
+            : msg
+        )
+      )
+    } finally {
+      currentCancelRef.current = null
+      setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
+    }
+  }
+
   const handleSelectChat = useCallback(
     (chat: Chat, onSelect?: () => void) => {
       navigate(`/chat/${chat.id}`)
@@ -1105,6 +1192,7 @@ export const ChatPage = () => {
                 getSourceLabel={getSourceLabel}
                 onStartEdit={startEditMessage}
                 onDeleteFromMessage={deleteFromMessage}
+                onRetryMessage={retryFailedMessage}
                 onSaveEditedMessage={saveEditedMessage}
                 onCancelEdit={cancelEditMessage}
                 onEditContentChange={setEditingContent}
