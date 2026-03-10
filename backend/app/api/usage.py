@@ -332,4 +332,9 @@ def usage_months(
     if org_uuid:
         stmt = stmt.where(UsageEvent.org_id == org_uuid)
     results = session.exec(stmt).all()
-    return [str(row[0]) for row in results if row and row[0]]
+    months: list[str] = []
+    for row in results:
+        value = row[0] if isinstance(row, (tuple, list)) else row
+        if value:
+            months.append(str(value))
+    return months
