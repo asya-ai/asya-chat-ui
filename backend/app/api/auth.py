@@ -826,13 +826,16 @@ def preview_invite(token: str, session: Session = Depends(get_db)) -> InvitePrev
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
     if invite.accepted_at is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite used")
-    if invite.expires_at < datetime.now(timezone.utc):
+    expires_at = invite.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite expired")
     org = session.exec(select(Org).where(Org.id == invite.org_id)).first()
     return InvitePreview(
         email=invite.email,
         org_name=org.name if org else None,
-        expires_at=invite.expires_at,
+        expires_at=expires_at,
     )
 
 
