@@ -1082,7 +1082,7 @@ export const ChatPage = () => {
 
   return (
     <div className="flex bg-background h-screen overflow-hidden">
-      <aside className="hidden md:flex shrink-0 flex-col bg-background p-4 border-r w-72 min-h-0">
+      <aside className="hidden md:flex flex-col bg-background p-4 border-r w-72 min-h-0 shrink-0">
         <ChatSidebar
           title={t("chat_title")}
           labels={{

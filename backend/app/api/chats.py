@@ -2393,19 +2393,29 @@ def list_messages(
         )
         if message.role != "assistant":
             continue
-        for event in tool_events_by_assistant.get(message.id, []):
-            payload = event.payload_json if isinstance(event.payload_json, dict) else None
-            if payload is None:
-                continue
-            results.append(
-                ChatMessageRead(
-                    id=str(event.id),
-                    role="tool",
-                    content="",
-                    created_at=event.created_at,
-                    tool_event=payload,
+        raw_events = tool_events_by_assistant.get(message.id, [])
+        if raw_events:
+            # Collapse repeated tool updates (e.g. code_execution pre/post output)
+            # into a single persisted tool bubble, keeping the latest payload per tool id.
+            deduped: dict[str, ChatGenerationEvent] = {}
+            for event in raw_events:
+                payload = event.payload_json if isinstance(event.payload_json, dict) else None
+                tool_event_id = payload.get("id") if isinstance(payload, dict) else None
+                key = str(tool_event_id) if isinstance(tool_event_id, str) and tool_event_id else str(event.id)
+                deduped[key] = event
+            for event in sorted(deduped.values(), key=lambda item: item.sequence):
+                payload = event.payload_json if isinstance(event.payload_json, dict) else None
+                if payload is None:
+                    continue
+                results.append(
+                    ChatMessageRead(
+                        id=str(event.id),
+                        role="tool",
+                        content="",
+                        created_at=event.created_at,
+                        tool_event=payload,
+                    )
                 )
-            )
     return sorted(results, key=lambda item: item.created_at)
 
 
