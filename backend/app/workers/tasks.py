@@ -7,14 +7,17 @@ import logging
 from typing import Any
 from uuid import UUID
 import json
+from uuid import uuid4
 
 from sqlalchemy import func, select, update
 from sqlmodel import Session
 
 from app.api.chats import (
+    MAX_CONTEXT_MESSAGES,
     _attachment_image_url,
     _attachment_lines,
     _build_tool_registry,
+    _estimate_tokens,
     _grounding_enabled,
     _is_image_output_model,
     _maybe_update_chat_title,
@@ -44,6 +47,9 @@ from app.services.tools.image_tool import ImageToolContext, generate_image
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+SUMMARY_HEAD_MESSAGES = 4
+SUMMARY_TAIL_MESSAGES = 12
+SUMMARY_MAX_TRANSCRIPT_CHARS = 24000
 
 
 class GenerationCancelledError(Exception):
@@ -140,7 +146,7 @@ def _build_provider_messages(
                 }
             )
         items.append({"role": msg.role, "content": content_parts})
-    return _truncate_messages(_prepend_tool_guidance(items, locale=locale), token_limit=model.context_length)
+    return _prepend_tool_guidance(items, locale=locale)
 
 
 def _append_event(
@@ -212,6 +218,114 @@ async def _maybe_close_provider(provider: Any) -> None:
     if client is None:
         return
     await _close(client)
+
+
+def _message_text_for_summary(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in {"text", "input_text"} and item.get("text"):
+                parts.append(str(item.get("text")))
+            elif item.get("type") == "image_url":
+                parts.append("[image]")
+        return "\n".join(parts)
+    return ""
+
+
+def _build_summary_transcript(messages: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        text = _message_text_for_summary(message).strip()
+        if not text:
+            continue
+        lines.append(f"{role}: {text}")
+    transcript = "\n\n".join(lines)
+    if len(transcript) > SUMMARY_MAX_TRANSCRIPT_CHARS:
+        return transcript[-SUMMARY_MAX_TRANSCRIPT_CHARS:]
+    return transcript
+
+
+async def _summarize_context_if_needed(
+    *,
+    session: Session,
+    task_id: UUID,
+    sequence_ref: list[int],
+    provider: Any,
+    model: ChatModel,
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    token_limit = model.context_length
+    if token_limit is None:
+        return messages
+    if len(messages) <= MAX_CONTEXT_MESSAGES and _estimate_tokens(messages) <= token_limit:
+        return messages
+
+    head = messages[:SUMMARY_HEAD_MESSAGES]
+    tail = messages[-SUMMARY_TAIL_MESSAGES:]
+    middle = messages[SUMMARY_HEAD_MESSAGES:-SUMMARY_TAIL_MESSAGES]
+    if not middle:
+        return _truncate_messages(messages, token_limit=token_limit)
+
+    transcript = _build_summary_transcript(middle)
+    if not transcript.strip():
+        return _truncate_messages(messages, token_limit=token_limit)
+
+    summary_request = [
+        {
+            "role": "system",
+            "content": (
+                "Summarize the earlier chat context so another assistant can continue seamlessly. "
+                "Preserve user intent, constraints, decisions, unresolved tasks, and key facts. "
+                "Use concise markdown bullets."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Summarize this prior conversation segment:\n\n{transcript}",
+        },
+    ]
+    try:
+        summary_response = await provider.chat(model.model_name, summary_request)
+        summary_text = (summary_response.content or "").strip()
+    except Exception:
+        logger.exception("Context summarization failed for task=%s", task_id)
+        return _truncate_messages(messages, token_limit=token_limit)
+
+    if not summary_text:
+        return _truncate_messages(messages, token_limit=token_limit)
+
+    summary_message = {
+        "role": "system",
+        "content": f"Conversation summary so far:\n{summary_text}",
+    }
+    summarized_messages = [*head, summary_message, *tail]
+    if _estimate_tokens(summarized_messages) > token_limit:
+        summarized_messages = [summary_message, *tail]
+    if _estimate_tokens(summarized_messages) > token_limit:
+        summarized_messages = _truncate_messages(summarized_messages, token_limit=token_limit)
+
+    _append_event(
+        session,
+        task_id,
+        sequence_ref,
+        "tool_event",
+        {
+            "type": "context_summary",
+            "id": str(uuid4()),
+            "summary": summary_text,
+            "output": {
+                "original_message_count": len(messages),
+                "used_message_count": len(summarized_messages),
+            },
+        },
+    )
+    return summarized_messages
 
 
 async def _run_generation(task_id: UUID) -> None:
@@ -371,6 +485,14 @@ async def _run_generation(task_id: UUID) -> None:
             attachments_by_message=attachments_by_message,
             model=model,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
+        )
+        messages = await _summarize_context_if_needed(
+            session=session,
+            task_id=task.id,
+            sequence_ref=sequence_ref,
+            provider=provider,
+            model=model,
+            messages=messages,
         )
 
         usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)

@@ -109,7 +109,7 @@ export const ChatPage = () => {
           if (existing.tool_event) {
             next[existingIndex] = {
               ...existing,
-              tool_event: { ...existing.tool_event, ...event },
+              tool_event: event,
             }
             return next
           }
@@ -863,6 +863,11 @@ export const ChatPage = () => {
       .map((line) => line.trimEnd())
       .filter((line) => line.trim().length > 0)
     if (lines.length < 2) return false
+
+    // Treat stack/code-reference style prefixes as code, e.g. foo@bar:baz# or foo@bar:baz~
+    if (lines.some((line) => /^\s*[^@\s]+@[^:\s]+:[^\s]*[#~]/.test(line))) {
+      return true
+    }
 
     const keywordLineCount = lines.filter((line) =>
       /^(def |class |import |from |function |const |let |var |if\b|for\b|while\b|return\b|#include\b|SELECT\b|INSERT\b|UPDATE\b|DELETE\b|WITH\b|CREATE\b|ALTER\b|DROP\b|--\s|\/\/)/i.test(

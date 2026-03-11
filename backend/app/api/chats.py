@@ -581,7 +581,7 @@ async def _maybe_update_chat_title(
     title_messages = [
         {
             "role": "system",
-            "content": "Create a concise chat title (max 6 words). Reply with the title only.",
+            "content": "Create a concise chat title (max 6 words) that summarizes what the chat is about. Reply with the title only. Don't use markdown or other formatting.",
         },
         {"role": "user", "content": title_prompt},
     ]

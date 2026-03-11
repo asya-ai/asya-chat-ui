@@ -109,7 +109,7 @@ export type SourceItem = {
   host?: string | null
 }
 
-export type ToolEvent = {
+export type CodeExecutionToolEvent = {
   type: "code_execution"
   id?: string
   code: string
@@ -128,6 +128,18 @@ export type ToolEvent = {
     }[] | null
   }
 }
+
+export type ContextSummaryToolEvent = {
+  type: "context_summary"
+  id?: string
+  summary: string
+  output?: {
+    original_message_count?: number | null
+    used_message_count?: number | null
+  } | null
+}
+
+export type ToolEvent = CodeExecutionToolEvent | ContextSummaryToolEvent
 
 export type GenerationStatus =
   | "queued"

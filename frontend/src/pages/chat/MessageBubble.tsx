@@ -62,6 +62,10 @@ export const MessageBubble = ({
 }: MessageBubbleProps) => {
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const isEditing = editingMessageId === msg.id
+  const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
+  const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
+  const contextSummaryEvent =
+    msg.tool_event?.type === "context_summary" ? msg.tool_event : null
   const content = useMemo(() => {
     // Normalize bracketed math blocks into KaTeX-friendly $$...$$
     return msg.content.replace(
@@ -95,7 +99,13 @@ export const MessageBubble = ({
                 isUser ? "ml-auto text-right" : ""
               }`}
             >
-              {isCodeEvent ? t("chat_executing_code") : isUser ? t("chat_you") : msg.model_name || t("chat_assistant")}
+              {isCodeEvent
+                ? t("chat_executing_code")
+                : isContextSummaryEvent
+                  ? t("chat_context_summarized")
+                  : isUser
+                    ? t("chat_you")
+                    : msg.model_name || t("chat_assistant")}
             </p>
           </div>
           {isCodeEvent ? (
@@ -106,27 +116,27 @@ export const MessageBubble = ({
               <div>
                 <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_execution_code")}</p>
                 <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs">
-                  {msg.tool_event?.code ?? ""}
+                  {codeEvent?.code ?? ""}
                 </pre>
               </div>
               <div>
                 <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_execution_output")}</p>
                 <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs">
                   {[
-                    msg.tool_event?.output?.stdout,
-                    msg.tool_event?.output?.stderr,
-                    msg.tool_event?.output?.error
-                      ? `Error: ${msg.tool_event.output.error}`
+                    codeEvent?.output?.stdout,
+                    codeEvent?.output?.stderr,
+                    codeEvent?.output?.error
+                      ? `Error: ${codeEvent.output.error}`
                       : null,
-                    msg.tool_event?.output?.requires_approval
+                    codeEvent?.output?.requires_approval
                       ? t("chat_execution_requires_approval")
                       : null,
-                    msg.tool_event?.output?.timed_out
+                    codeEvent?.output?.timed_out
                       ? t("chat_execution_timed_out")
                       : null,
-                    typeof msg.tool_event?.output?.exit_code === "number"
+                    typeof codeEvent?.output?.exit_code === "number"
                       ? t("chat_execution_exit_code", {
-                          code: msg.tool_event.output.exit_code,
+                          code: codeEvent.output.exit_code,
                         })
                       : null,
                   ]
@@ -134,16 +144,16 @@ export const MessageBubble = ({
                     .join("\n") || t("chat_execution_no_output")}
                 </pre>
               </div>
-              {msg.tool_event?.output?.output_files &&
-              msg.tool_event.output.output_files.length > 0 ? (
+              {codeEvent?.output?.output_files &&
+              codeEvent.output.output_files.length > 0 ? (
                 <div className="space-y-2">
                   <p className="opacity-70 text-xs uppercase">
                     {t("chat_execution_outputs")}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {msg.tool_event.output.output_files
+                    {codeEvent.output.output_files
                       .filter((file) => file.content_type.startsWith("image/"))
-                      .map((file, index) => (
+                      .map((file: { file_name: string; content_type: string; data_base64: string }, index: number) => (
                         <Button
                           key={`${file.file_name}-${index}`}
                           type="button"
@@ -165,9 +175,9 @@ export const MessageBubble = ({
                           />
                         </Button>
                       ))}
-                    {msg.tool_event.output.output_files
+                    {codeEvent.output.output_files
                       .filter((file) => !file.content_type.startsWith("image/"))
-                      .map((file, index) => (
+                      .map((file: { file_name: string; content_type: string; data_base64: string }, index: number) => (
                         <a
                           key={`${file.file_name}-${index}`}
                           className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
@@ -180,6 +190,18 @@ export const MessageBubble = ({
                   </div>
                 </div>
               ) : null}
+            </details>
+          ) : isContextSummaryEvent ? (
+            <details className="space-y-3">
+              <summary className="text-xs uppercase tracking-wide cursor-pointer">
+                {t("chat_context_summarized")}
+              </summary>
+              <div>
+                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_summary")}</p>
+                <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
+                  {contextSummaryEvent?.summary ?? ""}
+                </pre>
+              </div>
             </details>
           ) : isEditing ? (
             <div className="space-y-2">
