@@ -1260,7 +1260,7 @@ export const OrgPage = () => {
                         <TableHeader>
                           <TableRow>
                             <TableHead className="sticky left-0 z-10 bg-card min-w-64">
-                              Model
+                              {t("usage_model")}
                             </TableHead>
                             {orgs.map((org) => (
                               <TableHead key={org.id} className="min-w-44 text-center">
@@ -1429,11 +1429,11 @@ export const OrgPage = () => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="disabled">Disabled</SelectItem>
+                      <SelectItem value="disabled">{t("org_provider_disabled")}</SelectItem>
                       <SelectItem value="default" disabled={!config.has_global_config}>
-                        Enabled (Defaults)
+                        {t("org_provider_enabled_defaults")}
                       </SelectItem>
-                      <SelectItem value="override">Enabled (Override)</SelectItem>
+                      <SelectItem value="override">{t("org_provider_enabled_override")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1457,7 +1457,7 @@ export const OrgPage = () => {
                     />
                     {config.provider === "vertex" ? (
                       <Textarea
-                        placeholder='Config JSON (e.g. {"project": "...", "location": "..."})'
+                        placeholder={t("org_provider_vertex_config_placeholder")}
                         value={config.config_json ?? ""}
                         onChange={(event) =>
                           updateProviderField(

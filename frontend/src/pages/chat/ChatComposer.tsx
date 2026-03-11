@@ -4,6 +4,7 @@ import type { ChatMessageAttachmentInput } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Plus, X, Brain } from "lucide-react"
+import { useI18n } from "@/lib/i18n-context"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,6 +59,7 @@ export const ChatComposer = ({
   sendLabel,
   stopLabel,
 }: ChatComposerProps) => {
+  const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const handlePickFiles = () => {
@@ -74,14 +76,15 @@ export const ChatComposer = ({
   const canSend = Boolean(message.trim() || pendingAttachments.length > 0)
 
   const reasoningLevels = [
-    { value: null, label: "Default" },
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
+    { value: null, label: t("chat_reasoning_default") },
+    { value: "low", label: t("chat_reasoning_low") },
+    { value: "medium", label: t("chat_reasoning_medium") },
+    { value: "high", label: t("chat_reasoning_high") },
   ]
 
   const currentReasoningLabel =
-    reasoningLevels.find((l) => l.value === reasoningEffort)?.label ?? "Default"
+    reasoningLevels.find((l) => l.value === reasoningEffort)?.label ??
+    t("chat_reasoning_default")
 
   return (
     <div className="p-4 border-t">
@@ -159,7 +162,13 @@ export const ChatComposer = ({
               onChange={handleFilesSelected}
               disabled={loading}
             />
-            <Button variant="ghost" size="icon" onClick={handlePickFiles} disabled={loading} title="Add files">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handlePickFiles}
+              disabled={loading}
+              title={t("chat_add_files")}
+            >
               <Plus className="w-5 h-5" />
             </Button>
             <DropdownMenu>
@@ -168,7 +177,7 @@ export const ChatComposer = ({
                   variant="ghost"
                   size="sm"
                   className={`gap-2 ${reasoningEffort ? "text-primary bg-primary/10" : "text-muted-foreground"}`}
-                  title="Reasoning effort"
+                  title={t("chat_reasoning_effort")}
                   disabled={loading}
                 >
                   <Brain className="w-4 h-4" />
