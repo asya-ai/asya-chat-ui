@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     scraper_url: str = Field(
         default="http://scraper:3001", validation_alias="SCRAPER_URL"
     )
+    public_api_base_url: str = Field(
+        default="", validation_alias="PUBLIC_API_BASE_URL"
+    )
+    attachment_url_expire_minutes: int = Field(
+        default=60, validation_alias="ATTACHMENT_URL_EXPIRE_MINUTES"
+    )
     web_search_limit: int = Field(default=5, validation_alias="WEB_SEARCH_LIMIT")
     scrape_text_limit: int = Field(default=20000, validation_alias="SCRAPE_TEXT_LIMIT")
     scrape_parallel_max: int = Field(

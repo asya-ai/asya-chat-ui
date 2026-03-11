@@ -11,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlmodel import Session
 
 from app.api.chats import (
+    _attachment_image_url,
     _attachment_lines,
     _build_tool_registry,
     _grounding_enabled,
@@ -133,7 +134,7 @@ def _build_provider_messages(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:{attachment.content_type};base64,{attachment.data_base64}"
+                        "url": _attachment_image_url(attachment)
                     },
                 }
             )

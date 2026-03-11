@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import base64
 import html
 import logging
 import re
@@ -10,7 +11,8 @@ import httpx
 import anyio
 from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from jose import JWTError, jwt
 from pydantic import BaseModel, field_validator, model_validator
 from sqlmodel import Session, select
 
@@ -68,6 +70,43 @@ TOOL_GUIDANCE_PROMPT = (
     "Uploaded files are available under /inputs with the exact filenames listed "
     "in the user's message."
 )
+
+
+def _attachment_access_token(attachment_id: UUID) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.attachment_url_expire_minutes
+    )
+    payload = {"att": str(attachment_id), "exp": expire}
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+
+def _decode_attachment_access_token(token: str) -> UUID:
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+        attachment_id = payload.get("att")
+        if not attachment_id:
+            raise ValueError("Missing attachment id")
+        return UUID(str(attachment_id))
+    except (JWTError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid attachment token",
+        ) from exc
+
+
+def _public_api_base_url() -> str | None:
+    configured = settings.public_api_base_url.strip()
+    if configured:
+        return configured.rstrip("/")
+    return None
+
+
+def _attachment_image_url(attachment: ChatMessageAttachment) -> str:
+    base_url = _public_api_base_url()
+    if base_url:
+        token = _attachment_access_token(attachment.id)
+        return f"{base_url}/chats/attachments/{attachment.id}/content?token={token}"
+    return f"data:{attachment.content_type};base64,{attachment.data_base64}"
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
@@ -434,6 +473,25 @@ def _limit_sources(items: list[dict] | None, max_items: int = 5) -> list[dict]:
     if not items:
         return []
     return items[:max_items]
+
+
+def _sanitize_tool_output_for_context(value: object) -> object:
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            if key == "data_base64":
+                result[key] = "[omitted_base64]"
+                continue
+            result[key] = _sanitize_tool_output_for_context(item)
+        return result
+    if isinstance(value, list):
+        limited = value[:50]
+        return [_sanitize_tool_output_for_context(item) for item in limited]
+    if isinstance(value, str):
+        if len(value) > 4000:
+            return value[:4000] + "...[truncated]"
+        return value
+    return value
 
 
 async def _normalize_sources(
@@ -899,7 +957,10 @@ async def _run_agentic_loop(
                         "role": "tool",
                         "name": call.name,
                         "tool_call_id": call.id,
-                        "content": json.dumps(result.output),
+                        "content": json.dumps(
+                            _sanitize_tool_output_for_context(result.output),
+                            ensure_ascii=False,
+                        ),
                     }
                 )
                 for label in labels:
@@ -1231,7 +1292,7 @@ async def _stream_message_ws(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{attachment.content_type};base64,{attachment.data_base64}"
+                            "url": _attachment_image_url(attachment)
                         },
                     }
                 )
@@ -1835,7 +1896,7 @@ async def _stream_edit_ws(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{attachment.content_type};base64,{attachment.data_base64}"
+                            "url": _attachment_image_url(attachment)
                         },
                     }
                 )
@@ -2423,6 +2484,47 @@ def list_messages(
     return sorted(results, key=lambda item: item.created_at)
 
 
+@router.get("/attachments/{attachment_id}/content")
+def get_attachment_content(
+    attachment_id: str,
+    token: str,
+    session: Session = Depends(get_db),
+) -> Response:
+    try:
+        attachment_uuid = UUID(attachment_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment id"
+        ) from exc
+    token_attachment_id = _decode_attachment_access_token(token)
+    if token_attachment_id != attachment_uuid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid attachment token"
+        )
+    attachment = session.exec(
+        select(ChatMessageAttachment).where(ChatMessageAttachment.id == attachment_uuid)
+    ).first()
+    if not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found"
+        )
+    try:
+        data = base64.b64decode(attachment.data_base64)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Attachment decode failed",
+        ) from exc
+    return Response(
+        content=data,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": f'inline; filename="{attachment.file_name}"',
+        },
+    )
+
+
 @router.get("/{chat_id}/generation", response_model=list[ChatGenerationTaskRead])
 def list_generation_tasks(
     chat_id: str,
@@ -2849,7 +2951,7 @@ async def create_message(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{attachment.content_type};base64,{attachment.data_base64}"
+                            "url": _attachment_image_url(attachment)
                         },
                     }
                 )
@@ -3684,7 +3786,7 @@ async def edit_message(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{attachment.content_type};base64,{attachment.data_base64}"
+                            "url": _attachment_image_url(attachment)
                         },
                     }
                 )

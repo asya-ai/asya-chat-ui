@@ -51,6 +51,19 @@ def _is_non_chat_model_error(exc: Exception) -> bool:
     return False
 
 
+def _is_context_length_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "context_length_exceeded" in message or "input tokens exceed" in message
+
+
+def _trim_messages_for_context(messages: list[dict], keep_tail: int = 20) -> list[dict]:
+    if len(messages) <= keep_tail:
+        return messages
+    system_messages = [msg for msg in messages if msg.get("role") == "system"][:1]
+    non_system_tail = [msg for msg in messages if msg.get("role") != "system"][-keep_tail:]
+    return system_messages + non_system_tail
+
+
 def _extract_response_text(result: object) -> str:
     content = getattr(result, "output_text", "") or ""
     if content:
@@ -138,6 +151,13 @@ class OpenAIProvider:
             if _is_non_chat_model_error(exc):
                 raise NonChatModelError(str(exc)) from exc
             retry = False
+            if _is_context_length_error(exc) and isinstance(payload.get("messages"), list):
+                payload["messages"] = _trim_messages_for_context(payload["messages"])
+                self._strip_prompt_cache(payload)
+                self.logger.warning(
+                    "chat.completions context limit exceeded, retrying with aggressively trimmed history"
+                )
+                retry = True
             if payload.get("reasoning_effort"):
                 payload.pop("reasoning_effort", None)
                 self.logger.error(
