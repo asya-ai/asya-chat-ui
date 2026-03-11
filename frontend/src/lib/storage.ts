@@ -2,6 +2,7 @@ const TOKEN_KEY = "chatui_token"
 const ORG_KEY = "chatui_org"
 const MODEL_KEY = "chatui_model"
 const LOCALE_KEY = "chatui_locale"
+const LOGIN_ORG_KEY = "chatui_login_org"
 
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
@@ -25,4 +26,10 @@ export const localeStore = {
   get: () => localStorage.getItem(LOCALE_KEY),
   set: (locale: string) => localStorage.setItem(LOCALE_KEY, locale),
   clear: () => localStorage.removeItem(LOCALE_KEY),
+}
+
+export const loginOrgStore = {
+  get: () => localStorage.getItem(LOGIN_ORG_KEY),
+  set: (org: string) => localStorage.setItem(LOGIN_ORG_KEY, org),
+  clear: () => localStorage.removeItem(LOGIN_ORG_KEY),
 }

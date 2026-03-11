@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { modelStore, orgStore } from "@/lib/storage"
+import { loginOrgStore, modelStore, orgStore } from "@/lib/storage"
 
 export const LoginPage = () => {
   const navigate = useNavigate()
@@ -29,8 +29,17 @@ export const LoginPage = () => {
   useEffect(() => {
     const orgParam = searchParams.get("org")
     if (orgParam) {
-      setOrg(orgParam)
-      setStage("org")
+      const normalized = orgParam.trim().toLowerCase()
+      if (!normalized) return
+      setOrg(normalized)
+      loginOrgStore.set(normalized)
+      setStage("credentials")
+      return
+    }
+    const previousOrg = loginOrgStore.get()
+    if (previousOrg) {
+      setOrg(previousOrg)
+      setStage("credentials")
     }
   }, [searchParams])
 
@@ -51,6 +60,7 @@ export const LoginPage = () => {
         setError(t("auth_login_failed"))
         return
       }
+      loginOrgStore.set(orgValue)
       if (stage === "org") {
         const resolve = await authApi.loginResolve("", orgValue)
         if (resolve.action === "sso" && resolve.redirect_url) {
@@ -89,7 +99,18 @@ export const LoginPage = () => {
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>{t("auth_sign_in")}</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>{t("auth_sign_in")}</CardTitle>
+              {stage === "credentials" ? (
+                <button
+                  type="button"
+                  className="text-xs underline text-muted-foreground hover:text-foreground"
+                  onClick={() => setStage("org")}
+                >
+                  {t("auth_use_different_org")}
+                </button>
+              ) : null}
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={onSubmit} className="space-y-4">

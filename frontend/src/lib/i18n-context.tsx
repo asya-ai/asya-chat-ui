@@ -40,6 +40,7 @@ const translations = {
     auth_identifier: "Email or username",
     auth_password: "Password",
     auth_org: "Organization",
+    auth_use_different_org: "Use different organization",
     auth_password_requirements:
       "Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
     auth_forgot_password: "Forgot password?",
@@ -273,6 +274,7 @@ const translations = {
     auth_identifier: "E-pasts vai lietotājvārds",
     auth_password: "Parole",
     auth_org: "Organizācija",
+    auth_use_different_org: "Izmantot citu organizāciju",
     auth_password_requirements:
       "Parolei jābūt vismaz 10 rakstzīmēm un jāietver lielie, mazie burti, cipars un speciālā rakstzīme.",
     auth_forgot_password: "Aizmirsāt paroli?",
