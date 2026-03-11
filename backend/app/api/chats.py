@@ -583,7 +583,11 @@ def _format_model_error(exc: Exception) -> str:
 
 
 def _enqueue_generation_task(task_id: UUID) -> None:
-    celery_app.send_task("chatui.generate_chat_response", args=[str(task_id)])
+    celery_app.send_task(
+        "chatui.generate_chat_response",
+        args=[str(task_id)],
+        task_id=str(task_id),
+    )
 
 
 def _event_payload_from_record(event: ChatGenerationEvent) -> dict:

@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlmodel import Session
 
 from app.api.chats import (
@@ -188,6 +188,13 @@ async def _run_generation(task_id: UUID) -> None:
         if not task:
             logger.warning("Generation task not found: %s", task_id)
             return
+        if task.status != GenerationStatus.queued:
+            logger.info(
+                "Skipping task=%s with status=%s (already claimed or finished)",
+                task_id,
+                task.status,
+            )
+            return
 
         chat = session.get(Chat, task.chat_id)
         if not chat or chat.is_deleted:
@@ -266,13 +273,27 @@ async def _run_generation(task_id: UUID) -> None:
         ).one_or_none()
         sequence_ref = [_to_int_scalar(sequence, default=0)]
 
-        task.status = GenerationStatus.running
-        task.started_at = datetime.utcnow()
-        task.metadata_json = {
-            "model_id": str(model.id),
-            "model_name": model.display_name,
-        }
+        claimed = session.exec(
+            update(ChatGenerationTask)
+            .where(
+                ChatGenerationTask.id == task.id,
+                ChatGenerationTask.status == GenerationStatus.queued,
+            )
+            .values(
+                status=GenerationStatus.running,
+                started_at=datetime.utcnow(),
+                metadata_json={
+                    "model_id": str(model.id),
+                    "model_name": model.display_name,
+                    **(task.metadata_json or {}),
+                },
+            )
+        )
         session.commit()
+        if (claimed.rowcount or 0) == 0:
+            logger.info("Task=%s was claimed by another worker; skipping", task.id)
+            return
+        task = session.get(ChatGenerationTask, task.id) or task
 
         assistant_message = session.get(ChatMessage, task.assistant_message_id)
         if not assistant_message:

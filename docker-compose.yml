@@ -97,6 +97,10 @@ services:
       postgres:
         condition: service_healthy
     command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "--concurrency=2", "--prefetch-multiplier=1"]
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
 
   nginx:
     build:
