@@ -182,7 +182,13 @@ def create_org(
         )
 
     slug = _ensure_unique_slug(session, _slugify(payload.name))
-    org = Org(name=payload.name, slug=slug)
+    org = Org(
+        name=payload.name,
+        slug=slug,
+        web_search_enabled=True,
+        exec_policy="always",
+        exec_network_enabled=False,
+    )
     session.add(org)
     session.commit()
     session.refresh(org)

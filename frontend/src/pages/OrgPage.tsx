@@ -55,6 +55,12 @@ export const OrgPage = () => {
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [providerModalOpen, setProviderModalOpen] = useState(false)
   const [webSettings, setWebSettings] = useState<OrgWebSettings | null>(null)
+  const [webSettingsByOrgId, setWebSettingsByOrgId] = useState<Record<string, OrgWebSettings>>(
+    {}
+  )
+  const [updatingWebSettingsByOrgId, setUpdatingWebSettingsByOrgId] = useState<
+    Record<string, boolean>
+  >({})
   const [accessByOrgId, setAccessByOrgId] = useState<Record<string, string[]>>({})
   const [updatingAccess, setUpdatingAccess] = useState<Record<string, boolean>>({})
   const [name, setName] = useState("")
@@ -301,6 +307,37 @@ export const OrgPage = () => {
       .catch(() => setWebSettings(null))
   }, [orgSettingsId, orgs])
 
+  useEffect(() => {
+    if (!isSuperAdmin || activeSection !== "orgs" || orgs.length === 0) {
+      setWebSettingsByOrgId({})
+      return
+    }
+    let cancelled = false
+    const loadWebSettingsMatrix = async () => {
+      const entries = await Promise.all(
+        orgs.map(async (org) => {
+          try {
+            const settings = await orgApi.webSettings(org.id)
+            return [org.id, settings] as const
+          } catch {
+            return null
+          }
+        })
+      )
+      if (cancelled) return
+      const next = Object.fromEntries(entries.filter((item): item is readonly [string, OrgWebSettings] => item !== null))
+      setWebSettingsByOrgId(next)
+    }
+    loadWebSettingsMatrix().catch(() => {
+      if (!cancelled) {
+        setWebSettingsByOrgId({})
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeSection, isSuperAdmin, orgs])
+
   const createOrg = async () => {
     setError(null)
     const org = await orgApi.create(name)
@@ -526,6 +563,18 @@ export const OrgPage = () => {
   const roleOptions = ["admin", "member"]
   const roleLabel = (value: string) =>
     value === "admin" ? t("org_role_admin") : t("org_role_member")
+  const orgSettingsRows: Array<{
+    key: keyof OrgWebSettings
+    label: string
+    type: "boolean" | "exec_policy"
+  }> = [
+    { key: "web_search_enabled", label: t("org_web_search"), type: "boolean" },
+    { key: "web_scrape_enabled", label: t("org_web_scrape"), type: "boolean" },
+    { key: "web_grounding_openai", label: t("org_grounding_openai"), type: "boolean" },
+    { key: "web_grounding_gemini", label: t("org_grounding_gemini"), type: "boolean" },
+    { key: "exec_policy", label: t("org_code_execution"), type: "exec_policy" },
+    { key: "exec_network_enabled", label: t("org_code_execution_network"), type: "boolean" },
+  ]
 
   const openRenameDialog = (org: Org) => {
     setRenameOrgId(org.id)
@@ -615,6 +664,20 @@ export const OrgPage = () => {
     if (!orgSettingsId) return
     const updated = await orgApi.updateWebSettings(orgSettingsId, payload)
     setWebSettings(updated)
+    setWebSettingsByOrgId((prev) => ({ ...prev, [orgSettingsId]: updated }))
+  }
+
+  const updateWebSettingsForOrg = async (orgId: string, payload: Partial<OrgWebSettings>) => {
+    setUpdatingWebSettingsByOrgId((prev) => ({ ...prev, [orgId]: true }))
+    try {
+      const updated = await orgApi.updateWebSettings(orgId, payload)
+      setWebSettingsByOrgId((prev) => ({ ...prev, [orgId]: updated }))
+      if (orgSettingsId === orgId) {
+        setWebSettings(updated)
+      }
+    } finally {
+      setUpdatingWebSettingsByOrgId((prev) => ({ ...prev, [orgId]: false }))
+    }
   }
 
   const updateProviderField = <K extends keyof ProviderConfigUI>(
@@ -690,6 +753,10 @@ export const OrgPage = () => {
       active: false,
     },
   ]
+  const showOrgSelector = !(
+    isSuperAdmin &&
+    (activeSection === "orgs" || activeSection === "models")
+  )
 
   return (
     <SettingsShell
@@ -697,7 +764,7 @@ export const OrgPage = () => {
       items={navItems}
       actions={
         <div className="flex items-center gap-2">
-          {isSuperAdmin ? (
+          {isSuperAdmin && showOrgSelector ? (
             <Select value={selectedOrg ?? ""} onValueChange={selectOrg}>
               <SelectTrigger className="w-64">
                 <SelectValue placeholder={t("org_select_placeholder")} />
@@ -816,7 +883,101 @@ export const OrgPage = () => {
                       {t("org_provider_configure")}
                     </Button>
                   </div>
-                  {webSettings ? (
+                  {isSuperAdmin ? (
+                    <div className="w-full overflow-x-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="sticky left-0 z-10 bg-card min-w-56">
+                              {t("org_settings")}
+                            </TableHead>
+                            {orgs.map((org) => (
+                              <TableHead key={`web-settings-head-${org.id}`} className="min-w-52">
+                                {org.name}
+                              </TableHead>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {orgSettingsRows.map((row) => (
+                            <TableRow key={`web-settings-row-${row.key}`}>
+                              <TableCell className="sticky left-0 z-10 bg-card text-sm font-medium">
+                                {row.label}
+                              </TableCell>
+                              {orgs.map((org) => {
+                                const settings = webSettingsByOrgId[org.id]
+                                const isUpdating = Boolean(updatingWebSettingsByOrgId[org.id])
+                                if (!settings) {
+                                  return (
+                                    <TableCell
+                                      key={`web-settings-cell-${row.key}-${org.id}`}
+                                      className="text-xs text-muted-foreground"
+                                    >
+                                      -
+                                    </TableCell>
+                                  )
+                                }
+                                if (row.type === "exec_policy") {
+                                  return (
+                                    <TableCell key={`web-settings-cell-${row.key}-${org.id}`}>
+                                      <Select
+                                        value={settings.exec_policy}
+                                        onValueChange={(value) =>
+                                          updateWebSettingsForOrg(org.id, {
+                                            exec_policy: value as OrgWebSettings["exec_policy"],
+                                          })
+                                        }
+                                        disabled={isUpdating || !org.is_active}
+                                      >
+                                        <SelectTrigger className="w-40">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="off">
+                                            {t("org_code_execution_off")}
+                                          </SelectItem>
+                                          <SelectItem value="prompt">
+                                            {t("org_code_execution_prompt")}
+                                          </SelectItem>
+                                          <SelectItem value="always">
+                                            {t("org_code_execution_always")}
+                                          </SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </TableCell>
+                                  )
+                                }
+                                const checked = Boolean(settings[row.key] as boolean)
+                                return (
+                                  <TableCell
+                                    key={`web-settings-cell-${row.key}-${org.id}`}
+                                    className="text-center align-middle"
+                                  >
+                                    <div className="flex justify-center items-center">
+                                      <Switch
+                                        checked={checked}
+                                        onCheckedChange={(value) =>
+                                          updateWebSettingsForOrg(org.id, {
+                                            [row.key]: value,
+                                          } as Partial<OrgWebSettings>)
+                                        }
+                                        disabled={
+                                          isUpdating ||
+                                          !org.is_active ||
+                                          (row.key === "exec_network_enabled" &&
+                                            settings.exec_policy === "off")
+                                        }
+                                      />
+                                    </div>
+                                  </TableCell>
+                                )
+                              })}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : webSettings ? (
                     <div className="rounded-md border p-4 space-y-4">
                       <div className="flex items-center justify-between">
                         <div>

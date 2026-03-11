@@ -40,7 +40,7 @@ class Org(SQLModel, table=True):
     web_grounding_openai: bool = Field(default=False)
     web_grounding_gemini: bool = Field(default=False)
     exec_network_enabled: bool = Field(default=False)
-    exec_policy: str = Field(default="off")
+    exec_policy: str = Field(default="always")
     oidc_enabled: bool = Field(default=False)
     oidc_issuer: Optional[str] = Field(default=None)
     oidc_client_id: Optional[str] = Field(default=None)
