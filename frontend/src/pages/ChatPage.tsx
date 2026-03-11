@@ -823,11 +823,34 @@ export const ChatPage = () => {
   const isLikelyCode = (text: string) => {
     if (!text.includes("\n")) return false
     if (text.includes("```")) return false
-    const codeRegex =
-      /(^|\n)\s*(def |class |import |from |function |const |let |var |if |for |while |return |#include |SELECT |INSERT |UPDATE |DELETE |WITH |-- |\/\/)/i
-    const hasBracesOrSemicolons = /[{};]/.test(text)
-    const hasIndentation = /(\n\t|\n {4,})/.test(text)
-    return codeRegex.test(text) || hasBracesOrSemicolons || hasIndentation
+    const lines = text
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter((line) => line.trim().length > 0)
+    if (lines.length < 2) return false
+
+    const keywordLineCount = lines.filter((line) =>
+      /^(def |class |import |from |function |const |let |var |if\b|for\b|while\b|return\b|#include\b|SELECT\b|INSERT\b|UPDATE\b|DELETE\b|WITH\b|CREATE\b|ALTER\b|DROP\b|--\s|\/\/)/i.test(
+        line.trim()
+      )
+    ).length
+    const indentedLineCount = lines.filter((line) => /^( {4,}|\t)/.test(line)).length
+    const symbolHeavy = /[{}();=<>[\]$\\]/.test(text)
+    const operatorHeavy = /(\+\+|--|=>|==|!=|<=|>=|:=|&&|\|\|)/.test(text)
+    const proseLikeLineCount = lines.filter((line) =>
+      /^[A-Za-z0-9 ,.'"!?()-]+$/.test(line.trim())
+    ).length
+
+    let score = 0
+    if (keywordLineCount >= 1) score += 2
+    if (indentedLineCount >= 2) score += 1
+    if (symbolHeavy) score += 1
+    if (operatorHeavy) score += 1
+
+    const proseRatio = proseLikeLineCount / lines.length
+    if (score < 2) return false
+    if (proseRatio > 0.75 && keywordLineCount === 0 && !symbolHeavy) return false
+    return true
   }
 
   const wrapInCodeFence = (text: string) => {
@@ -918,7 +941,9 @@ export const ChatPage = () => {
   const handleEditPasteAttachments = async (
     event: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
+    const textarea = event.currentTarget
     const items = event.clipboardData.items
+    const text = event.clipboardData.getData("text")
     const next = await readClipboardImagesAsAttachments(items)
     if (next.length > 0) {
       event.preventDefault()
@@ -926,18 +951,18 @@ export const ChatPage = () => {
       return
     }
 
-    const text = event.clipboardData.getData("text")
     if (!text || !isLikelyCode(text)) return
 
     event.preventDefault()
-    const start = event.currentTarget.selectionStart ?? editingContent.length
-    const end = event.currentTarget.selectionEnd ?? editingContent.length
+    const start = textarea.selectionStart ?? editingContent.length
+    const end = textarea.selectionEnd ?? editingContent.length
     const wrapped = wrapInCodeFence(text)
     const nextValue = insertAtCursor(editingContent, wrapped, start, end)
     setEditingContent(nextValue)
     requestAnimationFrame(() => {
-      event.currentTarget.selectionStart = start + wrapped.length
-      event.currentTarget.selectionEnd = start + wrapped.length
+      if (!document.contains(textarea)) return
+      textarea.selectionStart = start + wrapped.length
+      textarea.selectionEnd = start + wrapped.length
     })
   }
 
