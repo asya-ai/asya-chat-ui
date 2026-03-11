@@ -28,6 +28,8 @@ def _extract_system(messages: list[dict]) -> str | None:
 
 def _text_blocks_from_content(content: Any) -> list[dict]:
     if isinstance(content, str):
+        if not content.strip():
+            return []
         return [{"type": "text", "text": content}]
     if isinstance(content, list):
         blocks: list[dict] = []
@@ -35,7 +37,9 @@ def _text_blocks_from_content(content: Any) -> list[dict]:
             if not isinstance(item, dict):
                 continue
             if item.get("type") == "text" and item.get("text"):
-                blocks.append({"type": "text", "text": item.get("text")})
+                text = str(item.get("text"))
+                if text.strip():
+                    blocks.append({"type": "text", "text": text})
             if item.get("type") == "image_url":
                 raise ValueError("Images are not supported for Anthropic provider.")
         return blocks
@@ -50,7 +54,7 @@ def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
             continue
         if role == "tool":
             tool_call_id = message.get("tool_call_id")
-            content = message.get("content") or ""
+            content = message.get("content") or "{}"
             converted.append(
                 {
                     "role": "user",
@@ -83,10 +87,12 @@ def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
                 }
             )
             continue
+        if not content_blocks:
+            continue
         converted.append(
             {
                 "role": role,
-                "content": content_blocks or [{"type": "text", "text": ""}],
+                "content": content_blocks,
             }
         )
     return converted
