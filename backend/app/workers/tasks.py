@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import inspect
 import logging
 from typing import Any
 from uuid import UUID
@@ -183,6 +184,36 @@ def _ensure_task_not_cancelled(session: Session, task_id: UUID) -> None:
         raise GenerationCancelledError("Generation cancelled by user")
 
 
+async def _maybe_close_provider(provider: Any) -> None:
+    async def _close(target: Any) -> bool:
+        for method_name in ("aclose", "close"):
+            fn = getattr(target, method_name, None)
+            if not callable(fn):
+                continue
+            try:
+                result = fn()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.debug(
+                    "Provider cleanup failed for %s.%s",
+                    target.__class__.__name__,
+                    method_name,
+                    exc_info=True,
+                )
+            return True
+        return False
+
+    if provider is None:
+        return
+    if await _close(provider):
+        return
+    client = getattr(provider, "client", None)
+    if client is None:
+        return
+    await _close(client)
+
+
 async def _run_generation(task_id: UUID) -> None:
     with Session(engine) as session:
         task = session.get(ChatGenerationTask, task_id)
@@ -247,6 +278,7 @@ async def _run_generation(task_id: UUID) -> None:
         for attachment in history_attachments:
             attachments_by_message.setdefault(attachment.message_id, []).append(attachment)
 
+        provider: Any | None = None
         provider_config = require_provider_enabled(session, chat.org_id, model.provider)
         config = None
         if provider_config and provider_config.config_json:
@@ -293,6 +325,7 @@ async def _run_generation(task_id: UUID) -> None:
         session.commit()
         if (claimed.rowcount or 0) == 0:
             logger.info("Task=%s was claimed by another worker; skipping", task.id)
+            await _maybe_close_provider(provider)
             return
         task = session.get(ChatGenerationTask, task.id) or task
 
@@ -301,6 +334,7 @@ async def _run_generation(task_id: UUID) -> None:
             task.status = GenerationStatus.failed
             task.error = "Assistant message not found"
             session.commit()
+            await _maybe_close_provider(provider)
             return
 
         task.status = GenerationStatus.streaming
@@ -607,6 +641,8 @@ async def _run_generation(task_id: UUID) -> None:
                 "error",
                 {"error": str(exc)},
             )
+        finally:
+            await _maybe_close_provider(provider)
 
 
 @celery_app.task(name="chatui.generate_chat_response")

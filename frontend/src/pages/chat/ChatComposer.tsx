@@ -95,7 +95,7 @@ export const ChatComposer = ({
     t("chat_reasoning_default")
 
   return (
-    <div className="p-4 border-t">
+    <div className="border-t px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
       <div
         className={`space-y-3 rounded-md ${isDragActive ? "ring-2 ring-primary/40 ring-offset-2 ring-offset-background" : ""}`}
         onDragEnter={onDragEnter}
@@ -160,8 +160,8 @@ export const ChatComposer = ({
             })}
           </div>
         ) : null}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -237,7 +237,7 @@ export const ChatComposer = ({
               <span className="text-xs">{t("org_code_execution")}</span>
             </Button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             {loading ? (
               <Button variant="destructive" size="sm" onClick={onStop}>
                 {stopLabel}
