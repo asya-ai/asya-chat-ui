@@ -4,7 +4,13 @@ import { useNavigate, useParams } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { chatApi } from "@/lib/api"
-import { modelStore, orgStore } from "@/lib/storage"
+import {
+  codeExecutionEnabledStore,
+  modelStore,
+  orgStore,
+  reasoningEffortStore,
+  webSearchEnabledStore,
+} from "@/lib/storage"
 import type {
   Chat,
   ChatMessage,
@@ -60,7 +66,18 @@ export const ChatPage = () => {
     ChatMessageAttachmentInput[]
   >([])
   const [isDragActive, setIsDragActive] = useState(false)
-  const [reasoningEffort, setReasoningEffort] = useState<string | null>(null)
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() => {
+    const stored = reasoningEffortStore.get()
+    return stored && stored !== "none" ? stored : null
+  })
+  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
+    const stored = webSearchEnabledStore.get()
+    return stored == null ? true : stored === "1"
+  })
+  const [codeExecutionEnabled, setCodeExecutionEnabled] = useState<boolean>(() => {
+    const stored = codeExecutionEnabledStore.get()
+    return stored == null ? true : stored === "1"
+  })
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -609,6 +626,22 @@ export const ChatPage = () => {
   }, [selectedModel])
 
   useEffect(() => {
+    if (!reasoningEffort) {
+      reasoningEffortStore.set("none")
+      return
+    }
+    reasoningEffortStore.set(reasoningEffort)
+  }, [reasoningEffort])
+
+  useEffect(() => {
+    webSearchEnabledStore.set(webSearchEnabled)
+  }, [webSearchEnabled])
+
+  useEffect(() => {
+    codeExecutionEnabledStore.set(codeExecutionEnabled)
+  }, [codeExecutionEnabled])
+
+  useEffect(() => {
     if (!chatId) return
     if (loadingByChat[chatId]) return
     let cancelled = false
@@ -789,6 +822,8 @@ export const ChatPage = () => {
         selectedModel,
         pendingAttachments,
         reasoningEffort,
+        webSearchEnabled,
+        codeExecutionEnabled,
         locale,
         (event) => {
           applyStreamEvent(chat.id, assistantId, event)
@@ -1029,6 +1064,9 @@ export const ChatPage = () => {
       msg.id,
       trimmed,
       editingAttachments,
+      reasoningEffort,
+      webSearchEnabled,
+      codeExecutionEnabled,
       locale,
       (event) => {
         applyStreamEvent(activeChat.id, tempAssistantId, event)
@@ -1104,6 +1142,9 @@ export const ChatPage = () => {
       sourceUser.id,
       sourceUser.content,
       retryAttachments,
+      reasoningEffort,
+      webSearchEnabled,
+      codeExecutionEnabled,
       locale,
       (event) => {
         applyStreamEvent(chatId, tempAssistantId, event)
@@ -1271,6 +1312,8 @@ export const ChatPage = () => {
           isDragActive={isDragActive}
           pendingAttachments={pendingAttachments}
           reasoningEffort={reasoningEffort}
+          webSearchEnabled={webSearchEnabled}
+          codeExecutionEnabled={codeExecutionEnabled}
           inputRef={composerInputRef}
           onMessageChange={setMessage}
           onSend={sendMessage}
@@ -1284,6 +1327,8 @@ export const ChatPage = () => {
           onDragLeave={handleComposerDragLeave}
           onDrop={handleComposerDrop}
           onReasoningEffortChange={setReasoningEffort}
+          onWebSearchEnabledChange={setWebSearchEnabled}
+          onCodeExecutionEnabledChange={setCodeExecutionEnabled}
           sendLabel={t("common_send")}
           stopLabel={t("common_stop")}
         />

@@ -315,9 +315,20 @@ async def _run_generation(task_id: UUID) -> None:
             chat_id=chat.id,
             preferred_provider=model.provider,
             web_tools_enabled=not _grounding_enabled(org, model.provider),
-            web_search_enabled=org.web_search_enabled,
+            web_search_enabled=(
+                org.web_search_enabled
+                if not task.metadata_json
+                or task.metadata_json.get("web_search_enabled") is None
+                else org.web_search_enabled
+                and bool(task.metadata_json.get("web_search_enabled"))
+            ),
             web_scrape_enabled=org.web_scrape_enabled,
-            exec_policy=org.exec_policy,
+            exec_policy=(
+                org.exec_policy
+                if not task.metadata_json
+                or task.metadata_json.get("code_execution_enabled") is not False
+                else "off"
+            ),
             exec_network_enabled=org.exec_network_enabled,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
         )

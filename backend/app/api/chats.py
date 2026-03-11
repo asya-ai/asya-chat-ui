@@ -1035,6 +1035,8 @@ class ChatMessageCreateRequest(BaseModel):
     stream: bool | None = False
     attachments: list[ChatMessageAttachmentCreate] | None = None
     reasoning_effort: str | None = None
+    web_search_enabled: bool | None = None
+    code_execution_enabled: bool | None = None
     locale: str | None = None
 
     @model_validator(mode="after")
@@ -1091,6 +1093,8 @@ class ChatMessageEditRequest(BaseModel):
     content: str
     attachments: list[ChatMessageAttachmentCreate] | None = None
     reasoning_effort: str | None = None
+    web_search_enabled: bool | None = None
+    code_execution_enabled: bool | None = None
     locale: str | None = None
 
     @model_validator(mode="after")
@@ -1212,6 +1216,8 @@ async def _stream_message_ws(
             "model_name": model.display_name,
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
+            "web_search_enabled": payload.web_search_enabled,
+            "code_execution_enabled": payload.code_execution_enabled,
         },
     )
     session.add(task)
@@ -1328,15 +1334,25 @@ async def _stream_message_ws(
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
+    effective_web_search_enabled = (
+        org.web_search_enabled
+        if payload.web_search_enabled is None
+        else org.web_search_enabled and payload.web_search_enabled
+    )
+    effective_exec_policy = (
+        org.exec_policy
+        if payload.code_execution_enabled is not False
+        else "off"
+    )
     tool_registry = _build_tool_registry(
         session,
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
         web_tools_enabled=not grounding_enabled,
-        web_search_enabled=org.web_search_enabled,
+        web_search_enabled=effective_web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
-        exec_policy=org.exec_policy,
+        exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
     )
@@ -1816,6 +1832,8 @@ async def _stream_edit_ws(
             "model_name": model.display_name,
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
+            "web_search_enabled": payload.web_search_enabled,
+            "code_execution_enabled": payload.code_execution_enabled,
         },
     )
     session.add(task)
@@ -1932,15 +1950,25 @@ async def _stream_edit_ws(
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
+    effective_web_search_enabled = (
+        org.web_search_enabled
+        if payload.web_search_enabled is None
+        else org.web_search_enabled and payload.web_search_enabled
+    )
+    effective_exec_policy = (
+        org.exec_policy
+        if payload.code_execution_enabled is not False
+        else "off"
+    )
     tool_registry = _build_tool_registry(
         session,
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
         web_tools_enabled=not grounding_enabled,
-        web_search_enabled=org.web_search_enabled,
+        web_search_enabled=effective_web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
-        exec_policy=org.exec_policy,
+        exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
     )
@@ -2847,6 +2875,8 @@ async def create_message(
             "model_name": model.display_name,
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
+            "web_search_enabled": payload.web_search_enabled,
+            "code_execution_enabled": payload.code_execution_enabled,
         },
     )
     session.add(task)
@@ -2982,15 +3012,25 @@ async def create_message(
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
+    effective_web_search_enabled = (
+        org.web_search_enabled
+        if payload.web_search_enabled is None
+        else org.web_search_enabled and payload.web_search_enabled
+    )
+    effective_exec_policy = (
+        org.exec_policy
+        if payload.code_execution_enabled is not False
+        else "off"
+    )
     tool_registry = _build_tool_registry(
         session,
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
         web_tools_enabled=not grounding_enabled,
-        web_search_enabled=org.web_search_enabled,
+        web_search_enabled=effective_web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
-        exec_policy=org.exec_policy,
+        exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
     )
@@ -3692,6 +3732,8 @@ async def edit_message(
             "model_name": model.display_name,
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
+            "web_search_enabled": payload.web_search_enabled,
+            "code_execution_enabled": payload.code_execution_enabled,
         },
     )
     session.add(task)
@@ -3817,15 +3859,25 @@ async def edit_message(
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
+    effective_web_search_enabled = (
+        org.web_search_enabled
+        if payload.web_search_enabled is None
+        else org.web_search_enabled and payload.web_search_enabled
+    )
+    effective_exec_policy = (
+        org.exec_policy
+        if payload.code_execution_enabled is not False
+        else "off"
+    )
     tool_registry = _build_tool_registry(
         session,
         chat.org_id,
         chat_id=chat.id,
         preferred_provider=model.provider,
         web_tools_enabled=not grounding_enabled,
-        web_search_enabled=org.web_search_enabled,
+        web_search_enabled=effective_web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
-        exec_policy=org.exec_policy,
+        exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
     )

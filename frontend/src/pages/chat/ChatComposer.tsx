@@ -3,7 +3,7 @@ import { useRef } from "react"
 import type { ChatMessageAttachmentInput } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Plus, X, Brain } from "lucide-react"
+import { Plus, X, Brain, Globe, SquareTerminal } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import {
   DropdownMenu,
@@ -19,6 +19,8 @@ type ChatComposerProps = {
   isDragActive: boolean
   pendingAttachments: ChatMessageAttachmentInput[]
   reasoningEffort: string | null
+  webSearchEnabled: boolean
+  codeExecutionEnabled: boolean
   inputRef?: React.RefObject<HTMLTextAreaElement | null>
   onMessageChange: (value: string) => void
   onSend: () => void
@@ -32,6 +34,8 @@ type ChatComposerProps = {
   onDragLeave: (event: React.DragEvent<HTMLDivElement>) => void
   onDrop: (event: React.DragEvent<HTMLDivElement>) => void
   onReasoningEffortChange: (effort: string | null) => void
+  onWebSearchEnabledChange: (enabled: boolean) => void
+  onCodeExecutionEnabledChange: (enabled: boolean) => void
   sendLabel: string
   stopLabel: string
 }
@@ -43,6 +47,8 @@ export const ChatComposer = ({
   isDragActive,
   pendingAttachments,
   reasoningEffort,
+  webSearchEnabled,
+  codeExecutionEnabled,
   inputRef,
   onMessageChange,
   onSend,
@@ -56,6 +62,8 @@ export const ChatComposer = ({
   onDragLeave,
   onDrop,
   onReasoningEffortChange,
+  onWebSearchEnabledChange,
+  onCodeExecutionEnabledChange,
   sendLabel,
   stopLabel,
 }: ChatComposerProps) => {
@@ -196,6 +204,38 @@ export const ChatComposer = ({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`gap-2 ${
+                webSearchEnabled ? "text-primary bg-primary/10" : "text-muted-foreground"
+              }`}
+              title={
+                webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
+              }
+              disabled={loading}
+              onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
+            >
+              <Globe className="w-4 h-4" />
+              <span className="text-xs">{t("chat_web_search")}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`gap-2 ${
+                codeExecutionEnabled ? "text-primary bg-primary/10" : "text-muted-foreground"
+              }`}
+              title={
+                codeExecutionEnabled
+                  ? t("chat_code_execution_on")
+                  : t("chat_code_execution_off")
+              }
+              disabled={loading}
+              onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
+            >
+              <SquareTerminal className="w-4 h-4" />
+              <span className="text-xs">{t("org_code_execution")}</span>
+            </Button>
           </div>
           <div className="flex items-center gap-2">
             {loading ? (

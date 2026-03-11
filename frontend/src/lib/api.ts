@@ -397,11 +397,21 @@ export const chatApi = {
     model_id?: string,
     attachments?: ChatMessageAttachmentInput[],
     reasoning_effort?: string | null,
+    web_search_enabled?: boolean,
+    code_execution_enabled?: boolean,
     locale?: string
   ) =>
     apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content, model_id, attachments, reasoning_effort, locale }),
+      body: JSON.stringify({
+        content,
+        model_id,
+        attachments,
+        reasoning_effort,
+        web_search_enabled,
+        code_execution_enabled,
+        locale,
+      }),
     }),
   sendMessageStream: (
     chatId: string,
@@ -409,12 +419,22 @@ export const chatApi = {
     model_id: string | undefined,
     attachments: ChatMessageAttachmentInput[] | undefined,
     reasoning_effort: string | null | undefined,
+    web_search_enabled: boolean | undefined,
+    code_execution_enabled: boolean | undefined,
     locale: string | undefined,
     onEvent: (event: StreamEvent) => void
   ) =>
     apiWebSocket(
       `/chats/${chatId}/ws`,
-      { content, model_id, attachments, reasoning_effort, locale },
+      {
+        content,
+        model_id,
+        attachments,
+        reasoning_effort,
+        web_search_enabled,
+        code_execution_enabled,
+        locale,
+      },
       onEvent
     ),
   editMessageStream: (
@@ -422,12 +442,23 @@ export const chatApi = {
     messageId: string,
     content: string,
     attachments: ChatMessageAttachmentInput[] | null | undefined,
+    reasoning_effort: string | null | undefined,
+    web_search_enabled: boolean | undefined,
+    code_execution_enabled: boolean | undefined,
     locale: string | undefined,
     onEvent: (event: StreamEvent) => void
   ) =>
     apiWebSocket(
       `/chats/${chatId}/ws`,
-      { message_id: messageId, content, attachments, locale },
+      {
+        message_id: messageId,
+        content,
+        attachments,
+        reasoning_effort,
+        web_search_enabled,
+        code_execution_enabled,
+        locale,
+      },
       onEvent,
       "edit"
     ),
