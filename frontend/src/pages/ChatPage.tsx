@@ -118,13 +118,47 @@ export const ChatPage = () => {
   const taskPollingRef = useRef<Record<string, number>>({})
 
   const stopGeneration = () => {
+    if (!chatId) return
+    const activeAssistant = [...visibleMessages]
+      .reverse()
+      .find(
+        (msg) =>
+          msg.role === "assistant" &&
+          !!msg.task_id &&
+          !isTerminalStatus(msg.generation_status ?? null)
+      )
+    const activeTaskId = activeAssistant?.task_id ?? null
+    if (activeTaskId) {
+      chatApi.cancelGenerationTask(chatId, activeTaskId).catch(() => null)
+      if (taskSubscriptionsRef.current[activeTaskId]) {
+        taskSubscriptionsRef.current[activeTaskId]()
+        delete taskSubscriptionsRef.current[activeTaskId]
+      }
+      if (taskPollingRef.current[activeTaskId]) {
+        window.clearTimeout(taskPollingRef.current[activeTaskId])
+        delete taskPollingRef.current[activeTaskId]
+      }
+      updateChatMessagesFor(chatId, (prev) =>
+        prev.map((msg) =>
+          msg.task_id === activeTaskId
+            ? {
+                ...msg,
+                generation_status: "cancelled",
+                thinking_steps: [],
+                content:
+                  msg.content && msg.content.trim().length > 0
+                    ? msg.content
+                    : t("chat_generation_cancelled"),
+              }
+            : msg
+        )
+      )
+    }
     if (currentCancelRef.current) {
       currentCancelRef.current()
       currentCancelRef.current = null
     }
-    if (chatId) {
-      setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
-    }
+    setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
   }
 
 
@@ -1168,6 +1202,7 @@ export const ChatPage = () => {
             const activeThinking = msg.thinking_steps ?? []
             const isThinking =
               msg.role === "assistant" &&
+              !isTerminalStatus(msg.generation_status ?? null) &&
               msg.content.trim().length === 0 &&
               (!isImageMessage || activeThinking.length > 0)
             const thinkingLabels =

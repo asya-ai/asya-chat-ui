@@ -2506,6 +2506,52 @@ def get_generation_task(
     )
 
 
+@router.post("/{chat_id}/generation/{task_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_generation_task(
+    chat_id: str,
+    task_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    if task.status in {
+        GenerationStatus.completed,
+        GenerationStatus.failed,
+        GenerationStatus.cancelled,
+    }:
+        return
+
+    task.status = GenerationStatus.cancelled
+    task.error = "Generation cancelled by user"
+    task.completed_at = datetime.utcnow()
+    session.add(task)
+
+    assistant_message = session.get(ChatMessage, task.assistant_message_id)
+    if assistant_message:
+        assistant_message.status = "cancelled"
+        assistant_message.completed_at = datetime.utcnow()
+        if not (assistant_message.content or "").strip():
+            assistant_message.content = "Generation cancelled by user"
+        assistant_message.error_message = "Generation cancelled by user"
+        session.add(assistant_message)
+    session.commit()
+
+
 @router.get(
     "/{chat_id}/generation/{task_id}/events",
     response_model=list[ChatGenerationEventRead],

@@ -44,6 +44,10 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+class GenerationCancelledError(Exception):
+    pass
+
+
 class _DbEventSender:
     def __init__(self, session: Session, task_id: UUID, sequence_ref: list[int]) -> None:
         self._session = session
@@ -170,6 +174,12 @@ def _to_int_scalar(value: Any, default: int = 0) -> int:
         first = next(iter(mapping.values()), None)
         return _to_int_scalar(first, default=default)
     return default
+
+
+def _ensure_task_not_cancelled(session: Session, task_id: UUID) -> None:
+    current = session.get(ChatGenerationTask, task_id)
+    if current and current.status == GenerationStatus.cancelled:
+        raise GenerationCancelledError("Generation cancelled by user")
 
 
 async def _run_generation(task_id: UUID) -> None:
@@ -302,6 +312,7 @@ async def _run_generation(task_id: UUID) -> None:
         image_usages: list[dict] = []
 
         try:
+            _ensure_task_not_cancelled(session, task.id)
             if _is_image_output_model(model):
                 _append_event(
                     session,
@@ -315,6 +326,7 @@ async def _run_generation(task_id: UUID) -> None:
                     prompt=history[-1].content if history else "",
                     model_override=model,
                 )
+                _ensure_task_not_cancelled(session, task.id)
                 if image_result.attachments:
                     session.add_all(
                         [
@@ -380,6 +392,7 @@ async def _run_generation(task_id: UUID) -> None:
             grounding_enabled = _grounding_enabled(org, model.provider)
             if grounding_enabled and hasattr(provider, "chat_grounded"):
                 response = await provider.chat_grounded(model.model_name, messages)
+                _ensure_task_not_cancelled(session, task.id)
                 response.sources = await _normalize_sources(response.sources or [])
                 assistant_message.content = response.content or ""
                 session.add(assistant_message)
@@ -406,6 +419,7 @@ async def _run_generation(task_id: UUID) -> None:
                         tool_event_sender=tool_event_sender,
                     )
                 )
+                _ensure_task_not_cancelled(session, task.id)
                 assistant_message.content = content
                 session.add(assistant_message)
                 session.commit()
@@ -439,6 +453,7 @@ async def _run_generation(task_id: UUID) -> None:
                 if hasattr(provider, "chat_stream"):
                     assistant_content = ""
                     async for chunk in provider.chat_stream(model.model_name, messages):
+                        _ensure_task_not_cancelled(session, task.id)
                         if chunk.content:
                             assistant_content += chunk.content
                             assistant_message.content = assistant_content
@@ -458,6 +473,7 @@ async def _run_generation(task_id: UUID) -> None:
                     session.commit()
                 else:
                     response = await provider.chat(model.model_name, messages)
+                    _ensure_task_not_cancelled(session, task.id)
                     assistant_message.content = response.content or ""
                     session.add(assistant_message)
                     session.commit()
@@ -539,6 +555,9 @@ async def _run_generation(task_id: UUID) -> None:
             task.status = GenerationStatus.completed
             task.completed_at = datetime.utcnow()
             session.commit()
+        except GenerationCancelledError:
+            logger.info("Generation cancelled for task=%s", task.id)
+            return
         except Exception as exc:  # noqa: BLE001
             logger.exception("Generation failed for task=%s", task.id)
             assistant_message.status = "failed"

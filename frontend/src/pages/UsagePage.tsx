@@ -90,10 +90,11 @@ export const UsagePage = () => {
         }
       })
       .catch(() => setMonthOptions([]))
-    const groups = ["model", "user", ...(isSuperAdmin ? ["org"] : [])]
-    Promise.all(
-      groups.map((group) => usageApi.summary(scopedOrgId ?? null, group, month))
-    )
+    Promise.all([
+      usageApi.summary(scopedOrgId ?? null, "model", month),
+      usageApi.summary(scopedOrgId ?? null, "user", month),
+      isSuperAdmin ? usageApi.summary(null, "org", month) : Promise.resolve([]),
+    ])
       .then(([modelRows, userRows, orgRows]) => {
         setRowsByModel(modelRows ?? [])
         setRowsByUser(userRows ?? [])

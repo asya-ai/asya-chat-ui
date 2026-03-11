@@ -457,6 +457,10 @@ export const chatApi = {
   },
   getGenerationTask: (chatId: string, taskId: string) =>
     apiFetch<ChatGenerationTask>(`/chats/${chatId}/generation/${taskId}`),
+  cancelGenerationTask: (chatId: string, taskId: string) =>
+    apiFetch(`/chats/${chatId}/generation/${taskId}/cancel`, {
+      method: "POST",
+    }),
   subscribeGenerationTask: (
     chatId: string,
     taskId: string,
