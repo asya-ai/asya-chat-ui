@@ -21,6 +21,20 @@ services:
       retries: 10
       start_period: 20s
 
+  migrate:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "uv run python app/db/wait_for_db.py && uv run alembic upgrade head"]
+    restart: "no"
+
   backend:
     build:
       context: ./backend
@@ -37,6 +51,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
       scraper:
@@ -96,6 +112,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "--concurrency=2", "--prefetch-multiplier=1"]
     deploy:
       replicas: ${WORKER_REPLICAS:-1}
