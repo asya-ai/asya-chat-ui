@@ -134,7 +134,12 @@ app.post("/scrape", async (req, res) => {
 
     return res.json({ finalUrl, title, markdown });
   } catch (err) {
-    return res.status(500).json({ error: "Scrape failed" });
+    const message =
+      err && typeof err === "object" && "message" in err
+        ? String(err.message)
+        : String(err);
+    console.error("Scrape failed", { url, outputMode, error: message });
+    return res.status(500).json({ error: "Scrape failed", detail: message });
   }
 });
 

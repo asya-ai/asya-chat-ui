@@ -191,7 +191,23 @@ async def web_scrape(
                     f"{settings.scraper_url}/scrape", json=payload
                 )
                 if response.status_code >= 400:
-                    return {"url": item, "error": f"Scrape failed ({response.status_code})"}
+                    detail = ""
+                    try:
+                        data = response.json()
+                        if isinstance(data, dict):
+                            detail = str(data.get("detail") or data.get("error") or "").strip()
+                    except Exception:
+                        detail = (response.text or "").strip()
+                    error = f"Scrape failed ({response.status_code})"
+                    if detail:
+                        error = f"{error}: {detail[:500]}"
+                    logger.warning(
+                        "web_scrape upstream failed url=%s status=%s detail=%s",
+                        item,
+                        response.status_code,
+                        detail[:500] if detail else "",
+                    )
+                    return {"url": item, "error": error}
                 data = response.json()
                 base_output = {
                     "url": data.get("finalUrl") or item,

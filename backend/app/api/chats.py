@@ -122,6 +122,14 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return max(1, total_chars // 4)
 
 
+def _ensure_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
 def _truncate_messages(messages: list[dict], *, token_limit: int | None) -> list[dict]:
     if token_limit is None:
         return messages
@@ -730,6 +738,7 @@ async def _run_agentic_loop(
     last_tool_error: str | None = None
     search_calls = 0
     scrape_calls = 0
+    failed_scrape_urls: set[str] = set()
     async def _emit(label: str, state: str) -> None:
         if activity_sender:
             await activity_sender.send({"label": label, "state": state})
@@ -851,6 +860,7 @@ async def _run_agentic_loop(
                     call.name,
                     list(call.arguments.keys()) if isinstance(call.arguments, dict) else [],
                 )
+                labels: list[str] = []
                 if call.name == "web_search":
                     if search_calls >= MAX_WEB_SEARCH_CALLS:
                         result = ToolResult(
@@ -871,10 +881,28 @@ async def _run_agentic_loop(
                         )
                     else:
                         labels = _labels_for_call(call.name, call.arguments)
-                        for label in labels:
-                            await _emit(label, "start")
-                        scrape_calls += 1
-                        result = await tool_registry.execute(call.name, call.arguments)
+                        requested_urls = _ensure_list(call.arguments.get("urls")) or _ensure_list(
+                            call.arguments.get("url")
+                        )
+                        if requested_urls and all(url in failed_scrape_urls for url in requested_urls):
+                            result = ToolResult(
+                                name="web_scrape",
+                                output={
+                                    "error": "Skipped repeated web_scrape attempt for previously failed URL(s)",
+                                    "results": [
+                                        {
+                                            "url": url,
+                                            "error": "Repeated scrape failure cached",
+                                        }
+                                        for url in requested_urls
+                                    ],
+                                },
+                            )
+                        else:
+                            for label in labels:
+                                await _emit(label, "start")
+                            scrape_calls += 1
+                            result = await tool_registry.execute(call.name, call.arguments)
                 elif call.name == "code_execution":
                     await _emit_tool_event(
                         {
@@ -948,7 +976,13 @@ async def _run_agentic_loop(
                             if url:
                                 sources.append(_source_item(url, item.get("title")))
                 if call.name == "web_scrape":
-                    for item in result.output.get("results", []) or []:
+                    scrape_results = result.output.get("results", []) or []
+                    for item in scrape_results:
+                        if isinstance(item, dict):
+                            url = item.get("url")
+                            if isinstance(url, str) and item.get("error"):
+                                failed_scrape_urls.add(url)
+                    for item in scrape_results:
                         url = item.get("url")
                         if url:
                             sources.append(_source_item(url, item.get("title")))
