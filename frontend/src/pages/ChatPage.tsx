@@ -179,7 +179,11 @@ export const ChatPage = () => {
   }
 
 
-  const getSourceLabel = (source: { url: string; title?: string | null; host?: string | null }) => {
+  const getSourceLabel = useCallback((source: {
+    url: string
+    title?: string | null
+    host?: string | null
+  }) => {
     const host = source.host || (() => {
       try {
         return new URL(source.url).hostname
@@ -191,7 +195,7 @@ export const ChatPage = () => {
       return `${source.title} — ${host}`
     }
     return host
-  }
+  }, [])
 
   const modelNameById = useMemo(() => {
     return Object.fromEntries(models.map((model) => [model.id, model.display_name]))
@@ -737,15 +741,14 @@ export const ChatPage = () => {
     }
   }, [visibleMessages, autoScrollEnabled, currentChatLoading])
 
-  const handleMessagesScroll = () => {
+  const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current
     if (!container) return
     const threshold = 80
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight
     setAutoScrollEnabled(distanceFromBottom <= threshold)
-  }
-
+  }, [])
 
   const startNewChat = () => {
     replaceCurrentChatMessages([])
@@ -940,11 +943,11 @@ export const ChatPage = () => {
     setPendingAttachments((prev) => prev.filter((_, idx) => idx !== index))
   }
 
-  const handleEditFilesSelected = async (files: File[]) => {
+  const handleEditFilesSelected = useCallback(async (files: File[]) => {
     const next = await readFilesAsAttachments(files)
     if (next.length === 0) return
     setEditingAttachments((prev) => [...prev, ...next])
-  }
+  }, [])
 
   const handleComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
     if (!event.dataTransfer.types.includes("Files")) return
@@ -978,7 +981,7 @@ export const ChatPage = () => {
     }
   }
 
-  const handleEditPasteAttachments = async (
+  const handleEditPasteAttachments = useCallback(async (
     event: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
     const textarea = event.currentTarget
@@ -1004,13 +1007,13 @@ export const ChatPage = () => {
       textarea.selectionStart = start + wrapped.length
       textarea.selectionEnd = start + wrapped.length
     })
-  }
+  }, [editingContent])
 
-  const removeEditingAttachment = (index: number) => {
+  const removeEditingAttachment = useCallback((index: number) => {
     setEditingAttachments((prev) => prev.filter((_, idx) => idx !== index))
-  }
+  }, [])
 
-  const startEditMessage = (msg: ChatMessage) => {
+  const startEditMessage = useCallback((msg: ChatMessage) => {
     setEditingMessageId(msg.id)
     setEditingContent(msg.content)
     setEditingAttachments(
@@ -1020,15 +1023,15 @@ export const ChatPage = () => {
         data_base64: attachment.data_base64,
       }))
     )
-  }
+  }, [])
 
-  const cancelEditMessage = () => {
+  const cancelEditMessage = useCallback(() => {
     setEditingMessageId(null)
     setEditingContent("")
     setEditingAttachments([])
-  }
+  }, [])
 
-  const saveEditedMessage = async (msg: ChatMessage) => {
+  const saveEditedMessage = useCallback(async (msg: ChatMessage) => {
     if (!activeChat) return
     if (msg.id.startsWith("temp-")) return
     const trimmed = editingContent.trim()
@@ -1090,9 +1093,27 @@ export const ChatPage = () => {
       currentCancelRef.current = null
       setLoadingByChat((prev) => ({ ...prev, [activeChat.id]: false }))
     }
-  }
+  }, [
+    activeChat,
+    editingContent,
+    editingAttachments,
+    stopGeneration,
+    queryClient,
+    updateChatMessagesFor,
+    selectedModel,
+    modelNameById,
+    cancelEditMessage,
+    reasoningEffort,
+    webSearchEnabled,
+    codeExecutionEnabled,
+    locale,
+    applyStreamEvent,
+    refetchChats,
+    replaceChatMessagesFor,
+    bumpChatActivity,
+  ])
 
-  const deleteFromMessage = async (msg: ChatMessage) => {
+  const deleteFromMessage = useCallback(async (msg: ChatMessage) => {
     if (!activeChat) return
     stopGeneration()
     await chatApi.deleteBranchFromMessage(activeChat.id, msg.id)
@@ -1101,9 +1122,9 @@ export const ChatPage = () => {
       if (index === -1) return prev
       return prev.slice(0, index)
     })
-  }
+  }, [activeChat, stopGeneration, updateChatMessagesFor])
 
-  const retryFailedMessage = async (failedMessage: ChatMessage) => {
+  const retryFailedMessage = useCallback(async (failedMessage: ChatMessage) => {
     if (!chatId || !activeChat) return
     if (loadingByChat[chatId]) return
     const messages = queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
@@ -1175,7 +1196,90 @@ export const ChatPage = () => {
       currentCancelRef.current = null
       setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
     }
-  }
+  }, [
+    chatId,
+    activeChat,
+    loadingByChat,
+    queryClient,
+    stopGeneration,
+    selectedModel,
+    modelNameById,
+    reasoningEffort,
+    webSearchEnabled,
+    codeExecutionEnabled,
+    locale,
+    applyStreamEvent,
+    refetchChats,
+    t,
+    updateChatMessagesFor,
+    bumpChatActivity,
+  ])
+
+  const renderMessage = useCallback(
+    (msg: ChatMessage) => {
+      const isUser = msg.role === "user"
+      const isCodeEvent = msg.tool_event?.type === "code_execution"
+      const isImageMessage =
+        (msg.attachments && msg.attachments.length > 0) ||
+        (msg.model_name ? msg.model_name.toLowerCase().includes("image") : false)
+      const activeThinking = msg.thinking_steps ?? []
+      const isThinking =
+        msg.role === "assistant" &&
+        !isTerminalStatus(msg.generation_status ?? null) &&
+        msg.content.trim().length === 0 &&
+        (!isImageMessage || activeThinking.length > 0)
+      const thinkingLabels =
+        activeThinking.length > 0
+          ? activeThinking
+          : isImageMessage
+            ? [t("chat_generating_image")]
+            : [t("chat_thinking")]
+      const isEditing = editingMessageId === msg.id
+      return (
+        <MessageBubble
+          key={msg.id}
+          msg={msg}
+          isUser={isUser}
+          isCodeEvent={isCodeEvent}
+          isThinking={isThinking}
+          thinkingLabels={thinkingLabels}
+          isEditing={isEditing}
+          editingContent={isEditing ? editingContent : ""}
+          editingAttachments={isEditing ? editingAttachments : []}
+          codeTheme={codeTheme}
+          t={t}
+          getSourceLabel={getSourceLabel}
+          onStartEdit={startEditMessage}
+          onDeleteFromMessage={deleteFromMessage}
+          onRetryMessage={retryFailedMessage}
+          onSaveEditedMessage={saveEditedMessage}
+          onCancelEdit={cancelEditMessage}
+          onEditContentChange={setEditingContent}
+          onEditPasteAttachments={handleEditPasteAttachments}
+          onEditFilesSelected={handleEditFilesSelected}
+          onRemoveEditingAttachment={removeEditingAttachment}
+          onPreviewAttachment={setPreviewAttachment}
+        />
+      )
+    },
+    [
+      codeTheme,
+      t,
+      getSourceLabel,
+      isTerminalStatus,
+      editingMessageId,
+      editingContent,
+      editingAttachments,
+      startEditMessage,
+      deleteFromMessage,
+      retryFailedMessage,
+      saveEditedMessage,
+      cancelEditMessage,
+      handleEditPasteAttachments,
+      handleEditFilesSelected,
+      removeEditingAttachment,
+    ]
+  )
 
   const handleSelectChat = useCallback(
     (chat: Chat, onSelect?: () => void) => {
@@ -1264,51 +1368,7 @@ export const ChatPage = () => {
           onScroll={handleMessagesScroll}
           containerRef={messagesContainerRef}
           endRef={messagesEndRef}
-          renderMessage={(msg) => {
-            const isUser = msg.role === "user"
-            const isCodeEvent = msg.tool_event?.type === "code_execution"
-            const isImageMessage =
-              (msg.attachments && msg.attachments.length > 0) ||
-              (msg.model_name ? msg.model_name.toLowerCase().includes("image") : false)
-            const activeThinking = msg.thinking_steps ?? []
-            const isThinking =
-              msg.role === "assistant" &&
-              !isTerminalStatus(msg.generation_status ?? null) &&
-              msg.content.trim().length === 0 &&
-              (!isImageMessage || activeThinking.length > 0)
-            const thinkingLabels =
-              activeThinking.length > 0
-                ? activeThinking
-                : isImageMessage
-                  ? [t("chat_generating_image")]
-                  : [t("chat_thinking")]
-            return (
-              <MessageBubble
-                key={msg.id}
-                msg={msg}
-                isUser={isUser}
-                isCodeEvent={isCodeEvent}
-                isThinking={isThinking}
-                thinkingLabels={thinkingLabels}
-                editingMessageId={editingMessageId}
-                editingContent={editingContent}
-                editingAttachments={editingAttachments}
-                codeTheme={codeTheme}
-                t={t}
-                getSourceLabel={getSourceLabel}
-                onStartEdit={startEditMessage}
-                onDeleteFromMessage={deleteFromMessage}
-                onRetryMessage={retryFailedMessage}
-                onSaveEditedMessage={saveEditedMessage}
-                onCancelEdit={cancelEditMessage}
-                onEditContentChange={setEditingContent}
-                onEditPasteAttachments={handleEditPasteAttachments}
-                onEditFilesSelected={handleEditFilesSelected}
-                onRemoveEditingAttachment={removeEditingAttachment}
-                onPreviewAttachment={setPreviewAttachment}
-              />
-            )
-          }}
+          renderMessage={renderMessage}
         />
         <ChatComposer
           message={message}

@@ -1,3 +1,4 @@
+import { memo } from "react"
 import type { ReactNode } from "react"
 
 import type { ChatMessage } from "@/lib/types"
@@ -14,7 +15,7 @@ type MessageListProps = {
   loadingFallback?: ReactNode
 }
 
-export const MessageList = ({
+const MessageListComponent = ({
   messages,
   isLoading,
   emptyLabel,
@@ -52,3 +53,16 @@ export const MessageList = ({
     </div>
   )
 }
+
+export const MessageList = memo(
+  MessageListComponent,
+  (prev, next) =>
+    prev.messages === next.messages &&
+    prev.isLoading === next.isLoading &&
+    prev.emptyLabel === next.emptyLabel &&
+    prev.onScroll === next.onScroll &&
+    prev.containerRef === next.containerRef &&
+    prev.endRef === next.endRef &&
+    prev.renderMessage === next.renderMessage &&
+    prev.loadingFallback === next.loadingFallback
+)

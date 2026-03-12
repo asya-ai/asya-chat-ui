@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react"
+import { memo, useMemo, useRef } from "react"
 import type { CSSProperties } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -19,7 +19,7 @@ type MessageBubbleProps = {
   isCodeEvent: boolean
   isThinking: boolean
   thinkingLabels: string[]
-  editingMessageId: string | null
+  isEditing: boolean
   editingContent: string
   editingAttachments: ChatMessageAttachmentInput[]
   codeTheme: Record<string, CSSProperties>
@@ -37,13 +37,13 @@ type MessageBubbleProps = {
   onPreviewAttachment: (attachment: ChatMessageAttachmentInput) => void
 }
 
-export const MessageBubble = ({
+const MessageBubbleComponent = ({
   msg,
   isUser,
   isCodeEvent,
   isThinking,
   thinkingLabels,
-  editingMessageId,
+  isEditing,
   editingContent,
   editingAttachments,
   codeTheme,
@@ -61,7 +61,6 @@ export const MessageBubble = ({
   onPreviewAttachment,
 }: MessageBubbleProps) => {
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
-  const isEditing = editingMessageId === msg.id
   const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
   const contextSummaryEvent =
@@ -581,3 +580,27 @@ export const MessageBubble = ({
     </div>
   )
 }
+
+export const MessageBubble = memo(
+  MessageBubbleComponent,
+  (prev, next) => {
+    if (prev.msg !== next.msg) return false
+    if (prev.isUser !== next.isUser) return false
+    if (prev.isCodeEvent !== next.isCodeEvent) return false
+    if (prev.isThinking !== next.isThinking) return false
+    if (prev.isEditing !== next.isEditing) return false
+    if (prev.codeTheme !== next.codeTheme) return false
+    if (prev.t !== next.t) return false
+    if (prev.getSourceLabel !== next.getSourceLabel) return false
+    if (prev.thinkingLabels.length !== next.thinkingLabels.length) return false
+    for (let i = 0; i < prev.thinkingLabels.length; i += 1) {
+      if (prev.thinkingLabels[i] !== next.thinkingLabels[i]) return false
+    }
+    // Editing-only props should trigger rerender only for edited message bubble.
+    if (next.isEditing) {
+      if (prev.editingContent !== next.editingContent) return false
+      if (prev.editingAttachments !== next.editingAttachments) return false
+    }
+    return true
+  }
+)
