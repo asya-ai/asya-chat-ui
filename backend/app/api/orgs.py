@@ -439,6 +439,60 @@ def update_member(
     )
 
 
+@router.delete("/{org_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_member(
+    org_id: str,
+    user_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        org_uuid = UUID(org_id)
+        user_uuid = UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+
+    if not current_user.is_super_admin:
+        require_org_admin(session, org_uuid, current_user.id)
+
+    if current_user.id == user_uuid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove yourself from organization",
+        )
+
+    membership = session.exec(
+        select(OrgMembership).where(
+            OrgMembership.org_id == org_uuid, OrgMembership.user_id == user_uuid
+        )
+    ).first()
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
+        )
+
+    ensure_default_roles(session, org_uuid)
+    admin_role = session.exec(
+        select(Role).where(Role.org_id == org_uuid, Role.name == "admin")
+    ).first()
+    if admin_role and membership.role_id == admin_role.id:
+        admin_memberships = session.exec(
+            select(OrgMembership).where(
+                OrgMembership.org_id == org_uuid, OrgMembership.role_id == admin_role.id
+            )
+        ).all()
+        if len(admin_memberships) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot remove the last organization admin",
+            )
+
+    session.delete(membership)
+    session.commit()
+
+
 @router.patch("/{org_id}", response_model=OrgRead)
 def update_org(
     org_id: str,

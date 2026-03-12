@@ -87,6 +87,18 @@ def get_auth_context(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid X-Org-Id",
             ) from exc
+        if not user.is_super_admin:
+            membership = session.exec(
+                select(OrgMembership).where(
+                    OrgMembership.user_id == user.id,
+                    OrgMembership.org_id == org_id,
+                )
+            ).first()
+            if not membership:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Org membership required",
+                )
         return AuthContext(user=user, org_id=org_id)
     if user.is_super_admin:
         raise HTTPException(

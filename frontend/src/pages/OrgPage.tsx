@@ -428,6 +428,12 @@ export const OrgPage = () => {
     )
   }
 
+  const removeMember = async (member: OrgMember) => {
+    if (!usersOrgId) return
+    await orgApi.removeMember(usersOrgId, member.user_id)
+    setMembers((prev) => prev.filter((item) => item.user_id !== member.user_id))
+  }
+
   const createModel = async () => {
     if (!selectedOrg) return
     const matched = modelOptions.find((model) => model.model_name === modelName)
@@ -1182,7 +1188,18 @@ export const OrgPage = () => {
                           />
                         </TableCell>
                       ) : null}
-                      <TableCell />
+                      <TableCell>
+                        {canManageOrgSettings ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => removeMember(member)}
+                            disabled={member.user_id === currentUserId}
+                          >
+                            {t("org_users_remove_member")}
+                          </Button>
+                        ) : null}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {invites.map((invite) => (

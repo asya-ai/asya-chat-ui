@@ -37,6 +37,7 @@ def list_api_keys(
     keys = session.exec(
         select(ApiKey)
         .where(ApiKey.user_id == current_user.id)
+        .where(ApiKey.revoked_at.is_(None))
         .order_by(ApiKey.created_at.desc())
     ).all()
     return [

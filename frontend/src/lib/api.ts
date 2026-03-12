@@ -305,6 +305,10 @@ export const orgApi = {
       method: "PATCH",
       body: JSON.stringify({ role }),
     }),
+  removeMember: (orgId: string, userId: string) =>
+    apiFetch(`/orgs/${orgId}/members/${userId}`, {
+      method: "DELETE",
+    }),
   providers: (orgId: string) => apiFetch<ProviderConfig[]>(`/orgs/${orgId}/providers`),
   updateProviders: (orgId: string, payload: ProviderConfigUpdate[]) =>
     apiFetch<ProviderConfig[]>(`/orgs/${orgId}/providers`, {

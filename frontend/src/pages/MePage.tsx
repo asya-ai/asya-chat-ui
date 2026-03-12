@@ -129,8 +129,7 @@ export const MePage = () => {
     setApiKeyError(null)
     try {
       await apiKeyApi.revoke(keyId)
-      const keys = await apiKeyApi.list()
-      setApiKeys(keys)
+      setApiKeys((prev) => prev.filter((key) => key.id !== keyId))
     } catch (err) {
       setApiKeyError(err instanceof Error ? err.message : t("common_error"))
     }
