@@ -13,6 +13,7 @@ import {
 } from "@/lib/storage"
 import type {
   Chat,
+  ChatModel,
   ChatMessage,
   ChatMessageAttachmentInput,
   GenerationStatus,
@@ -200,6 +201,22 @@ export const ChatPage = () => {
   const modelNameById = useMemo(() => {
     return Object.fromEntries(models.map((model) => [model.id, model.display_name]))
   }, [models])
+  const isImageModel = useCallback((model: ChatModel) => {
+    if (model.supports_image_output === true) return true
+    if (model.supports_image_output === false) return false
+    const name = `${model.display_name} ${model.model_name}`.toLowerCase()
+    return name.includes("image")
+  }, [])
+  const isEmbeddingModel = useCallback((model: ChatModel) => {
+    const name = `${model.display_name} ${model.model_name}`.toLowerCase()
+    return /(^|[\s/_-])(embedding|embeddings|text-embedding|embed)([\s/_-]|$)/.test(
+      name
+    )
+  }, [])
+  const selectableChatModels = useMemo(
+    () => models.filter((model) => !isImageModel(model) && !isEmbeddingModel(model)),
+    [models, isImageModel, isEmbeddingModel]
+  )
 
   const parseChatDate = useCallback((value: string) => {
     const hasTimezone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(value)
@@ -593,14 +610,15 @@ export const ChatPage = () => {
   }, [navigate, orgId, orgs, orgsLoading])
 
   useEffect(() => {
-    if (models.length === 0 || selectedModel) return
+    if (selectableChatModels.length === 0) return
+    if (selectedModel && selectableChatModels.some((model) => model.id === selectedModel)) return
     const stored = modelStore.get()
-    if (stored && models.some((model) => model.id === stored)) {
+    if (stored && selectableChatModels.some((model) => model.id === stored)) {
       setSelectedModel(stored)
       return
     }
-    setSelectedModel(models[0].id)
-  }, [models, selectedModel])
+    setSelectedModel(selectableChatModels[0].id)
+  }, [selectableChatModels, selectedModel])
 
   const activeChat = useMemo(
     () => chats.find((item) => item.id === chatId) ?? null,
@@ -1348,7 +1366,7 @@ export const ChatPage = () => {
               <SelectValue placeholder={t("chat_select_model")} />
             </SelectTrigger>
             <SelectContent className="max-h-96">
-              {models.map((model) => (
+              {selectableChatModels.map((model) => (
                 <SelectItem
                   key={model.id}
                   value={model.id}

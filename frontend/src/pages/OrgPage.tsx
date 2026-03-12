@@ -31,7 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ArrowDown, ArrowUp, Image } from "lucide-react"
+import { ArrowDown, ArrowUp, Database, Image } from "lucide-react"
 
 type SettingsSection = "orgs" | "users" | "models"
 
@@ -91,6 +91,13 @@ export const OrgPage = () => {
     if (model.supports_image_output === false) return false
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
     return name.includes("image")
+  }
+
+  const isEmbeddingModel = (model: ChatModel) => {
+    const name = `${model.display_name} ${model.model_name}`.toLowerCase()
+    return /(^|[\s/_-])(embedding|embeddings|text-embedding|embed)([\s/_-]|$)/.test(
+      name
+    )
   }
 
   const orderedModels = useMemo(() => {
@@ -1337,6 +1344,8 @@ export const OrgPage = () => {
                               <p className="text-sm font-medium">{model.display_name}</p>
                               {isImageModel(model) ? (
                                 <Image className="h-4 w-4 text-muted-foreground" />
+                              ) : isEmbeddingModel(model) ? (
+                                <Database className="h-4 w-4 text-muted-foreground" />
                               ) : null}
                             </div>
                           )}
@@ -1455,6 +1464,8 @@ export const OrgPage = () => {
                                   <p className="text-sm font-medium">{model.display_name}</p>
                                   {isImageModel(model) ? (
                                     <Image className="h-4 w-4 text-muted-foreground" />
+                                  ) : isEmbeddingModel(model) ? (
+                                    <Database className="h-4 w-4 text-muted-foreground" />
                                   ) : null}
                                 </div>
                                 <p className="text-xs text-muted-foreground">
