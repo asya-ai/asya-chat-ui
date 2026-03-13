@@ -78,6 +78,41 @@ def _extract_response_text(result: object) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def _extract_response_tool_calls(result: object) -> list[ChatToolCall]:
+    output = getattr(result, "output", []) or []
+    tool_calls: list[ChatToolCall] = []
+    for item in output:
+        item_type = getattr(item, "type", "") or (item.get("type") if isinstance(item, dict) else "")
+        if item_type != "function_call":
+            continue
+        call_id = getattr(item, "call_id", None) or (
+            item.get("call_id") if isinstance(item, dict) else None
+        )
+        name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None)
+        arguments_raw = getattr(item, "arguments", None) or (
+            item.get("arguments") if isinstance(item, dict) else None
+        )
+        arguments: dict = {}
+        if isinstance(arguments_raw, dict):
+            arguments = arguments_raw
+        elif isinstance(arguments_raw, str) and arguments_raw.strip():
+            try:
+                parsed = json.loads(arguments_raw)
+                if isinstance(parsed, dict):
+                    arguments = parsed
+            except json.JSONDecodeError:
+                arguments = {}
+        if call_id and name:
+            tool_calls.append(
+                ChatToolCall(
+                    id=str(call_id),
+                    name=str(name),
+                    arguments=arguments,
+                )
+            )
+    return tool_calls
+
+
 def _coalesce_usage_tokens(usage: object | None) -> tuple[int, int, int, int, int]:
     if not usage:
         return 0, 0, 0, 0, 0
@@ -305,22 +340,27 @@ class OpenAIProvider:
             )
             content = _extract_response_text(response)
             usage = getattr(response, "usage", None)
+            tool_calls = _extract_response_tool_calls(response)
+            finish_reason = "tool_calls" if tool_calls else "stop"
+            cached_tokens, thinking_tokens = _extract_usage_details(usage)
             prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
                 _coalesce_usage_tokens(usage)
             )
+            if input_tokens == 0:
+                input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
             return ChatResponse(
                 content=content or "",
                 usage=ChatUsage(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=total_tokens,
-                    input_tokens=input_tokens or prompt_tokens,
+                    input_tokens=input_tokens,
                     output_tokens=output_tokens or completion_tokens,
-                    cached_tokens=0,
-                    thinking_tokens=0,
+                    cached_tokens=cached_tokens or 0,
+                    thinking_tokens=thinking_tokens or 0,
                 ),
-                tool_calls=None,
-                finish_reason=None,
+                tool_calls=tool_calls or None,
+                finish_reason=finish_reason,
             )
         cached_tokens, thinking_tokens = _extract_usage_details(usage)
         tool_calls: list[ChatToolCall] = []
@@ -627,6 +667,24 @@ def _to_responses_input(messages: list[dict]) -> list[dict]:
     items: list[dict] = []
     for message in messages:
         role = message.get("role")
+        if role == "tool":
+            tool_output = message.get("content")
+            if isinstance(tool_output, list):
+                text_parts: list[str] = []
+                for part in tool_output:
+                    if isinstance(part, dict) and part.get("type") in {"text", "input_text", "output_text"}:
+                        text_parts.append(str(part.get("text") or ""))
+                tool_output = "\n".join(text_parts).strip()
+            if isinstance(tool_output, str) and tool_output.strip():
+                item: dict[str, object] = {
+                    "type": "function_call_output",
+                    "output": tool_output,
+                }
+                tool_call_id = message.get("tool_call_id")
+                if tool_call_id:
+                    item["call_id"] = tool_call_id
+                items.append(item)
+            continue
         if role not in {"system", "user", "assistant"}:
             continue
         content = message.get("content")

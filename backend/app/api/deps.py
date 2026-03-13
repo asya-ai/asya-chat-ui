@@ -67,7 +67,13 @@ def get_auth_context(
         return AuthContext(
             user=auth.user, org_id=UUID(auth.org_id), api_key_id=auth.api_key.id
         )
-    user_id = UUID(decode_access_token(token))
+    try:
+        user_id = UUID(decode_access_token(token))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        ) from exc
     user = session.exec(select(User).where(User.id == user_id)).first()
     if not user:
         raise HTTPException(
