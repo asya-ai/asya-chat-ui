@@ -37,6 +37,8 @@ DEFAULT_ALLOWLIST = {
     "openpyxl",
     "docx",
     "pypdf",
+    "yaml",
+    "pyyaml",
 }
 
 

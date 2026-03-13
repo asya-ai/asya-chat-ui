@@ -336,7 +336,9 @@ export const ChatPage = () => {
         typeof event.task_id === "string" &&
         !("error" in event) &&
         !("delta" in event) &&
-        !("done" in event)
+        !("done" in event) &&
+        !("tool_event" in event) &&
+        !("activity" in event)
       ) {
         const taskId = event.task_id
         const assistantMessageId =
@@ -441,6 +443,67 @@ export const ChatPage = () => {
     [applyStreamEvent, normalizeTaskEvent]
   )
 
+  const applyTerminalTaskStatus = useCallback(
+    (
+      targetChatId: string,
+      assistantId: string,
+      taskId: string,
+      status: GenerationStatus,
+      errorMessage?: string | null
+    ) => {
+      updateChatMessagesFor(targetChatId, (prev) =>
+        prev.map((msg) => {
+          if (!(msg.id === assistantId || msg.task_id === taskId)) return msg
+          if (status === "failed") {
+            const fallback = (errorMessage || "").trim() || t("chat_generation_failed")
+            return {
+              ...msg,
+              content: msg.content?.trim().length ? msg.content : fallback,
+              thinking_steps: [],
+              generation_status: "failed",
+            }
+          }
+          if (status === "cancelled") {
+            const fallback =
+              (errorMessage || "").trim() || t("chat_generation_cancelled")
+            return {
+              ...msg,
+              content: msg.content?.trim().length ? msg.content : fallback,
+              thinking_steps: [],
+              generation_status: "cancelled",
+            }
+          }
+          return {
+            ...msg,
+            thinking_steps: [],
+            generation_status: "completed",
+          }
+        })
+      )
+    },
+    [t, updateChatMessagesFor]
+  )
+
+  const syncTerminalTaskStatus = useCallback(
+    async (targetChatId: string, taskId: string, assistantId: string) => {
+      try {
+        const task = await chatApi.getGenerationTask(targetChatId, taskId)
+        if (!isTerminalStatus(task.status)) return false
+        applyTerminalTaskStatus(
+          targetChatId,
+          assistantId,
+          taskId,
+          task.status,
+          task.error
+        )
+        return true
+      } catch {
+        return false
+      }
+    },
+    [applyTerminalTaskStatus, isTerminalStatus]
+  )
+
   const pollTaskEvents = useCallback(
     async (targetChatId: string, taskId: string, assistantId: string) => {
       if (taskPollingRef.current[taskId]) return
@@ -449,6 +512,13 @@ export const ChatPage = () => {
           await fetchTaskEvents(targetChatId, taskId, assistantId)
           const task = await chatApi.getGenerationTask(targetChatId, taskId)
           if (isTerminalStatus(task.status)) {
+            applyTerminalTaskStatus(
+              targetChatId,
+              assistantId,
+              taskId,
+              task.status,
+              task.error
+            )
             delete taskPollingRef.current[taskId]
             return
           }
@@ -460,7 +530,7 @@ export const ChatPage = () => {
       }
       taskPollingRef.current[taskId] = window.setTimeout(run, 2000)
     },
-    [fetchTaskEvents, isTerminalStatus]
+    [applyTerminalTaskStatus, fetchTaskEvents, isTerminalStatus]
   )
 
   const subscribeToTask = useCallback(
@@ -482,9 +552,10 @@ export const ChatPage = () => {
         })
         .finally(() => {
           delete taskSubscriptionsRef.current[taskId]
+          syncTerminalTaskStatus(targetChatId, taskId, assistantId).catch(() => null)
         })
     },
-    [applyStreamEvent, pollTaskEvents]
+    [applyStreamEvent, pollTaskEvents, syncTerminalTaskStatus]
   )
 
   const replaceChatMessagesFor = useCallback(
