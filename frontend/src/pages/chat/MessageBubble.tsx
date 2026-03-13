@@ -19,6 +19,8 @@ type MessageBubbleProps = {
   isCodeEvent: boolean
   isThinking: boolean
   thinkingLabels: string[]
+  currentStepLabel: string | null
+  currentToolLabel: string | null
   isEditing: boolean
   editingContent: string
   editingAttachments: ChatMessageAttachmentInput[]
@@ -43,6 +45,8 @@ const MessageBubbleComponent = ({
   isCodeEvent,
   isThinking,
   thinkingLabels,
+  currentStepLabel,
+  currentToolLabel,
   isEditing,
   editingContent,
   editingAttachments,
@@ -277,6 +281,11 @@ const MessageBubbleComponent = ({
             <>
               {isThinking ? (
                 <div className="space-y-2 py-2">
+                  {currentStepLabel || currentToolLabel ? (
+                    <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                      {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
+                    </div>
+                  ) : null}
                   <div className="flex items-center gap-1">
                     <span
                       className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
@@ -588,6 +597,8 @@ export const MessageBubble = memo(
     if (prev.isUser !== next.isUser) return false
     if (prev.isCodeEvent !== next.isCodeEvent) return false
     if (prev.isThinking !== next.isThinking) return false
+    if (prev.currentStepLabel !== next.currentStepLabel) return false
+    if (prev.currentToolLabel !== next.currentToolLabel) return false
     if (prev.isEditing !== next.isEditing) return false
     if (prev.codeTheme !== next.codeTheme) return false
     if (prev.t !== next.t) return false

@@ -98,6 +98,7 @@ def _build_provider_messages(
     attachments_by_message: dict[UUID, list[ChatMessageAttachment]],
     model: ChatModel,
     locale: str | None,
+    enabled_tool_names: list[str] | None,
 ) -> list[dict]:
     items: list[dict[str, Any]] = []
     for msg in history:
@@ -146,7 +147,11 @@ def _build_provider_messages(
                 }
             )
         items.append({"role": msg.role, "content": content_parts})
-    return _prepend_tool_guidance(items, locale=locale)
+    return _prepend_tool_guidance(
+        items,
+        locale=locale,
+        enabled_tool_names=enabled_tool_names,
+    )
 
 
 def _append_event(
@@ -485,6 +490,7 @@ async def _run_generation(task_id: UUID) -> None:
             attachments_by_message=attachments_by_message,
             model=model,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
+            enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
         )
         messages = await _summarize_context_if_needed(
             session=session,

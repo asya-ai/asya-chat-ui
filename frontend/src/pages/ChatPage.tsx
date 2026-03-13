@@ -381,9 +381,6 @@ export const ChatPage = () => {
             if (isStep) {
               return msg
             }
-            if (msg.content.trim().length === 0) {
-              return msg
-            }
             return {
               ...msg,
               thinking_steps: current.filter((label) => label !== activity.label),
@@ -1312,14 +1309,23 @@ export const ChatPage = () => {
         (msg.attachments && msg.attachments.length > 0) ||
         (msg.model_name ? msg.model_name.toLowerCase().includes("image") : false)
       const activeThinking = msg.thinking_steps ?? []
+      const nonStepThinking = activeThinking.filter(
+        (label) => !/^Step \d+\/\d+$/.test(label)
+      )
+      const stepLabel =
+        activeThinking.find((label) => /^Step \d+\/\d+$/.test(label)) ?? null
+      const currentToolLabel =
+        [...nonStepThinking]
+          .reverse()
+          .find((label) => Boolean(label)) ?? null
       const isThinking =
         msg.role === "assistant" &&
         !isTerminalStatus(msg.generation_status ?? null) &&
-        msg.content.trim().length === 0 &&
+        (msg.content.trim().length === 0 || activeThinking.length > 0) &&
         (!isImageMessage || activeThinking.length > 0)
       const thinkingLabels =
-        activeThinking.length > 0
-          ? activeThinking
+        nonStepThinking.length > 0
+          ? nonStepThinking
           : isImageMessage
             ? [t("chat_generating_image")]
             : [t("chat_thinking")]
@@ -1332,6 +1338,8 @@ export const ChatPage = () => {
           isCodeEvent={isCodeEvent}
           isThinking={isThinking}
           thinkingLabels={thinkingLabels}
+          currentStepLabel={stepLabel}
+          currentToolLabel={currentToolLabel}
           isEditing={isEditing}
           editingContent={isEditing ? editingContent : ""}
           editingAttachments={isEditing ? editingAttachments : []}
