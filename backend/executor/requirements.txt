@@ -31,3 +31,4 @@ watchdog
 regex
 rapidfuzz
 fake-useragent
+duckdb

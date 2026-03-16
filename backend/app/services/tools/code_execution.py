@@ -54,6 +54,7 @@ DEFAULT_ALLOWLIST = {
     "regex",
     "rapidfuzz",
     "fake_useragent",
+    "duckdb",
 }
 ALLOWED_IMPORTS_HINT = ", ".join(sorted(DEFAULT_ALLOWLIST))
 
