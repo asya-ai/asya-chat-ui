@@ -139,7 +139,26 @@ export type ContextSummaryToolEvent = {
   } | null
 }
 
-export type ToolEvent = CodeExecutionToolEvent | ContextSummaryToolEvent
+export type UrlAttachmentsToolEvent = {
+  type: "url_attachments"
+  id?: string
+  urls?: string[] | null
+  output?: {
+    results?: {
+      url?: string | null
+      file_name?: string | null
+      content_type?: string | null
+      size_bytes?: number | null
+      error?: string | null
+    }[] | null
+    error?: string | null
+  } | null
+}
+
+export type ToolEvent =
+  | CodeExecutionToolEvent
+  | ContextSummaryToolEvent
+  | UrlAttachmentsToolEvent
 
 export type GenerationStatus =
   | "queued"

@@ -23,6 +23,7 @@ from app.api.chats import (
     _maybe_update_chat_title,
     _normalize_sources,
     _prepend_tool_guidance,
+    _resolve_exec_policy,
     _run_agentic_loop,
     _truncate_messages,
 )
@@ -43,7 +44,7 @@ from app.models.entities import (
 from app.services.org_service import require_provider_enabled
 from app.services.providers.base import ChatUsage
 from app.services.providers.registry import get_provider
-from app.services.tools.image_tool import ImageToolContext, generate_image
+from app.services.tools.image_tool import ImageToolContext, edit_image, generate_image
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,22 @@ class _DbEventSender:
             sequence=self._sequence_ref[0],
         )
         self._session.add(event)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            # If another DB operation poisoned the transaction, recover and
+            # retry once so streaming events don't crash the whole generation.
+            self._session.rollback()
+            self._session.add(event)
+            try:
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                logger.warning(
+                    "Failed to persist activity event for task=%s",
+                    self._task_id,
+                    exc_info=True,
+                )
 
 
 class _DbToolEventSender:
@@ -89,7 +105,20 @@ class _DbToolEventSender:
             sequence=self._sequence_ref[0],
         )
         self._session.add(event)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            self._session.add(event)
+            try:
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                logger.warning(
+                    "Failed to persist tool event for task=%s",
+                    self._task_id,
+                    exc_info=True,
+                )
 
 
 def _build_provider_messages(
@@ -477,10 +506,10 @@ async def _run_generation(task_id: UUID) -> None:
             ),
             web_scrape_enabled=org.web_scrape_enabled,
             exec_policy=(
-                org.exec_policy
-                if not task.metadata_json
-                or task.metadata_json.get("code_execution_enabled") is not False
-                else "off"
+                _resolve_exec_policy(
+                    org.exec_policy,
+                    (task.metadata_json or {}).get("code_execution_enabled"),
+                )
             ),
             exec_network_enabled=org.exec_network_enabled,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
@@ -509,6 +538,36 @@ async def _run_generation(task_id: UUID) -> None:
         try:
             _ensure_task_not_cancelled(session, task.id)
             if _is_image_output_model(model):
+                latest_user_message = next(
+                    (item for item in reversed(history) if item.role == "user"),
+                    None,
+                )
+                latest_user_attachments = (
+                    attachments_by_message.get(latest_user_message.id, [])
+                    if latest_user_message
+                    else []
+                )
+                latest_image_attachment = next(
+                    (
+                        item
+                        for item in reversed(latest_user_attachments)
+                        if item.content_type.startswith("image/")
+                    ),
+                    None,
+                )
+                image_prompt = (
+                    latest_user_message.content
+                    if latest_user_message and latest_user_message.content
+                    else (history[-1].content if history else "")
+                )
+                if latest_user_attachments:
+                    attachment_lines = "\n".join(
+                        f"- {attachment.file_name} ({attachment.content_type})"
+                        for attachment in latest_user_attachments
+                    )
+                    image_prompt = (
+                        f"{image_prompt}\n\nUser-attached files:\n{attachment_lines}"
+                    ).strip()
                 _append_event(
                     session,
                     task.id,
@@ -516,11 +575,23 @@ async def _run_generation(task_id: UUID) -> None:
                     "activity",
                     {"label": "Generating image", "state": "start"},
                 )
-                image_result = await generate_image(
-                    ImageToolContext(session=session, org_id=str(chat.org_id)),
-                    prompt=history[-1].content if history else "",
-                    model_override=model,
-                )
+                if latest_image_attachment:
+                    image_result = await edit_image(
+                        ImageToolContext(
+                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                        ),
+                        prompt=image_prompt,
+                        image_id=str(latest_image_attachment.id),
+                        model_override=model,
+                    )
+                else:
+                    image_result = await generate_image(
+                        ImageToolContext(
+                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                        ),
+                        prompt=image_prompt,
+                        model_override=model,
+                    )
                 _ensure_task_not_cancelled(session, task.id)
                 if image_result.attachments:
                     session.add_all(
@@ -751,10 +822,15 @@ async def _run_generation(task_id: UUID) -> None:
             task.completed_at = datetime.utcnow()
             session.commit()
         except GenerationCancelledError:
-            logger.info("Generation cancelled for task=%s", task.id)
+            logger.info("Generation cancelled for task=%s", task_id)
             return
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Generation failed for task=%s", task.id)
+            logger.exception("Generation failed for task=%s", task_id)
+            # Clear failed transaction state before any ORM writes.
+            try:
+                session.rollback()
+            except Exception:
+                pass
             assistant_message.status = "failed"
             assistant_message.completed_at = datetime.utcnow()
             assistant_message.error_message = str(exc)

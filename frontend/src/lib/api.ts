@@ -445,6 +445,7 @@ export const chatApi = {
     chatId: string,
     messageId: string,
     content: string,
+    model_id: string | undefined,
     attachments: ChatMessageAttachmentInput[] | null | undefined,
     reasoning_effort: string | null | undefined,
     web_search_enabled: boolean | undefined,
@@ -457,6 +458,7 @@ export const chatApi = {
       {
         message_id: messageId,
         content,
+        model_id,
         attachments,
         reasoning_effort,
         web_search_enabled,

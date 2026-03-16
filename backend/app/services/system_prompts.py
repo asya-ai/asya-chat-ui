@@ -21,13 +21,17 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "Use web_search for fresh or uncertain facts. Keep queries focused and minimal."
     ),
     "web_scrape": (
-        "Use web_scrape to read specific pages returned by search or provided by the user."
+        "Use web_scrape to read specific pages returned by search or provided by the user. it can open any url and give you screenshot or markdown text of the page."
+    ),
+    "download_attachments": (
+        "Use download_attachments for direct file/image URLs that should be imported as chat attachments. There is a limit of 25 urls per call"
     ),
     "generate_image": (
         "Use generate_image when the user asks for creating a new image."
     ),
     "edit_image": (
-        "Use edit_image only when the user asks to modify an existing image."
+        "Use edit_image when the user asks to modify an existing image. "
+        "If no image is specified, it will use the latest image attachment in the chat."
     ),
     "get_time": (
         "Use get_time for timezone/city/country/coordinate current-time lookups."
@@ -38,6 +42,7 @@ TOOL_PROMPT_ORDER = (
     "code_execution",
     "web_search",
     "web_scrape",
+    "download_attachments",
     "generate_image",
     "edit_image",
     "get_time",

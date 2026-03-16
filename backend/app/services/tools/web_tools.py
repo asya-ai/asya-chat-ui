@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import base64
+import mimetypes
+import os
 import socket
 from urllib.parse import urlparse
+from urllib.parse import unquote
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -153,6 +157,26 @@ def _is_private_hostname(hostname: str) -> bool:
     return False
 
 
+def _sanitize_filename(name: str) -> str:
+    base = os.path.basename(name).strip()
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in base).strip("._")
+    return cleaned or "download"
+
+
+def _filename_from_response(url: str, headers: httpx.Headers, content_type: str | None) -> str:
+    content_disposition = headers.get("content-disposition", "")
+    if "filename=" in content_disposition:
+        candidate = content_disposition.split("filename=", 1)[1].strip().strip('"')
+        if candidate:
+            return _sanitize_filename(unquote(candidate))
+    parsed = urlparse(url)
+    path_name = _sanitize_filename(unquote(parsed.path.rsplit("/", 1)[-1] or ""))
+    if "." in path_name:
+        return path_name
+    guessed_ext = mimetypes.guess_extension((content_type or "").split(";", 1)[0].strip()) or ""
+    return _sanitize_filename(f"{path_name or 'download'}{guessed_ext}")
+
+
 async def web_scrape(
     context: WebToolContext,
     *,
@@ -258,5 +282,78 @@ async def web_scrape(
     return ToolResult(
         name="web_scrape",
         output={"results": results},
+        attachments=attachments or None,
+    )
+
+
+async def download_attachments(
+    context: WebToolContext,
+    *,
+    url: str | None = None,
+    urls: list[str] | None = None,
+) -> ToolResult:
+    url_list = _ensure_list(urls) or _ensure_list(url)
+    if not url_list:
+        return ToolResult(name="download_attachments", output={"error": "No URL provided"})
+    url_list = url_list[:25]
+
+    async def _download_one(item: str) -> dict[str, Any]:
+        if not item.startswith(("http://", "https://")):
+            return {"url": item, "error": "Invalid URL scheme"}
+        parsed = urlparse(item)
+        hostname = parsed.hostname
+        if not hostname or _is_private_hostname(hostname):
+            return {"url": item, "error": "Blocked host"}
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                response = await client.get(item)
+            if response.status_code >= 400:
+                return {"url": item, "error": f"Download failed ({response.status_code})"}
+            final_hostname = urlparse(str(response.url)).hostname
+            if final_hostname and _is_private_hostname(final_hostname):
+                return {"url": item, "error": "Blocked redirect host"}
+            content_type = (response.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].strip()
+            if content_type == "text/html":
+                return {"url": item, "error": "URL points to an HTML page, not a direct file"}
+            data = response.content or b""
+            if not data:
+                return {"url": item, "error": "Downloaded file is empty"}
+            if len(data) > settings.attachments_max_file_bytes:
+                return {
+                    "url": item,
+                    "error": f"File exceeds size limit ({len(data)} bytes)",
+                }
+            file_name = _filename_from_response(str(response.url), response.headers, content_type)
+            return {
+                "url": str(response.url),
+                "file_name": file_name,
+                "content_type": content_type,
+                "size_bytes": len(data),
+                "attachment_data": data,
+            }
+        except Exception as exc:
+            logger.warning("download_attachments error url=%s err=%s", item, exc)
+            return {"url": item, "error": str(exc)}
+
+    logger.info("download_attachments org_id=%s urls=%s", context.org_id, len(url_list))
+    results = await _run_parallel(url_list, settings.scrape_parallel_max, _download_one)
+    attachments: list[dict[str, Any]] = []
+    normalized_results: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        data = item.pop("attachment_data", None)
+        if isinstance(data, (bytes, bytearray)):
+            attachments.append(
+                {
+                    "file_name": item.get("file_name") or "download",
+                    "content_type": item.get("content_type") or "application/octet-stream",
+                    "data_base64": base64.b64encode(bytes(data)).decode("ascii"),
+                }
+            )
+        normalized_results.append(item)
+    return ToolResult(
+        name="download_attachments",
+        output={"results": normalized_results},
         attachments=attachments or None,
     )

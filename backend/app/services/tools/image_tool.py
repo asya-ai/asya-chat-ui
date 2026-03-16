@@ -5,6 +5,7 @@ import base64
 import io
 import logging
 from typing import Any
+from uuid import UUID
 
 from google import genai
 from google.genai import types
@@ -14,7 +15,7 @@ from sqlmodel import Session, select
 from sqlalchemy import or_
 
 from app.core.config import settings
-from app.models import ChatMessageAttachment, ChatModel, OrgModel, OrgProviderConfig
+from app.models import ChatMessage, ChatMessageAttachment, ChatModel, OrgModel, OrgProviderConfig
 from app.services.org_service import require_provider_enabled
 from app.services.tools.registry import ToolResult
 
@@ -25,6 +26,22 @@ logger = logging.getLogger(__name__)
 class ImageToolContext:
     session: Session
     org_id: str
+    chat_id: str | None = None
+
+
+def _coerce_attachment_uuid(value: str | None) -> UUID | None:
+    if not value:
+        return None
+    raw = value.strip()
+    candidates = [raw]
+    if "_" in raw:
+        candidates.append(raw.split("_", 1)[0])
+    for candidate in candidates:
+        try:
+            return UUID(candidate)
+        except ValueError:
+            continue
+    return None
 
 
 def get_image_model(
@@ -164,16 +181,46 @@ async def edit_image(
         )
 
     if image_id and not image_base64:
-        attachment = session.exec(
-            select(ChatMessageAttachment).where(ChatMessageAttachment.id == image_id)
-        ).first()
+        image_uuid = _coerce_attachment_uuid(image_id)
+        attachment = None
+        if image_uuid:
+            attachment = session.exec(
+                select(ChatMessageAttachment).where(ChatMessageAttachment.id == image_uuid)
+            ).first()
+        if not attachment and context.chat_id:
+            # Fallback: caller may pass "<attachment_id>_<filename>" from code-exec style paths.
+            attachment = session.exec(
+                select(ChatMessageAttachment)
+                .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
+                .where(ChatMessage.chat_id == context.chat_id)
+                .where(ChatMessageAttachment.file_name == image_id)
+                .order_by(ChatMessage.created_at.desc())
+            ).first()
         if attachment:
             image_base64 = attachment.data_base64
             image_content_type = attachment.content_type
+    # If no explicit image was provided, fall back to the latest image attachment in this chat.
+    if not image_base64 and context.chat_id:
+        try:
+            latest_image_attachment = session.exec(
+                select(ChatMessageAttachment)
+                .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
+                .where(ChatMessage.chat_id == context.chat_id)
+                .where(ChatMessageAttachment.content_type.like("image/%"))
+                .order_by(ChatMessage.created_at.desc())
+            ).first()
+        except Exception:
+            latest_image_attachment = None
+        if latest_image_attachment:
+            image_base64 = latest_image_attachment.data_base64
+            image_content_type = latest_image_attachment.content_type
     if mask_id and not mask_base64:
-        mask_attachment = session.exec(
-            select(ChatMessageAttachment).where(ChatMessageAttachment.id == mask_id)
-        ).first()
+        mask_uuid = _coerce_attachment_uuid(mask_id)
+        mask_attachment = None
+        if mask_uuid:
+            mask_attachment = session.exec(
+                select(ChatMessageAttachment).where(ChatMessageAttachment.id == mask_uuid)
+            ).first()
         if mask_attachment:
             mask_base64 = mask_attachment.data_base64
             mask_content_type = mask_attachment.content_type

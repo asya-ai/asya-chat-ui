@@ -27,19 +27,35 @@ DEFAULT_ALLOWLIST = {
     "seaborn",
     "scipy",
     "sklearn",
-    "pillow",
-    "pil",
+    "PIL",
     "requests",
     "bs4",
-    "beautifulsoup4",
     "lxml",
     "sympy",
     "openpyxl",
     "docx",
     "pypdf",
+    "pdfplumber",
+    "fitz",
+    "pytesseract",
     "yaml",
-    "pyyaml",
+    "dateutil",
+    "click",
+    "typer",
+    "rich",
+    "orjson",
+    "pyarrow",
+    "httpx",
+    "chardet",
+    "charset_normalizer",
+    "magic",
+    "psutil",
+    "watchdog",
+    "regex",
+    "rapidfuzz",
+    "fake_useragent",
 }
+ALLOWED_IMPORTS_HINT = ", ".join(sorted(DEFAULT_ALLOWLIST))
 
 
 @dataclass
@@ -74,7 +90,10 @@ def _validate_imports(code: str) -> None:
         base = module.split(".")[0].lower()
         if base in stdlib or base in allowlist:
             continue
-        raise ValueError(f"Import not allowed: {module}")
+        raise ValueError(
+            f"Import not allowed: {module}. "
+            f"Allowed third-party imports: {ALLOWED_IMPORTS_HINT}"
+        )
 
 
 def _sanitize_filename(name: str) -> str:

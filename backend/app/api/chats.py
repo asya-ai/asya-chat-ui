@@ -43,10 +43,19 @@ from app.services.tools.image_tool import (
     generate_image,
     get_image_model,
 )
-from app.services.tools.code_execution import CodeExecutionContext, run_code_execution
+from app.services.tools.code_execution import (
+    ALLOWED_IMPORTS_HINT,
+    CodeExecutionContext,
+    run_code_execution,
+)
 from app.services.tools.registry import ToolRegistry, ToolSpec, ToolResult
 from app.services.tools.time_tool import TimeToolContext, get_time
-from app.services.tools.web_tools import WebToolContext, web_scrape, web_search
+from app.services.tools.web_tools import (
+    WebToolContext,
+    download_attachments,
+    web_scrape,
+    web_search,
+)
 from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -118,6 +127,29 @@ def _ensure_list(value: object) -> list[str]:
     return []
 
 
+def _coerce_optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _resolve_exec_policy(org_exec_policy: str, code_execution_enabled: object) -> str:
+    enabled = _coerce_optional_bool(code_execution_enabled)
+    if enabled is False:
+        return "off"
+    return org_exec_policy
+
+
 def _truncate_messages(messages: list[dict], *, token_limit: int | None) -> list[dict]:
     if token_limit is None:
         return messages
@@ -145,6 +177,17 @@ def _prepend_tool_guidance(
         locale=locale,
         enabled_tool_names=enabled_tool_names,
     )
+    enabled = set(enabled_tool_names or [])
+    if "code_execution" in enabled:
+        system_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "For code_execution, available third-party imports are: "
+                    f"{ALLOWED_IMPORTS_HINT}."
+                ),
+            }
+        )
     return [*system_messages, *messages]
 
 
@@ -187,7 +230,11 @@ def _build_tool_registry(
     registry = ToolRegistry()
     async def _handler(args: dict) -> object:
         return await generate_image(
-            ImageToolContext(session=session, org_id=str(org_id)),
+            ImageToolContext(
+                session=session,
+                org_id=str(org_id),
+                chat_id=str(chat_id) if chat_id else None,
+            ),
             prompt=args.get("prompt", ""),
         )
 
@@ -207,7 +254,11 @@ def _build_tool_registry(
     )
     async def _edit_handler(args: dict) -> object:
         return await edit_image(
-            ImageToolContext(session=session, org_id=str(org_id)),
+            ImageToolContext(
+                session=session,
+                org_id=str(org_id),
+                chat_id=str(chat_id) if chat_id else None,
+            ),
             prompt=args.get("prompt", ""),
             image_id=args.get("image_id"),
             image_base64=args.get("image_base64"),
@@ -220,7 +271,11 @@ def _build_tool_registry(
     registry.register(
         ToolSpec(
             name="edit_image",
-            description="Edit an existing image with a prompt and optional mask.",
+            description=(
+                "Edit an existing image with a prompt and optional mask. "
+                "If no image_id or image_base64 is provided, the latest image attachment "
+                "from the current chat is used."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -335,6 +390,36 @@ def _build_tool_registry(
             ),
             _scrape_handler,
         )
+        async def _download_attachments_handler(args: dict) -> object:
+            return await download_attachments(
+                WebToolContext(org_id=str(org_id), locale=locale),
+                url=args.get("url"),
+                urls=args.get("urls"),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="download_attachments",
+                description=(
+                    "Download one or more direct file URLs and attach them to the chat."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Single direct file URL to download",
+                        },
+                        "urls": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Multiple direct file URLs to download",
+                        },
+                    },
+                },
+            ),
+            _download_attachments_handler,
+        )
     if exec_policy != "off" and chat_id:
         async def _exec_handler(args: dict) -> object:
             code = args.get("code", "")
@@ -371,6 +456,7 @@ def _build_tool_registry(
                     "YOu dont need to tell user where the file was created, it will be sent together with your response to them."
                     "You can call this tool multiple times. Filenames are <attachment_id>_<sanitized_name>."
                     "Calls do not reuse same sandbox, so any created files will be lost after the call."
+                    f"Allowed third-party imports: {ALLOWED_IMPORTS_HINT}."
                 ),
                 parameters={
                     "type": "object",
@@ -734,6 +820,8 @@ async def _run_agentic_loop(
             return labels or ["Searching web"]
         if name == "web_scrape":
             return ["Reading sources"]
+        if name == "download_attachments":
+            return ["Downloading attachments"]
         if name == "generate_image":
             return ["Generating image"]
         if name == "edit_image":
@@ -893,6 +981,20 @@ async def _run_agentic_loop(
                     for label in labels:
                         await _emit(label, "start")
                     result = await tool_registry.execute(call.name, call.arguments)
+                elif call.name == "download_attachments":
+                    await _emit_tool_event(
+                        {
+                            "type": "url_attachments",
+                            "id": call.id,
+                            "urls": _ensure_list(call.arguments.get("urls"))
+                            or _ensure_list(call.arguments.get("url")),
+                            "output": {},
+                        }
+                    )
+                    labels = _labels_for_call(call.name, call.arguments)
+                    for label in labels:
+                        await _emit(label, "start")
+                    result = await tool_registry.execute(call.name, call.arguments)
                 else:
                     labels = _labels_for_call(call.name, call.arguments)
                     for label in labels:
@@ -910,6 +1012,16 @@ async def _run_agentic_loop(
                             "type": "code_execution",
                             "id": call.id,
                             "code": call.arguments.get("code", ""),
+                            "output": result.output,
+                        }
+                    )
+                elif call.name == "download_attachments":
+                    await _emit_tool_event(
+                        {
+                            "type": "url_attachments",
+                            "id": call.id,
+                            "urls": _ensure_list(call.arguments.get("urls"))
+                            or _ensure_list(call.arguments.get("url")),
                             "output": result.output,
                         }
                     )
@@ -1102,6 +1214,7 @@ class ChatGenerationEventRead(BaseModel):
 
 class ChatMessageEditRequest(BaseModel):
     content: str
+    model_id: str | None = None
     attachments: list[ChatMessageAttachmentCreate] | None = None
     reasoning_effort: str | None = None
     web_search_enabled: bool | None = None
@@ -1228,7 +1341,9 @@ async def _stream_message_ws(
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
-            "code_execution_enabled": payload.code_execution_enabled,
+            "code_execution_enabled": _coerce_optional_bool(
+                payload.code_execution_enabled
+            ),
         },
     )
     session.add(task)
@@ -1280,6 +1395,13 @@ async def _stream_edit_ws(
         return
 
     model_id = chat.model_id
+    if payload.model_id:
+        try:
+            model_id = UUID(payload.model_id)
+        except ValueError:
+            await _ws_send_event(websocket, {"error": "Invalid model id"})
+            return
+        chat.model_id = model_id
     if not model_id:
         await _ws_send_event(websocket, {"error": "Chat model not set"})
         return
@@ -1387,7 +1509,9 @@ async def _stream_edit_ws(
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
-            "code_execution_enabled": payload.code_execution_enabled,
+            "code_execution_enabled": _coerce_optional_bool(
+                payload.code_execution_enabled
+            ),
         },
     )
     session.add(task)
@@ -1624,6 +1748,7 @@ def list_messages(
                         content="",
                         created_at=event.created_at,
                         tool_event=payload,
+                        task_id=str(task_map[message.id].id) if message.id in task_map else None,
                     )
                 )
     return sorted(results, key=lambda item: item.created_at)
@@ -1993,7 +2118,9 @@ async def create_message(
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
-            "code_execution_enabled": payload.code_execution_enabled,
+            "code_execution_enabled": _coerce_optional_bool(
+                payload.code_execution_enabled
+            ),
         },
     )
     session.add(task)
@@ -2129,10 +2256,8 @@ async def create_message(
         if payload.web_search_enabled is None
         else org.web_search_enabled and payload.web_search_enabled
     )
-    effective_exec_policy = (
-        org.exec_policy
-        if payload.code_execution_enabled is not False
-        else "off"
+    effective_exec_policy = _resolve_exec_policy(
+        org.exec_policy, payload.code_execution_enabled
     )
     tool_registry = _build_tool_registry(
         session,
@@ -2151,7 +2276,9 @@ async def create_message(
     if _is_image_output_model(model) and payload.stream:
         async def image_stream():
             image_result = await generate_image(
-                ImageToolContext(session=session, org_id=str(chat.org_id)),
+                ImageToolContext(
+                    session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                ),
                 prompt=payload.content,
                 model_override=model,
             )
@@ -2211,7 +2338,9 @@ async def create_message(
 
     if _is_image_output_model(model):
         image_result = await generate_image(
-            ImageToolContext(session=session, org_id=str(chat.org_id)),
+            ImageToolContext(
+                session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+            ),
             prompt=payload.content,
             model_override=model,
         )
@@ -2727,6 +2856,14 @@ async def edit_message(
         )
 
     model_id = chat.model_id
+    if payload.model_id:
+        try:
+            model_id = UUID(payload.model_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
+            ) from exc
+        chat.model_id = model_id
     if not model_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Chat model not set"
@@ -2845,7 +2982,9 @@ async def edit_message(
             "locale": payload.locale,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
-            "code_execution_enabled": payload.code_execution_enabled,
+            "code_execution_enabled": _coerce_optional_bool(
+                payload.code_execution_enabled
+            ),
         },
     )
     session.add(task)
@@ -2971,10 +3110,8 @@ async def edit_message(
         if payload.web_search_enabled is None
         else org.web_search_enabled and payload.web_search_enabled
     )
-    effective_exec_policy = (
-        org.exec_policy
-        if payload.code_execution_enabled is not False
-        else "off"
+    effective_exec_policy = _resolve_exec_policy(
+        org.exec_policy, payload.code_execution_enabled
     )
     tool_registry = _build_tool_registry(
         session,
@@ -2991,7 +3128,9 @@ async def edit_message(
 
     if model.supports_image_output:
         image_result = await generate_image(
-            ImageToolContext(session=session, org_id=str(chat.org_id)),
+            ImageToolContext(
+                session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+            ),
             prompt=payload.content,
             model_override=model,
         )

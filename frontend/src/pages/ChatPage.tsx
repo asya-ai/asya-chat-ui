@@ -23,7 +23,7 @@ import { useI18n } from "@/lib/i18n-context"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { Menu } from "lucide-react"
+import { Image as ImageIcon, Menu } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
@@ -98,12 +98,30 @@ export const ChatPage = () => {
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
 
-  const appendToolEvent = useCallback((event: NonNullable<ChatMessage["tool_event"]>) => {
+  const appendToolEvent = useCallback((
+    event: NonNullable<ChatMessage["tool_event"]>,
+    taskId?: string | null
+  ) => {
     if (!event) return
     setToolEvents((prev) => {
-      // If event has an ID, try to update existing one
+      // If event has an ID, update only the in-flight placeholder for that call
+      // (same id, same task, and no output yet). This preserves multiple runs.
       if (event.id) {
-        const existingIndex = prev.findIndex((msg) => msg.tool_event?.id === event.id)
+        const existingIndex = prev.findIndex((msg) => {
+          if (msg.tool_event?.id !== event.id) return false
+          if (taskId && msg.task_id && msg.task_id !== taskId) return false
+          if (msg.tool_event?.type !== "code_execution") return false
+          const output = msg.tool_event.output
+          const hasMaterializedOutput =
+            Boolean(output?.stdout) ||
+            Boolean(output?.stderr) ||
+            Boolean(output?.error) ||
+            Boolean(output?.requires_approval) ||
+            Boolean(output?.timed_out) ||
+            typeof output?.exit_code === "number" ||
+            Boolean(output?.output_files?.length)
+          return !hasMaterializedOutput
+        })
         if (existingIndex >= 0) {
           const next = [...prev]
           const existing = next[existingIndex]
@@ -125,6 +143,7 @@ export const ChatPage = () => {
           content: "",
           created_at: new Date().toISOString(),
           tool_event: event,
+          task_id: taskId ?? null,
         },
       ]
     })
@@ -201,7 +220,7 @@ export const ChatPage = () => {
   const modelNameById = useMemo(() => {
     return Object.fromEntries(models.map((model) => [model.id, model.display_name]))
   }, [models])
-  const isImageModel = useCallback((model: ChatModel) => {
+  const isImageOutputModel = useCallback((model: ChatModel) => {
     if (model.supports_image_output === true) return true
     if (model.supports_image_output === false) return false
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
@@ -214,8 +233,8 @@ export const ChatPage = () => {
     )
   }, [])
   const selectableChatModels = useMemo(
-    () => models.filter((model) => !isImageModel(model) && !isEmbeddingModel(model)),
-    [models, isImageModel, isEmbeddingModel]
+    () => models.filter((model) => !isEmbeddingModel(model)),
+    [models, isEmbeddingModel]
   )
 
   const parseChatDate = useCallback((value: string) => {
@@ -392,7 +411,10 @@ export const ChatPage = () => {
       if ("tool_event" in event) {
         const toolEvent = event.tool_event as ChatMessage["tool_event"]
         if (toolEvent) {
-          appendToolEvent(toolEvent)
+          appendToolEvent(
+            toolEvent,
+            typeof event.task_id === "string" ? event.task_id : null
+          )
         }
         return
       }
@@ -588,6 +610,11 @@ export const ChatPage = () => {
     (baseMessages: ChatMessage[], toolMessages: ChatMessage[]): ChatMessage[] => {
       if (toolMessages.length === 0) return baseMessages
       const baseIds = new Set(baseMessages.map((msg) => msg.id))
+      const activeTaskIds = new Set(
+        baseMessages
+          .map((msg) => msg.task_id)
+          .filter((taskId): taskId is string => Boolean(taskId))
+      )
       const baseToolEventIds = new Set(
         baseMessages
           .map((msg) => msg.tool_event?.id)
@@ -596,15 +623,22 @@ export const ChatPage = () => {
       const merged = [
         ...baseMessages,
         ...toolMessages.filter((msg) => {
+          // Drop stale local tool bubbles whose task no longer exists
+          // in current branch messages (e.g. after edit/rerun).
+          if (msg.task_id && !activeTaskIds.has(msg.task_id)) return false
           if (baseIds.has(msg.id)) return false
           const toolEventId = msg.tool_event?.id
           if (!toolEventId) return true
           return !baseToolEventIds.has(toolEventId)
         }),
       ]
-      return merged.sort(
-        (a, b) => parseChatDate(a.created_at).getTime() - parseChatDate(b.created_at).getTime()
-      )
+      return merged.sort((a, b) => {
+        if (a.task_id && b.task_id && a.task_id === b.task_id) {
+          if (a.role === "tool" && b.role === "assistant") return -1
+          if (a.role === "assistant" && b.role === "tool") return 1
+        }
+        return parseChatDate(a.created_at).getTime() - parseChatDate(b.created_at).getTime()
+      })
     },
     [parseChatDate]
   )
@@ -923,6 +957,18 @@ export const ChatPage = () => {
         await promise
         refetchChats()
       } catch {
+        updateMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantId
+              ? {
+                  ...msg,
+                  content: msg.content?.trim() ? msg.content : t("chat_generation_failed"),
+                  thinking_steps: [],
+                  generation_status: "failed",
+                }
+              : msg
+          )
+        )
         if (chat.id) {
           chatApi
             .messages(chat.id)
@@ -1157,6 +1203,7 @@ export const ChatPage = () => {
       activeChat.id,
       msg.id,
       trimmed,
+      selectedModel,
       editingAttachments,
       reasoningEffort,
       webSearchEnabled,
@@ -1171,6 +1218,18 @@ export const ChatPage = () => {
       await promise
       refetchChats()
     } catch {
+      updateMessages((prev) =>
+        prev.map((item) =>
+          item.id === tempAssistantId
+            ? {
+                ...item,
+                content: item.content?.trim() ? item.content : t("chat_generation_failed"),
+                thinking_steps: [],
+                generation_status: "failed",
+              }
+            : item
+        )
+      )
       chatApi
         .messages(activeChat.id)
         .then((data) => replaceChatMessagesFor(activeChat.id, data))
@@ -1197,6 +1256,7 @@ export const ChatPage = () => {
     refetchChats,
     replaceChatMessagesFor,
     bumpChatActivity,
+    t,
   ])
 
   const deleteFromMessage = useCallback(async (msg: ChatMessage) => {
@@ -1253,6 +1313,7 @@ export const ChatPage = () => {
       chatId,
       sourceUser.id,
       sourceUser.content,
+      selectedModel,
       retryAttachments,
       reasoningEffort,
       webSearchEnabled,
@@ -1451,8 +1512,15 @@ export const ChatPage = () => {
                   value={model.id}
                   disabled={model.is_available === false}
                 >
-                  {model.display_name} ({model.provider}){" "}
-                  {model.is_available === false ? `(${t("common_disabled")})` : ""}
+                  <span className="inline-flex items-center gap-2">
+                    {isImageOutputModel(model) ? (
+                      <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                    ) : null}
+                    <span>
+                      {model.display_name} ({model.provider}){" "}
+                      {model.is_available === false ? `(${t("common_disabled")})` : ""}
+                    </span>
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>

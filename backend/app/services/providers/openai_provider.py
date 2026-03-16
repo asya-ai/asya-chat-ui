@@ -48,6 +48,10 @@ def _is_non_chat_model_error(exc: Exception) -> bool:
         return True
     if "not supported in the v1/completions endpoint" in message:
         return True
+    if "only supported in v1/responses" in message:
+        return True
+    if "not in v1/chat/completions" in message:
+        return True
     return False
 
 
@@ -667,6 +671,33 @@ def _to_responses_input(messages: list[dict]) -> list[dict]:
     items: list[dict] = []
     for message in messages:
         role = message.get("role")
+        if role == "assistant" and isinstance(message.get("tool_calls"), list):
+            # Preserve prior assistant tool calls so subsequent function_call_output
+            # items can reference a known call_id in Responses API.
+            for call in message.get("tool_calls", []):
+                if not isinstance(call, dict):
+                    continue
+                call_id = call.get("id")
+                function_block = call.get("function") if isinstance(call.get("function"), dict) else {}
+                name = call.get("name") or function_block.get("name")
+                raw_args = call.get("arguments", function_block.get("arguments", {}))
+                if not call_id or not name:
+                    continue
+                if isinstance(raw_args, str):
+                    arguments = raw_args
+                else:
+                    try:
+                        arguments = json.dumps(raw_args or {})
+                    except TypeError:
+                        arguments = "{}"
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": str(call_id),
+                        "name": str(name),
+                        "arguments": arguments,
+                    }
+                )
         if role == "tool":
             tool_output = message.get("content")
             if isinstance(tool_output, list):

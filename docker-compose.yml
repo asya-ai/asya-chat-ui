@@ -22,6 +22,7 @@ services:
       start_period: 20s
 
   migrate:
+    image: chatui-backend
     build:
       context: ./backend
     env_file:
@@ -36,6 +37,7 @@ services:
     restart: "no"
 
   backend:
+    image: chatui-backend
     build:
       context: ./backend
     env_file:
@@ -95,6 +97,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: chatui-backend
     build:
       context: ./backend
     env_file:
