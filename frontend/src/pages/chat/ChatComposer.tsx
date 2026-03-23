@@ -109,11 +109,13 @@ export const ChatComposer = ({
           onChange={(event) => onMessageChange(event.target.value)}
           onPaste={onPasteAttachments}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault()
-              if (!loading && message.trim()) {
-                onSend()
-              }
+            if (event.key !== "Enter") return
+            if (event.nativeEvent.isComposing) return
+            if (event.shiftKey || event.metaKey) return
+
+            event.preventDefault()
+            if (!loading && canSend) {
+              onSend()
             }
           }}
           placeholder={placeholder}

@@ -3,6 +3,7 @@ import base64
 import html
 import logging
 import re
+from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -336,7 +337,7 @@ def _build_tool_registry(
         registry.register(
             ToolSpec(
                 name="web_search",
-                description="Search the web for relevant results (keep it minimal and fast; use once, maybe twice if you have followup questions but not abuse this as it is really slow). Prefer to check your answers not imagine facts.",
+                description="Search the web for relevant results, gives you list of links and page summaries. Prefer to check your answers not imagine facts.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -362,14 +363,17 @@ def _build_tool_registry(
                 url=args.get("url"),
                 urls=args.get("urls"),
                 output=args.get("output"),
+                question=args.get("question"),
             )
 
         registry.register(
             ToolSpec(
                 name="web_scrape",
                 description=(
-                    "Fetch a web page and return markdown or a full-page screenshot "
-                    "(only if needed; keep it minimal). Use output=markdown or output=screenshot."
+                    "Fetch a web page and return markdown, a full-page screenshot, "
+                    "or a grounded answer from that page. For output=answer, include question. "
+                    "Prefer using answer instead of poluting context with full page info unless it is needed to accomplish the task. "
+                    "If you want to explore subpages, I reccomend first asking about all of the links that lead from the source page not guessing them."
                 ),
                 parameters={
                     "type": "object",
@@ -382,8 +386,12 @@ def _build_tool_registry(
                         },
                         "output": {
                             "type": "string",
-                            "enum": ["markdown", "screenshot"],
-                            "description": "Choose markdown text or a full-page screenshot",
+                            "enum": ["markdown", "screenshot", "answer"],
+                            "description": "Choose markdown text, screenshot, or grounded answer",
+                        },
+                        "question": {
+                            "type": "string",
+                            "description": "Required when output=answer. Question to answer from the page only.",
                         },
                     },
                 },
@@ -565,6 +573,130 @@ def _sanitize_tool_output_for_context(value: object) -> object:
     return value
 
 
+def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
+    text = (content or "").strip()
+    if not text:
+        return "", [], True
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return text, [], False
+    if not isinstance(payload, dict):
+        return text, [], False
+    answer = str(payload.get("answer") or "").strip()
+    insufficient = bool(payload.get("insufficient_information"))
+    quotes_raw = payload.get("quotes")
+    quotes: list[str] = []
+    if isinstance(quotes_raw, list):
+        for item in quotes_raw:
+            if isinstance(item, str):
+                quote = item.strip()
+                if quote:
+                    quotes.append(quote)
+    return answer, quotes, insufficient
+
+
+def _merge_chat_usage(
+    first: ChatUsage | None,
+    second: ChatUsage | None,
+) -> ChatUsage | None:
+    if first is None and second is None:
+        return None
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return ChatUsage(
+        prompt_tokens=(first.prompt_tokens or 0) + (second.prompt_tokens or 0),
+        completion_tokens=(first.completion_tokens or 0)
+        + (second.completion_tokens or 0),
+        total_tokens=(first.total_tokens or 0) + (second.total_tokens or 0),
+        input_tokens=(first.input_tokens or 0) + (second.input_tokens or 0),
+        output_tokens=(first.output_tokens or 0) + (second.output_tokens or 0),
+        cached_tokens=(first.cached_tokens or 0) + (second.cached_tokens or 0),
+        thinking_tokens=(first.thinking_tokens or 0) + (second.thinking_tokens or 0),
+    )
+
+
+async def _generate_web_scrape_answer(
+    *,
+    provider,
+    model: ChatModel,
+    result_item: dict[str, Any],
+) -> tuple[dict[str, Any], ChatUsage | None]:
+    analysis_input = result_item.get("analysis_input")
+    if not isinstance(analysis_input, dict):
+        return result_item, None
+    question = str(result_item.get("question") or "").strip()
+    if not question:
+        return {**result_item, "error": "Question missing for output=answer"}, None
+    markdown = str(analysis_input.get("markdown") or "").strip()
+    if not markdown:
+        return {**result_item, "error": "No markdown extracted for answering"}, None
+
+    instructions = (
+        "Analyze the provided website content and answer the question.\n"
+        f'Question: "{question}"\n\n'
+        "Rules:\n"
+        "1) Use only the provided source material (markdown and screenshot if present).\n"
+        "2) If the source material is insufficient, say so clearly.\n"
+        "3) Do not use prior/personal knowledge.\n"
+        "4) Return strict JSON with keys: answer (string), insufficient_information (boolean), quotes (array of strings).\n"
+        "5) quotes must contain direct quotes from the source, or be [] when insufficient."
+    )
+    markdown_block = markdown
+    if len(markdown_block) > 12000:
+        markdown_block = markdown_block[:12000]
+
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": instructions + "\n\nSource markdown:\n" + markdown_block,
+        }
+    ]
+    screenshot_base64 = str(analysis_input.get("screenshot_base64") or "")
+    screenshot_content_type = (
+        str(analysis_input.get("screenshot_content_type") or "image/png").strip()
+        or "image/png"
+    )
+    include_image = screenshot_base64 and model.supports_image_input is True
+    if include_image:
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{screenshot_content_type};base64,{screenshot_base64}"
+                },
+            }
+        )
+    prompt_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a strict evidence-grounded website analyzer. "
+                "Never rely on outside knowledge."
+            ),
+        },
+        {"role": "user", "content": user_content},
+    ]
+    try:
+        response = await provider.chat(model.model_name, prompt_messages)
+    except Exception:
+        if include_image:
+            prompt_messages[1] = {"role": "user", "content": user_content[:1]}
+            response = await provider.chat(model.model_name, prompt_messages)
+        else:
+            raise
+    answer, quotes, insufficient = _parse_web_answer_payload(response.content or "")
+    normalized: dict[str, Any] = {k: v for k, v in result_item.items() if k != "analysis_input"}
+    normalized["answer"] = answer
+    normalized["quotes"] = quotes
+    normalized["insufficient_information"] = insufficient
+    if analysis_input.get("screenshot_error") and not screenshot_base64:
+        normalized["note"] = "Screenshot could not be used; answer is based on markdown only."
+    return normalized, response.usage
+
+
 async def _normalize_sources(
     items: list[dict] | list[str] | None,
 ) -> list[dict]:
@@ -658,11 +790,37 @@ async def _maybe_update_chat_title(
     ]
     try:
         title_response = await title_provider.chat(title_model.model_name, title_messages)
+        title_usage = getattr(title_response, "usage", None)
+        if title_usage:
+            latest_assistant = next(
+                (
+                    item
+                    for item in reversed(history)
+                    if isinstance(item, ChatMessage) and item.role == "assistant"
+                ),
+                None,
+            )
+            session.add(
+                UsageEvent(
+                    org_id=chat.org_id,
+                    user_id=chat.user_id,
+                    chat_id=chat.id,
+                    message_id=latest_assistant.id if latest_assistant else None,
+                    model_id=title_model.id,
+                    prompt_tokens=title_usage.prompt_tokens,
+                    completion_tokens=title_usage.completion_tokens,
+                    total_tokens=title_usage.total_tokens,
+                    input_tokens=title_usage.input_tokens,
+                    output_tokens=title_usage.output_tokens,
+                    cached_tokens=title_usage.cached_tokens,
+                    thinking_tokens=title_usage.thinking_tokens,
+                )
+            )
         title = title_response.content.strip().strip('"').strip("'")
         if title:
             chat.title = title
-            session.add(chat)
-            session.commit()
+        session.add(chat)
+        session.commit()
     except Exception:
         logger.warning(
             "Failed to generate chat title for chat_id=%s model=%s",
@@ -798,6 +956,7 @@ async def _run_agentic_loop(
     sources: list[dict] = []
     image_usages: list[dict] = []
     last_usage: ChatUsage | None = None
+    additional_usage: ChatUsage | None = None
     last_tool_error: str | None = None
     search_calls = 0
     scrape_calls = 0
@@ -819,6 +978,8 @@ async def _run_agentic_loop(
             labels = [f"Searching: {item}" for item in queries if isinstance(item, str) and item]
             return labels or ["Searching web"]
         if name == "web_scrape":
+            if str(arguments.get("output") or "").strip().lower() == "answer":
+                return ["Reading sources", "Analyzing source"]
             return ["Reading sources"]
         if name == "download_attachments":
             return ["Downloading attachments"]
@@ -858,7 +1019,7 @@ async def _run_agentic_loop(
             response = await provider.chat_with_tools(
                 model.model_name, messages, tool_specs
             )
-            last_usage = response.usage
+            last_usage = _merge_chat_usage(last_usage, response.usage)
             tool_calls = response.tool_calls or []
             logger.info(
                 "Agentic step %s tool_calls=%s finish_reason=%s response_len=%s",
@@ -892,9 +1053,17 @@ async def _run_agentic_loop(
                         )
                         if result.attachments:
                             attachments.extend(result.attachments)
-                        return "", attachments, sources, image_usages, last_usage
+                        total_usage = _merge_chat_usage(last_usage, additional_usage)
+                        return "", attachments, sources, image_usages, total_usage
                     await _emit("Answering", "start")
-                    return response.content, attachments, sources, image_usages, last_usage
+                    total_usage = _merge_chat_usage(last_usage, additional_usage)
+                    return (
+                        response.content,
+                        attachments,
+                        sources,
+                        image_usages,
+                        total_usage,
+                    )
                 logger.info("No tool calls and empty content; forcing final answer")
                 messages.append(
                     {"role": "user", "content": "Please provide the final answer now."}
@@ -902,8 +1071,16 @@ async def _run_agentic_loop(
                 response = await provider.chat_with_tools(
                     model.model_name, messages, tool_specs
                 )
+                last_usage = _merge_chat_usage(last_usage, response.usage)
                 await _emit("Answering", "start")
-                return response.content or "", attachments, sources, image_usages, last_usage
+                total_usage = _merge_chat_usage(last_usage, additional_usage)
+                return (
+                    response.content or "",
+                    attachments,
+                    sources,
+                    image_usages,
+                    total_usage,
+                )
             logger.info("Tool calls: %s", [call.name for call in tool_calls])
             assistant_call_message = {
                 "role": "assistant",
@@ -1000,6 +1177,38 @@ async def _run_agentic_loop(
                     for label in labels:
                         await _emit(label, "start")
                     result = await tool_registry.execute(call.name, call.arguments)
+                if (
+                    call.name == "web_scrape"
+                    and str(call.arguments.get("output") or "").strip().lower() == "answer"
+                ):
+                    scrape_results = result.output.get("results", []) or []
+                    answered_results: list[dict[str, Any]] = []
+                    for item in scrape_results:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("error"):
+                            answered_results.append(item)
+                            continue
+                        try:
+                            answered_item, answer_usage = await _generate_web_scrape_answer(
+                                provider=provider, model=model, result_item=item
+                            )
+                            answered_results.append(answered_item)
+                            additional_usage = _merge_chat_usage(
+                                additional_usage, answer_usage
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "web_scrape answer pass failed url=%s err=%s",
+                                item.get("url"),
+                                exc,
+                            )
+                            fallback_item = {
+                                **{k: v for k, v in item.items() if k != "analysis_input"},
+                                "error": f"Answer generation failed: {exc}",
+                            }
+                            answered_results.append(fallback_item)
+                    result.output["results"] = answered_results
                 if call.name == "code_execution":
                     logger.info(
                         "Code execution output keys=%s",
@@ -1107,11 +1316,26 @@ async def _run_agentic_loop(
             )
         else:
             response = await provider.chat(model.model_name, messages)
+        last_usage = _merge_chat_usage(last_usage, response.usage)
         await _emit("Answering", "start")
         if not response.content:
             fallback = last_tool_error or "No response generated."
-            return fallback, attachments, _limit_sources(list(unique.values())), image_usages
-    return response.content, attachments, _limit_sources(list(unique.values())), image_usages
+            total_usage = _merge_chat_usage(last_usage, additional_usage)
+            return (
+                fallback,
+                attachments,
+                _limit_sources(list(unique.values())),
+                image_usages,
+                total_usage,
+            )
+    total_usage = _merge_chat_usage(last_usage, additional_usage)
+    return (
+        response.content,
+        attachments,
+        _limit_sources(list(unique.values())),
+        image_usages,
+        total_usage,
+    )
 
 
 class ChatCreateRequest(BaseModel):

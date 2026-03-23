@@ -6,6 +6,9 @@ import TurndownService from "turndown";
 import ipaddr from "ipaddr.js";
 import { URL } from "url";
 import dns from "dns/promises";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -14,6 +17,191 @@ const port = process.env.SCRAPER_PORT || 3001;
 const textLimit = Number(process.env.SCRAPE_TEXT_LIMIT || 20000);
 
 let browser;
+let blockedSelectorsConfig;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const loadBlockedSelectorsConfig = () => {
+  if (blockedSelectorsConfig) {
+    return blockedSelectorsConfig;
+  }
+  const configPath = path.join(__dirname, "blocked_selectors.json");
+  try {
+    const raw = fs.readFileSync(configPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    blockedSelectorsConfig = {
+      blockedWords: new Set(
+        Array.isArray(parsed.blocked_words)
+          ? parsed.blocked_words
+              .filter((value) => typeof value === "string")
+              .map((value) => value.toLowerCase())
+          : [],
+      ),
+      blockedSpecificSelectors: Array.isArray(parsed.blocked_specific_selectors)
+        ? parsed.blocked_specific_selectors.filter(
+            (value) => typeof value === "string" && value.trim(),
+          )
+        : [],
+      blockedTags: Array.isArray(parsed.blocked_tags)
+        ? parsed.blocked_tags
+            .filter((value) => typeof value === "string" && value.trim())
+            .map((value) => value.toLowerCase())
+        : [],
+      blockedLinkWords: new Set(
+        Array.isArray(parsed.blocked_link_words)
+          ? parsed.blocked_link_words
+              .filter((value) => typeof value === "string")
+              .map((value) => value.toLowerCase())
+          : [],
+      ),
+    };
+  } catch (error) {
+    console.warn("Failed to load blocked_selectors.json, using empty config", error);
+    blockedSelectorsConfig = {
+      blockedWords: new Set(),
+      blockedSpecificSelectors: [],
+      blockedTags: [],
+      blockedLinkWords: new Set(),
+    };
+  }
+  return blockedSelectorsConfig;
+};
+
+const tokenizeValue = (value) => {
+  if (!value) return [];
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const splitCamelCase = (value) => {
+  if (!value) return "";
+  return String(value).replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+};
+
+const elementIdentityTokens = (element) => {
+  const classValue = Array.from(element.classList || []).join(" ");
+  const idValue = element.id || "";
+  return tokenizeValue(`${splitCamelCase(classValue)} ${splitCamelCase(idValue)}`);
+};
+
+const hasBlockedWord = (tokens, blockedWords) => {
+  for (const token of tokens) {
+    if (blockedWords.has(token)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const removeElement = (element) => {
+  if (!element) return;
+  if (element.tagName === "HTML" || element.tagName === "BODY") return;
+  element.remove();
+};
+
+const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+const textStats = (element) => {
+  const text = normalizeText(element.textContent || "");
+  const textLength = text.length;
+  let linkTextLength = 0;
+  const links = Array.from(element.querySelectorAll("a"));
+  for (const link of links) {
+    linkTextLength += normalizeText(link.textContent || "").length;
+  }
+  const linkCount = links.length;
+  const linkDensity = textLength > 0 ? linkTextLength / textLength : 0;
+  return { textLength, linkTextLength, linkCount, linkDensity };
+};
+
+const hasLikelyContentStructure = (element) => {
+  if (element.querySelector("article, main, p, h1, h2, h3, h4, table, pre, code, blockquote")) {
+    return true;
+  }
+  const paragraphs = element.querySelectorAll("p").length;
+  const headings = element.querySelectorAll("h1, h2, h3, h4").length;
+  return paragraphs >= 2 || (paragraphs >= 1 && headings >= 1);
+};
+
+const shouldPruneByStructure = (element) => {
+  const tagName = element.tagName;
+  if (tagName === "ARTICLE" || tagName === "MAIN") return false;
+  if (element.closest("article")) return false;
+  if (hasLikelyContentStructure(element)) return false;
+
+  const identityTokens = elementIdentityTokens(element);
+  const looksNavLike = ["nav", "menu", "sidebar", "footer", "header", "breadcrumb", "related"].some((token) =>
+    identityTokens.includes(token),
+  );
+  const formControls = element.querySelectorAll("input, button, select, textarea, form").length;
+  const { textLength, linkCount, linkDensity } = textStats(element);
+
+  if (looksNavLike && linkCount >= 3) return true;
+  if (linkCount >= 8 && textLength <= 400 && linkDensity >= 0.55) return true;
+  if (formControls >= 3 && textLength <= 260) return true;
+  if (linkCount >= 4 && textLength <= 120 && linkDensity >= 0.75) return true;
+  return false;
+};
+
+const compactMarkdown = (markdown) => {
+  const normalized = String(markdown || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return normalized;
+};
+
+const cleanupDocument = (document) => {
+  const config = loadBlockedSelectorsConfig();
+
+  for (const tagName of config.blockedTags) {
+    for (const element of document.querySelectorAll(tagName)) {
+      removeElement(element);
+    }
+  }
+
+  for (const selector of config.blockedSpecificSelectors) {
+    try {
+      for (const element of document.querySelectorAll(selector)) {
+        removeElement(element);
+      }
+    } catch {
+      // Ignore invalid selectors in config.
+    }
+  }
+
+  const allElements = Array.from(document.querySelectorAll("*"));
+  for (const element of allElements) {
+    if (!element.isConnected) continue;
+    if (element.tagName === "HTML" || element.tagName === "BODY") continue;
+
+    const identityTokens = elementIdentityTokens(element);
+    if (
+      hasBlockedWord(identityTokens, config.blockedWords) ||
+      shouldPruneByStructure(element)
+    ) {
+      removeElement(element);
+      continue;
+    }
+
+    if (element.tagName === "A") {
+      const href = (element.getAttribute("href") || "").toLowerCase();
+      const combined = `${href} ${element.id || ""} ${Array.from(element.classList || []).join(" ")}`;
+      const linkTokens = tokenizeValue(combined);
+      if (
+        hasBlockedWord(linkTokens, config.blockedLinkWords) ||
+        hasBlockedWord(linkTokens, config.blockedWords)
+      ) {
+        removeElement(element);
+      }
+    }
+  }
+};
 
 const isPrivateIP = (ip) => {
   try {
@@ -66,13 +254,81 @@ const getBrowser = async () => {
   return browser;
 };
 
+const DEFAULT_VIEWPORT = { width: 1366, height: 1800 };
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const settlePage = async (page) => {
+  // Let SPA routes, deferred scripts, and hydration settle.
+  try {
+    await page.waitForFunction(() => document.readyState === "complete", {
+      timeout: 8000,
+    });
+  } catch {}
+
+  try {
+    await page.waitForNetworkIdle({ idleTime: 700, timeout: 8000 });
+  } catch {}
+
+  // Trigger lazy loaders (IntersectionObserver/image/content reveal).
+  try {
+    await page.evaluate(async () => {
+      const totalHeight = Math.max(
+        document.body?.scrollHeight || 0,
+        document.documentElement?.scrollHeight || 0,
+      );
+      const viewport = window.innerHeight || 900;
+      let y = 0;
+      while (y < totalHeight) {
+        window.scrollTo(0, y);
+        y += Math.max(Math.floor(viewport * 0.9), 400);
+        // Small delay between scroll steps to allow lazy content to render.
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+      window.scrollTo(0, 0);
+    });
+  } catch {}
+
+  // One final short settle after scrolling.
+  await sleep(250);
+};
+
+const captureScreenshotSafe = async (page) => {
+  await page.setViewport(DEFAULT_VIEWPORT);
+  try {
+    return await page.screenshot({
+      type: "png",
+      fullPage: true,
+      encoding: "base64",
+    });
+  } catch (error) {
+    const message =
+      error && typeof error === "object" && "message" in error
+        ? String(error.message)
+        : String(error);
+    if (!message.toLowerCase().includes("0 width")) {
+      throw error;
+    }
+    // Some anti-bot/challenge pages report zero page width for fullPage screenshots.
+    // Fallback to a viewport screenshot to keep scrape usable.
+    return await page.screenshot({
+      type: "png",
+      fullPage: false,
+      encoding: "base64",
+    });
+  }
+};
+
 const toMarkdown = (html, url) => {
   const dom = new JSDOM(html, { url });
+  cleanupDocument(dom.window.document);
   const reader = new Readability(dom.window.document);
   const article = reader.parse();
   const content = article?.content || dom.window.document.body.innerHTML || "";
+  const contentDom = new JSDOM(content, { url });
+  cleanupDocument(contentDom.window.document);
   const turndown = new TurndownService({ headingStyle: "atx" });
-  return turndown.turndown(content);
+  return compactMarkdown(turndown.turndown(contentDom.window.document.body.innerHTML || ""));
 };
 
 app.post("/scrape", async (req, res) => {
@@ -96,6 +352,7 @@ app.post("/scrape", async (req, res) => {
 
     const browserInstance = await getBrowser();
     const page = await browserInstance.newPage();
+    await page.setViewport(DEFAULT_VIEWPORT);
 
     // Enable request interception to block private IPs during navigation
     await page.setRequestInterception(true);
@@ -111,15 +368,12 @@ app.post("/scrape", async (req, res) => {
       request.continue();
     });
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    await settlePage(page);
     const finalUrl = page.url();
     const title = await page.title();
     if (outputMode === "screenshot") {
-      const screenshot = await page.screenshot({
-        type: "png",
-        fullPage: true,
-        encoding: "base64",
-      });
+      const screenshot = await captureScreenshotSafe(page);
       await page.close();
       return res.json({ finalUrl, title, screenshot });
     }

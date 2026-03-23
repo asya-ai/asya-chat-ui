@@ -327,6 +327,28 @@ async def _summarize_context_if_needed(
     try:
         summary_response = await provider.chat(model.model_name, summary_request)
         summary_text = (summary_response.content or "").strip()
+        summary_usage = getattr(summary_response, "usage", None)
+        if summary_usage:
+            task_row = session.get(ChatGenerationTask, task_id)
+            chat_row = session.get(Chat, task_row.chat_id) if task_row else None
+            if chat_row:
+                session.add(
+                    UsageEvent(
+                        org_id=chat_row.org_id,
+                        user_id=chat_row.user_id,
+                        chat_id=chat_row.id,
+                        message_id=task_row.assistant_message_id if task_row else None,
+                        model_id=model.id,
+                        prompt_tokens=summary_usage.prompt_tokens,
+                        completion_tokens=summary_usage.completion_tokens,
+                        total_tokens=summary_usage.total_tokens,
+                        input_tokens=summary_usage.input_tokens,
+                        output_tokens=summary_usage.output_tokens,
+                        cached_tokens=summary_usage.cached_tokens,
+                        thinking_tokens=summary_usage.thinking_tokens,
+                    )
+                )
+                session.commit()
     except Exception:
         logger.exception("Context summarization failed for task=%s", task_id)
         return _truncate_messages(messages, token_limit=token_limit)

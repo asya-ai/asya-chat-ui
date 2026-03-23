@@ -21,7 +21,9 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "Use web_search for fresh or uncertain facts. Keep queries focused and minimal."
     ),
     "web_scrape": (
-        "Use web_scrape to read specific pages returned by search or provided by the user. it can open any url and give you screenshot or markdown text of the page."
+        "Use web_scrape to read specific pages returned by search or provided by the user. "
+        "It supports output=markdown, screenshot or answer. Prefer using answer instead of poluting context with full page info unless it is needed to accomplish the task."
+        "For output=answer, always provide a question; the tool returns an answer grounded in the page with source quotes."
     ),
     "download_attachments": (
         "Use download_attachments for direct file/image URLs that should be imported as chat attachments. There is a limit of 25 urls per call"

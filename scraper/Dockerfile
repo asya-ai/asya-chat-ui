@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && pnpm install --frozen-lockfile=false && pnpm exec puppeteer browsers install chrome
 
-COPY server.js ./
+COPY server.js blocked_selectors.json ./
 
 EXPOSE 3001
 

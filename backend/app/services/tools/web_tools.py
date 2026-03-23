@@ -183,6 +183,7 @@ async def web_scrape(
     url: str | None = None,
     urls: list[str] | None = None,
     output: str | None = None,
+    question: str | None = None,
 ) -> ToolResult:
     url_list = _ensure_list(urls) or _ensure_list(url)
     if not url_list:
@@ -194,12 +195,45 @@ async def web_scrape(
     parallel_limit = settings.scrape_parallel_max
     text_limit = settings.scrape_text_limit
     output_mode = (output or "markdown").strip().lower()
-    if output_mode not in {"markdown", "screenshot"}:
+    if output_mode not in {"markdown", "screenshot", "answer"}:
         output_mode = "markdown"
+    question_text = (question or "").strip()
+    if output_mode == "answer" and not question_text:
+        return ToolResult(
+            name="web_scrape",
+            output={"error": "Question is required when output=answer"},
+        )
 
     def _estimate_bytes(value: str) -> int:
         padding = value.count("=")
         return max(len(value) * 3 // 4 - padding, 0)
+
+    async def _call_scraper(item: str, mode: str) -> tuple[dict[str, Any] | None, str | None]:
+        payload = {"url": item, "output": mode}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{settings.scraper_url}/scrape", json=payload
+            )
+        if response.status_code >= 400:
+            detail = ""
+            try:
+                data = response.json()
+                if isinstance(data, dict):
+                    detail = str(data.get("detail") or data.get("error") or "").strip()
+            except Exception:
+                detail = (response.text or "").strip()
+            error = f"Scrape failed ({response.status_code})"
+            if detail:
+                error = f"{error}: {detail[:500]}"
+            logger.warning(
+                "web_scrape upstream failed url=%s mode=%s status=%s detail=%s",
+                item,
+                mode,
+                response.status_code,
+                detail[:500] if detail else "",
+            )
+            return None, error
+        return response.json(), None
 
     async def _scrape_one(item: str) -> dict:
         if not item.startswith(("http://", "https://")):
@@ -208,63 +242,90 @@ async def web_scrape(
         hostname = parsed.hostname
         if not hostname or _is_private_hostname(hostname):
             return {"url": item, "error": "Blocked host"}
-        payload = {"url": item, "output": output_mode}
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    f"{settings.scraper_url}/scrape", json=payload
-                )
-                if response.status_code >= 400:
-                    detail = ""
-                    try:
-                        data = response.json()
-                        if isinstance(data, dict):
-                            detail = str(data.get("detail") or data.get("error") or "").strip()
-                    except Exception:
-                        detail = (response.text or "").strip()
-                    error = f"Scrape failed ({response.status_code})"
-                    if detail:
-                        error = f"{error}: {detail[:500]}"
-                    logger.warning(
-                        "web_scrape upstream failed url=%s status=%s detail=%s",
-                        item,
-                        response.status_code,
-                        detail[:500] if detail else "",
-                    )
-                    return {"url": item, "error": error}
-                data = response.json()
+            if output_mode == "answer":
+                markdown_data, markdown_error = await _call_scraper(item, "markdown")
+                if markdown_error or not markdown_data:
+                    return {"url": item, "error": markdown_error or "Failed to scrape markdown"}
+                screenshot_data, screenshot_error = await _call_scraper(item, "screenshot")
                 base_output = {
-                    "url": data.get("finalUrl") or item,
-                    "title": data.get("title"),
+                    "url": markdown_data.get("finalUrl") or item,
+                    "title": markdown_data.get("title"),
+                    "output": "answer",
+                    "question": question_text,
                 }
-                if output_mode == "screenshot":
-                    screenshot_base64 = data.get("screenshot", "") or ""
-                    if not screenshot_base64:
-                        return {**base_output, "error": "Screenshot missing"}
-                    if _estimate_bytes(screenshot_base64) > settings.attachments_max_file_bytes:
-                        return {**base_output, "error": "Screenshot exceeds maximum size"}
-                    attachments = [
-                        {
-                            "file_name": "screenshot.png",
-                            "content_type": "image/png",
-                            "data_base64": screenshot_base64,
-                        }
-                    ]
-                    return {**base_output, "output": "screenshot", "attachments": attachments}
-                markdown = data.get("markdown", "") or ""
+                markdown = markdown_data.get("markdown", "") or ""
                 if len(markdown) > text_limit:
                     markdown = markdown[:text_limit]
-                return {**base_output, "markdown": markdown, "output": "markdown"}
+                screenshot_base64 = ""
+                screenshot_available = False
+                if screenshot_data and not screenshot_error:
+                    screenshot_base64 = screenshot_data.get("screenshot", "") or ""
+                if screenshot_base64:
+                    if _estimate_bytes(screenshot_base64) > settings.attachments_max_file_bytes:
+                        screenshot_base64 = ""
+                    else:
+                        screenshot_available = True
+                return {
+                    **base_output,
+                    "analysis_input": {
+                        "markdown": markdown,
+                        "screenshot_base64": screenshot_base64,
+                        "screenshot_content_type": "image/png",
+                        "screenshot_available": screenshot_available,
+                        "screenshot_error": screenshot_error,
+                    },
+                }
+
+            data, error = await _call_scraper(item, output_mode)
+            if error or not data:
+                return {"url": item, "error": error or "Scrape failed"}
+
+            base_output = {
+                "url": data.get("finalUrl") or item,
+                "title": data.get("title"),
+            }
+            if output_mode == "screenshot":
+                screenshot_base64 = data.get("screenshot", "") or ""
+                if not screenshot_base64:
+                    return {**base_output, "error": "Screenshot missing"}
+                if _estimate_bytes(screenshot_base64) > settings.attachments_max_file_bytes:
+                    return {**base_output, "error": "Screenshot exceeds maximum size"}
+                attachments = [
+                    {
+                        "file_name": "screenshot.png",
+                        "content_type": "image/png",
+                        "data_base64": screenshot_base64,
+                    }
+                ]
+                return {**base_output, "output": "screenshot", "attachments": attachments}
+            markdown = data.get("markdown", "") or ""
+            if len(markdown) > text_limit:
+                markdown = markdown[:text_limit]
+            return {**base_output, "markdown": markdown, "output": "markdown"}
         except Exception as exc:
             logger.warning("web_scrape error url=%s err=%s", item, exc)
             return {"url": item, "error": str(exc)}
 
-    logger.info("web_scrape org_id=%s urls=%s", context.org_id, len(url_list))
-    results = await _run_parallel(url_list, parallel_limit, _scrape_one)
     logger.info(
-        "web_scrape done org_id=%s results=%s",
+        "web_scrape org_id=%s urls=%s output=%s question=%s",
         context.org_id,
-        sum(1 for item in results if isinstance(item, dict) and item.get("markdown")),
+        len(url_list),
+        output_mode,
+        question_text if output_mode == "answer" else "",
+    )
+    results = await _run_parallel(url_list, parallel_limit, _scrape_one)
+    success_count = sum(
+        1
+        for item in results
+        if isinstance(item, dict) and not item.get("error")
+    )
+    logger.info(
+        "web_scrape done org_id=%s output=%s success=%s total=%s",
+        context.org_id,
+        output_mode,
+        success_count,
+        len(results),
     )
     attachments: list[dict[str, Any]] = []
     for item in results:
