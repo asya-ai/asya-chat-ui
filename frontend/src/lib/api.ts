@@ -364,7 +364,15 @@ export const modelApi = {
     supports_image_output?: boolean | null
     reasoning_effort?: string | null
   }) => apiFetch<ChatModel>("/models", { method: "POST", body: JSON.stringify(payload) }),
-  suggestions: () => apiFetch<ModelSuggestionProvider[]>("/models/suggestions"),
+  suggestions: (orgId?: string, invokableOnly = false) => {
+    const params = new URLSearchParams()
+    if (orgId) params.set("org_id", orgId)
+    if (invokableOnly) params.set("invokable_only", "true")
+    const query = params.toString()
+    return apiFetch<ModelSuggestionProvider[]>(
+      query ? `/models/suggestions?${query}` : "/models/suggestions"
+    )
+  },
   remove: (modelId: string) =>
     apiFetch(`/models/${modelId}`, { method: "DELETE" }),
   rename: (modelId: string, displayName: string) =>

@@ -1,4 +1,7 @@
 from uuid import UUID
+import json
+import time
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -8,9 +11,12 @@ from sqlalchemy import func
 from app.api.deps import get_current_user, get_db
 from app.models import ChatModel, Org, OrgModel, OrgMembership, OrgProviderConfig, User
 from app.services.model_suggestions import get_model_suggestions
-from app.services.org_service import require_super_admin
+from app.services.org_service import require_provider_enabled, require_super_admin
+from app.services.providers.registry import get_provider
 
 router = APIRouter(prefix="/models", tags=["models"])
+_VERTEX_INVOCATION_CACHE_TTL_SECONDS = 600
+_VERTEX_INVOCATION_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
 
 
 class ModelCreateRequest(BaseModel):
@@ -76,6 +82,96 @@ def _normalize_reasoning_effort(value: str | None) -> str | None:
     )
 
 
+def _normalize_provider_model_name(provider: str, model_name: str) -> str:
+    value = model_name.strip()
+    if provider in {"gemini", "vertex"}:
+        if value.startswith("publishers/google/models/"):
+            value = value.split("publishers/google/models/", 1)[1]
+        if value.startswith("models/"):
+            value = value.split("models/", 1)[1]
+    return value
+
+
+def _validate_vertex_model_invokable(session: Session, org_id: UUID, model_name: str) -> None:
+    provider_config = require_provider_enabled(session, org_id, "vertex")
+    config: dict = {}
+    if provider_config and provider_config.config_json:
+        try:
+            parsed = json.loads(provider_config.config_json)
+            if isinstance(parsed, dict):
+                config = parsed
+        except Exception:
+            config = {}
+    provider = get_provider(
+        "vertex",
+        api_key=provider_config.api_key_override if provider_config else None,
+        base_url=provider_config.base_url_override if provider_config else None,
+        endpoint=provider_config.endpoint_override if provider_config else None,
+        config=config,
+    )
+    try:
+        provider.client.models.generate_content(
+            model=model_name,
+            contents="ping",
+            config={"max_output_tokens": 1},
+        )
+    except Exception as exc:
+        lowered = str(exc).lower()
+        # Vertex sometimes lists alias names that 404 for generateContent while
+        # the explicit versioned ID works for the same project/region.
+        if (
+            ("404" in lowered or "not_found" in lowered)
+            and not model_name.endswith("-001")
+            and re.match(r"^gemini-2\.\d+-(flash|flash-lite|pro)$", model_name)
+        ):
+            suggested_model = f"{model_name}-001"
+            try:
+                provider.client.models.generate_content(
+                    model=suggested_model,
+                    contents="ping",
+                    config={"max_output_tokens": 1},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Vertex rejected this alias in your project/region. "
+                        f"Use `{suggested_model}` instead."
+                    ),
+                ) from exc
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        detail = str(exc)
+        if len(detail) > 400:
+            detail = f"{detail[:400]}..."
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Vertex model is not invokable for this org/project/region: {detail}",
+        ) from exc
+
+
+def _is_vertex_model_invokable(session: Session, org_id: UUID, model_name: str) -> bool:
+    cache_key = (str(org_id), model_name)
+    cached = _VERTEX_INVOCATION_CACHE.get(cache_key)
+    now = time.time()
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        _validate_vertex_model_invokable(session, org_id, model_name)
+        _VERTEX_INVOCATION_CACHE[cache_key] = (
+            True,
+            now + _VERTEX_INVOCATION_CACHE_TTL_SECONDS,
+        )
+        return True
+    except HTTPException:
+        _VERTEX_INVOCATION_CACHE[cache_key] = (
+            False,
+            now + _VERTEX_INVOCATION_CACHE_TTL_SECONDS,
+        )
+        return False
+
+
 @router.post("", response_model=ModelRead)
 def create_model(
     payload: ModelCreateRequest,
@@ -85,9 +181,25 @@ def create_model(
     require_super_admin(current_user)
 
     max_order = session.exec(select(func.max(ChatModel.display_order))).first() or 0
+    normalized_model_name = _normalize_provider_model_name(
+        payload.provider, payload.model_name
+    )
+    if payload.provider == "vertex":
+        try:
+            org_uuid = UUID(payload.org_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+            ) from exc
+        org = session.exec(select(Org).where(Org.id == org_uuid)).first()
+        if not org:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Org not found"
+            )
+        _validate_vertex_model_invokable(session, org_uuid, normalized_model_name)
     model = ChatModel(
         provider=payload.provider,
-        model_name=payload.model_name,
+        model_name=normalized_model_name,
         display_name=payload.display_name,
         is_active=payload.is_active,
         display_order=max_order + 1,
@@ -195,10 +307,38 @@ def list_models(
 
 @router.get("/suggestions", response_model=list[ModelSuggestionProvider])
 def list_model_suggestions(
+    org_id: str | None = None,
+    invokable_only: bool = False,
+    session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ModelSuggestionProvider]:
     require_super_admin(current_user)
-    return get_model_suggestions()
+    suggestions = get_model_suggestions()
+    if not invokable_only or not org_id:
+        return suggestions
+    try:
+        org_uuid = UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    org = session.exec(select(Org).where(Org.id == org_uuid)).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    for provider in suggestions:
+        if provider.get("provider") != "vertex":
+            continue
+        models = provider.get("models", [])
+        if not isinstance(models, list):
+            continue
+        provider["models"] = [
+            model
+            for model in models
+            if isinstance(model, dict)
+            and isinstance(model.get("model_name"), str)
+            and _is_vertex_model_invokable(session, org_uuid, model["model_name"])
+        ]
+    return suggestions
 
 
 @router.delete("/{model_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)

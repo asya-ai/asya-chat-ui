@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import importlib
+import os
 import urllib.request
 from typing import Iterable
 
@@ -12,7 +14,23 @@ from openai import OpenAI
 from app.core.config import settings
 
 
+_VERTEX_KNOWN_GEMINI_MODELS = (
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite-001",
+)
+
+
 def _normalize_gemini_name(name: str) -> str:
+    if name.startswith("publishers/google/models/"):
+        return name.split("publishers/google/models/", 1)[1]
     if name.startswith("models/"):
         return name.split("/", 1)[1]
     return name
@@ -33,6 +51,88 @@ def _infer_image_support(model_name: str) -> tuple[bool | None, bool | None]:
     if "image" in lowered or "vision" in lowered:
         return True, "image" in lowered
     return None, None
+
+
+def _extract_vertex_project(config: dict[str, object]) -> str | None:
+    value = config.get("project") or config.get("project_id") or config.get("projectId")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_vertex_location(config: dict[str, object]) -> str | None:
+    value = (
+        config.get("location")
+        or config.get("region")
+        or config.get("vertex_location")
+        or config.get("vertexLocation")
+    )
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_vertex_credentials_info(config: dict[str, object]) -> dict[str, object] | None:
+    for key in (
+        "credentials",
+        "credentials_json",
+        "service_account",
+        "service_account_json",
+        "serviceAccount",
+        "serviceAccountJson",
+    ):
+        value = config.get(key)
+        if isinstance(value, dict) and value:
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict) and parsed:
+                return parsed
+    if (
+        config.get("type") == "service_account"
+        and config.get("client_email")
+        and config.get("private_key")
+    ):
+        return config
+    return None
+
+
+def _extract_vertex_credentials_file(config: dict[str, object]) -> str | None:
+    value = (
+        config.get("credentials_file")
+        or config.get("service_account_file")
+        or config.get("credentials_path")
+        or config.get("google_application_credentials")
+        or config.get("googleApplicationCredentials")
+    )
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_vertex_scopes(config: dict[str, object]) -> list[str]:
+    value = (
+        config.get("scopes")
+        or config.get("scope")
+        or config.get("auth_scopes")
+        or config.get("authScopes")
+    )
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if "," in text:
+            return [item.strip() for item in text.split(",") if item.strip()]
+        return [text]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
 
 
 def _openai_models() -> tuple[list[dict[str, object]], str | None]:
@@ -230,52 +330,100 @@ def _openrouter_models() -> tuple[list[dict[str, object]], str | None]:
 
 
 def _vertex_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.google_vertex_project or not settings.google_vertex_location:
-        return [], "GOOGLE_VERTEX_PROJECT or GOOGLE_VERTEX_LOCATION not set"
+    vertex_config: dict[str, object] = {}
+    if settings.gemini_vertex_json:
+        try:
+            parsed = json.loads(settings.gemini_vertex_json)
+            if isinstance(parsed, dict):
+                vertex_config = parsed
+        except Exception:
+            vertex_config = {}
+
+    project = _extract_vertex_project(vertex_config) or settings.google_vertex_project
+    location = _extract_vertex_location(vertex_config) or settings.google_vertex_location
+    credentials_info = _extract_vertex_credentials_info(vertex_config)
+    credentials_file = _extract_vertex_credentials_file(vertex_config)
+    scopes = _extract_vertex_scopes(vertex_config) or [
+        "https://www.googleapis.com/auth/cloud-platform"
+    ]
+    if not project or not location:
+        return [], "Vertex project/location not set (GOOGLE_VERTEX_* or GEMINI_VERTEX_JSON)"
     try:
-        # Vertex AI uses the same google.genai client but initialized with vertexai=True
-        # However, the current google-genai package supports vertex via common initialization
-        # or specific vertexai client. Let's try standard genai client configured for vertex.
-        # But wait, standard genai client (google.genai.Client) usually defaults to AI Studio.
-        # For Vertex, we need to pass project and location.
-        client = genai.Client(
-            vertexai=True,
-            project=settings.google_vertex_project,
-            location=settings.google_vertex_location,
-        )
+        client_kwargs: dict[str, object] = {
+            "vertexai": True,
+            "project": project,
+            "location": location,
+        }
+        if credentials_file:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
+        if credentials_info:
+            service_account = None
+            try:
+                service_account = importlib.import_module("google.oauth2.service_account")
+            except Exception:
+                service_account = None
+            if service_account is not None:
+                credentials = service_account.Credentials.from_service_account_info(
+                    credentials_info
+                )
+                client_kwargs["credentials"] = credentials.with_scopes(scopes)
+        client = genai.Client(**client_kwargs)
         items = []
-        # Vertex models list might differ.
         for model in client.models.list():
-             name = _normalize_gemini_name(getattr(model, "name", "") or "")
-             if not name:
-                 continue
-             display_name = getattr(model, "display_name", None) or name
-             input_modalities = _detect_modalities(
-                 getattr(model, "input_modalities", None)
-                 or getattr(model, "supported_input_modalities", None)
-             )
-             output_modalities = _detect_modalities(
-                 getattr(model, "output_modalities", None)
-                 or getattr(model, "supported_output_modalities", None)
-             )
-             supports_image_input = "image" in input_modalities if input_modalities else None
-             supports_image_output = (
-                 "image" in output_modalities if output_modalities else None
-             )
-             inferred_input, inferred_output = _infer_image_support(name)
-             if supports_image_input is None:
-                 supports_image_input = inferred_input
-             if supports_image_output is None:
-                 supports_image_output = inferred_output
-             items.append(
-                 {
-                     "model_name": name,
-                     "display_name": display_name,
-                     "context_length": getattr(model, "input_token_limit", None),
-                     "supports_image_input": supports_image_input,
-                     "supports_image_output": supports_image_output,
-                 }
-             )
+            name = _normalize_gemini_name(getattr(model, "name", "") or "")
+            if not name:
+                continue
+            supported_methods = _detect_modalities(
+                getattr(model, "supported_generation_methods", None)
+                or getattr(model, "supportedGenerationMethods", None)
+            )
+            if supported_methods and "generateContent" not in supported_methods:
+                continue
+            display_name = getattr(model, "display_name", None) or name
+            input_modalities = _detect_modalities(
+                getattr(model, "input_modalities", None)
+                or getattr(model, "supported_input_modalities", None)
+            )
+            output_modalities = _detect_modalities(
+                getattr(model, "output_modalities", None)
+                or getattr(model, "supported_output_modalities", None)
+            )
+            supports_image_input = (
+                "image" in input_modalities if input_modalities else None
+            )
+            supports_image_output = (
+                "image" in output_modalities if output_modalities else None
+            )
+            inferred_input, inferred_output = _infer_image_support(name)
+            if supports_image_input is None:
+                supports_image_input = inferred_input
+            if supports_image_output is None:
+                supports_image_output = inferred_output
+            items.append(
+                {
+                    "model_name": name,
+                    "display_name": display_name,
+                    "context_length": getattr(model, "input_token_limit", None),
+                    "supports_image_input": supports_image_input,
+                    "supports_image_output": supports_image_output,
+                }
+            )
+        # Vertex publisher listing can lag/omit some Gemini IDs despite docs availability.
+        # Add known core Gemini IDs as fallback discoverability options.
+        existing_names = {str(item.get("model_name", "")) for item in items}
+        for model_name in _VERTEX_KNOWN_GEMINI_MODELS:
+            if model_name in existing_names:
+                continue
+            inferred_input, inferred_output = _infer_image_support(model_name)
+            items.append(
+                {
+                    "model_name": model_name,
+                    "display_name": model_name,
+                    "context_length": None,
+                    "supports_image_input": inferred_input,
+                    "supports_image_output": inferred_output,
+                }
+            )
         return items, None
     except Exception as exc:  # pragma: no cover - external API call
         return [], f"Vertex error: {exc}"

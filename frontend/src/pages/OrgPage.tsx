@@ -8,7 +8,6 @@ import { SettingsShell } from "@/components/SettingsShell"
 import type {
   ChatModel,
   Invite,
-  ModelSuggestionProvider,
   Org,
   OrgAuthSettings,
   OrgMember,
@@ -80,7 +79,6 @@ export const OrgPage = () => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState("")
-  const [suggestions, setSuggestions] = useState<ModelSuggestionProvider[]>([])
   const [error, setError] = useState<string | null>(null)
   const [renameOrgId, setRenameOrgId] = useState<string | null>(null)
   const [renameOrgName, setRenameOrgName] = useState("")
@@ -203,14 +201,6 @@ export const OrgPage = () => {
       setActiveSection("orgs")
     }
   }, [location.pathname, isSuperAdmin])
-
-  useEffect(() => {
-    if (!isSuperAdmin) return
-    modelApi
-      .suggestions()
-      .then(setSuggestions)
-      .catch(() => setSuggestions([]))
-  }, [isSuperAdmin])
 
   useEffect(() => {
     if (!selectedOrg) return
@@ -443,15 +433,14 @@ export const OrgPage = () => {
 
   const createModel = async () => {
     if (!selectedOrg) return
-    const matched = modelOptions.find((model) => model.model_name === modelName)
     const model = await modelApi.create({
       org_id: selectedOrg,
       provider: modelProvider,
       model_name: modelName,
       display_name: modelDisplayName || modelName,
-      context_length: matched?.context_length ?? null,
-      supports_image_input: matched?.supports_image_input ?? null,
-      supports_image_output: matched?.supports_image_output ?? null,
+      context_length: null,
+      supports_image_input: null,
+      supports_image_output: null,
       reasoning_effort: modelReasoningEffort,
       is_active: true,
     })
@@ -555,11 +544,6 @@ export const OrgPage = () => {
         return t("org_reasoning_none")
     }
   }
-
-  const modelOptions = useMemo(
-    () => suggestions.find((provider) => provider.provider === modelProvider)?.models ?? [],
-    [modelProvider, suggestions]
-  )
 
   const sectionTitle = useMemo(() => {
     switch (activeSection) {
@@ -815,15 +799,15 @@ export const OrgPage = () => {
                   {orgs.map((org) => (
                     <div
                       key={org.id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2"
+                      className="flex flex-wrap justify-between items-center gap-3 px-3 py-2 border rounded-md"
                     >
                       <div>
                         <p className="font-medium">{org.name}</p>
-                        <p className="text-xs text-muted-foreground">{org.id}</p>
+                        <p className="text-muted-foreground text-xs">{org.id}</p>
                         {!org.is_active ? (
-                          <p className="text-xs text-red-500">{t("org_deleted")}</p>
+                          <p className="text-red-500 text-xs">{t("org_deleted")}</p>
                         ) : org.is_frozen ? (
-                          <p className="text-xs text-amber-500">{t("org_frozen")}</p>
+                          <p className="text-amber-500 text-xs">{t("org_frozen")}</p>
                         ) : null}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -848,7 +832,7 @@ export const OrgPage = () => {
                     </div>
                   ))}
                   {orgs.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t("org_no_orgs")}</p>
+                    <p className="text-muted-foreground text-sm">{t("org_no_orgs")}</p>
                   ) : null}
                 </CardContent>
               </Card>
@@ -897,11 +881,11 @@ export const OrgPage = () => {
                     </Button>
                   </div>
                   {isSuperAdmin ? (
-                    <div className="w-full overflow-x-auto rounded-md border">
+                    <div className="border rounded-md w-full overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="sticky left-0 z-10 bg-card min-w-56">
+                            <TableHead className="left-0 z-10 sticky bg-card min-w-56">
                               {t("org_settings")}
                             </TableHead>
                             {orgs.map((org) => (
@@ -914,7 +898,7 @@ export const OrgPage = () => {
                         <TableBody>
                           {orgSettingsRows.map((row) => (
                             <TableRow key={`web-settings-row-${row.key}`}>
-                              <TableCell className="sticky left-0 z-10 bg-card text-sm font-medium">
+                              <TableCell className="left-0 z-10 sticky bg-card font-medium text-sm">
                                 {row.label}
                               </TableCell>
                               {orgs.map((org) => {
@@ -924,7 +908,7 @@ export const OrgPage = () => {
                                   return (
                                     <TableCell
                                       key={`web-settings-cell-${row.key}-${org.id}`}
-                                      className="text-xs text-muted-foreground"
+                                      className="text-muted-foreground text-xs"
                                     >
                                       -
                                     </TableCell>
@@ -991,11 +975,11 @@ export const OrgPage = () => {
                       </Table>
                     </div>
                   ) : webSettings ? (
-                    <div className="rounded-md border p-4 space-y-4">
-                      <div className="flex items-center justify-between">
+                    <div className="space-y-4 p-4 border rounded-md">
+                      <div className="flex justify-between items-center">
                         <div>
-                          <p className="text-sm font-medium">{t("org_web_search")}</p>
-                          <p className="text-xs text-muted-foreground">
+                          <p className="font-medium text-sm">{t("org_web_search")}</p>
+                          <p className="text-muted-foreground text-xs">
                             {t("org_web_search_desc")}
                           </p>
                         </div>
@@ -1007,10 +991,10 @@ export const OrgPage = () => {
                           disabled={!canManageOrgSettings}
                         />
                       </div>
-                      <div className="flex items-center justify-between">
+                      <div className="flex justify-between items-center">
                         <div>
-                          <p className="text-sm font-medium">{t("org_web_scrape")}</p>
-                          <p className="text-xs text-muted-foreground">
+                          <p className="font-medium text-sm">{t("org_web_scrape")}</p>
+                          <p className="text-muted-foreground text-xs">
                             {t("org_web_scrape_desc")}
                           </p>
                         </div>
@@ -1022,17 +1006,17 @@ export const OrgPage = () => {
                           disabled={!canManageOrgSettings}
                         />
                       </div>
-                      <div className="border-t pt-3 space-y-3">
-                        <p className="text-sm font-semibold">{t("org_grounding")}</p>
-                        <p className="text-xs text-muted-foreground">
+                      <div className="space-y-3 pt-3 border-t">
+                        <p className="font-semibold text-sm">{t("org_grounding")}</p>
+                        <p className="text-muted-foreground text-xs">
                           {t("org_grounding_warning")}
                         </p>
-                        <div className="flex items-center justify-between">
+                        <div className="flex justify-between items-center">
                           <div>
-                            <p className="text-sm font-medium">
+                            <p className="font-medium text-sm">
                               {t("org_grounding_openai")}
                             </p>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-muted-foreground text-xs">
                               {t("org_grounding_openai_desc")}
                             </p>
                           </div>
@@ -1044,12 +1028,12 @@ export const OrgPage = () => {
                             disabled={!canManageOrgSettings}
                           />
                         </div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex justify-between items-center">
                           <div>
-                            <p className="text-sm font-medium">
+                            <p className="font-medium text-sm">
                               {t("org_grounding_gemini")}
                             </p>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-muted-foreground text-xs">
                               {t("org_grounding_gemini_desc")}
                             </p>
                           </div>
@@ -1062,16 +1046,16 @@ export const OrgPage = () => {
                           />
                         </div>
                       </div>
-                      <div className="border-t pt-3 space-y-3">
-                        <p className="text-sm font-semibold">
+                      <div className="space-y-3 pt-3 border-t">
+                        <p className="font-semibold text-sm">
                           {t("org_code_execution")}
                         </p>
-                        <div className="flex items-center justify-between">
+                        <div className="flex justify-between items-center">
                           <div>
-                            <p className="text-sm font-medium">
+                            <p className="font-medium text-sm">
                               {t("org_code_execution_allow")}
                             </p>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-muted-foreground text-xs">
                               {t("org_code_execution_desc")}
                             </p>
                           </div>
@@ -1100,12 +1084,12 @@ export const OrgPage = () => {
                             </SelectContent>
                           </Select>
                         </div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex justify-between items-center">
                           <div>
-                            <p className="text-sm font-medium">
+                            <p className="font-medium text-sm">
                               {t("org_code_execution_network")}
                             </p>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-muted-foreground text-xs">
                               {t("org_code_execution_network_desc")}
                             </p>
                           </div>
@@ -1245,7 +1229,7 @@ export const OrgPage = () => {
                     <TableRow>
                       <TableCell
                         colSpan={isSuperAdmin ? 4 : 3}
-                        className="text-sm text-muted-foreground"
+                        className="text-muted-foreground text-sm"
                       >
                         {t("org_users_no_members")}
                       </TableCell>
@@ -1267,26 +1251,23 @@ export const OrgPage = () => {
                 <CardContent className="space-y-4">
                   {isSuperAdmin ? (
                     <>
-                      <div className="grid gap-3 md:grid-cols-4">
-                        <Input
-                          placeholder={t("org_models_provider_placeholder")}
-                          value={modelProvider}
-                          onChange={(event) => setModelProvider(event.target.value)}
-                          list="provider-options"
-                        />
+                      <div className="gap-3 grid md:grid-cols-4">
+                        <Select value={modelProvider} onValueChange={setModelProvider}>
+                          <SelectTrigger>
+                            <SelectValue placeholder={t("org_models_provider_placeholder")} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {providerOptions.map((provider) => (
+                              <SelectItem key={provider} value={provider}>
+                                {provider}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                         <Input
                           placeholder={t("org_models_name_placeholder")}
                           value={modelName}
-                          onChange={(event) => {
-                            const next = event.target.value
-                            setModelName(next)
-                            const match = modelOptions.find((model) => model.model_name === next)
-                            if (match) {
-                              setModelDisplayName(match.display_name)
-                              setModelReasoningEffort(match.reasoning_effort ?? "none")
-                            }
-                          }}
-                          list="model-options"
+                          onChange={(event) => setModelName(event.target.value)}
                         />
                         <Input
                           placeholder={t("org_models_display_placeholder")}
@@ -1309,16 +1290,6 @@ export const OrgPage = () => {
                           </SelectContent>
                         </Select>
                       </div>
-                      <datalist id="provider-options">
-                        {providerOptions.map((provider) => (
-                          <option key={provider} value={provider} />
-                        ))}
-                      </datalist>
-                      <datalist id="model-options">
-                        {modelOptions.map((model) => (
-                          <option key={model.model_name} value={model.model_name} />
-                        ))}
-                      </datalist>
                       <div className="flex flex-wrap items-center gap-2">
                         <Button onClick={createModel} disabled={!selectedOrg || !modelName.trim()}>
                           {t("org_models_add")}
@@ -1330,7 +1301,7 @@ export const OrgPage = () => {
                     {orderedModels.map((model, index) => (
                       <div
                         key={model.id}
-                        className="flex items-center justify-between rounded-md border px-3 py-2"
+                        className="flex justify-between items-center px-3 py-2 border rounded-md"
                       >
                         <div>
                           {editingModelId === model.id ? (
@@ -1341,15 +1312,15 @@ export const OrgPage = () => {
                             />
                           ) : (
                             <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium">{model.display_name}</p>
+                              <p className="font-medium text-sm">{model.display_name}</p>
                               {isImageModel(model) ? (
-                                <Image className="h-4 w-4 text-muted-foreground" />
+                                <Image className="w-4 h-4 text-muted-foreground" />
                               ) : isEmbeddingModel(model) ? (
-                                <Database className="h-4 w-4 text-muted-foreground" />
+                                <Database className="w-4 h-4 text-muted-foreground" />
                               ) : null}
                             </div>
                           )}
-                          <p className="text-xs text-muted-foreground">
+                          <p className="text-muted-foreground text-xs">
                             {model.provider} · {model.model_name}
                           </p>
                         </div>
@@ -1359,27 +1330,27 @@ export const OrgPage = () => {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8"
+                                className="w-8 h-8"
                                 onClick={() => moveModel(model.id, -1)}
                                 disabled={index === 0}
                               >
-                                <ArrowUp className="h-4 w-4" />
+                                <ArrowUp className="w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8"
+                                className="w-8 h-8"
                                 onClick={() => moveModel(model.id, 1)}
                                 disabled={index === orderedModels.length - 1}
                               >
-                                <ArrowDown className="h-4 w-4" />
+                                <ArrowDown className="w-4 h-4" />
                               </Button>
                             </div>
                             <Select
                               value={model.reasoning_effort ?? "none"}
                               onValueChange={(value) => updateReasoningEffort(model.id, value)}
                             >
-                              <SelectTrigger className="h-8 w-28">
+                              <SelectTrigger className="w-28 h-8">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -1426,7 +1397,7 @@ export const OrgPage = () => {
                       </div>
                     ))}
                       {orderedModels.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-muted-foreground text-sm">
                         {t("org_models_no_models")}
                       </p>
                     ) : null}
@@ -1442,11 +1413,11 @@ export const OrgPage = () => {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {orgs.length > 0 ? (
-                    <div className="w-full overflow-x-auto rounded-md border">
+                    <div className="border rounded-md w-full overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="sticky left-0 z-10 bg-card min-w-64">
+                            <TableHead className="left-0 z-10 sticky bg-card min-w-64">
                               {t("usage_model")}
                             </TableHead>
                             {orgs.map((org) => (
@@ -1459,16 +1430,16 @@ export const OrgPage = () => {
                         <TableBody>
                           {orderedModels.map((model) => (
                             <TableRow key={`access-${model.id}`}>
-                              <TableCell className="sticky left-0 z-10 bg-card">
+                              <TableCell className="left-0 z-10 sticky bg-card">
                                 <div className="flex items-center gap-2">
-                                  <p className="text-sm font-medium">{model.display_name}</p>
+                                  <p className="font-medium text-sm">{model.display_name}</p>
                                   {isImageModel(model) ? (
-                                    <Image className="h-4 w-4 text-muted-foreground" />
+                                    <Image className="w-4 h-4 text-muted-foreground" />
                                   ) : isEmbeddingModel(model) ? (
-                                    <Database className="h-4 w-4 text-muted-foreground" />
+                                    <Database className="w-4 h-4 text-muted-foreground" />
                                   ) : null}
                                 </div>
-                                <p className="text-xs text-muted-foreground">
+                                <p className="text-muted-foreground text-xs">
                                   {model.provider} · {model.model_name}
                                 </p>
                               </TableCell>
@@ -1479,7 +1450,7 @@ export const OrgPage = () => {
                                   <TableCell key={key} className="text-center">
                                     <input
                                       type="checkbox"
-                                      className="h-4 w-4 accent-primary"
+                                      className="w-4 h-4 accent-primary"
                                       checked={enabled}
                                       onChange={() => toggleModelAccess(org.id, model.id)}
                                       disabled={Boolean(updatingAccess[key]) || !org.is_active}
@@ -1493,7 +1464,7 @@ export const OrgPage = () => {
                             <TableRow>
                               <TableCell
                                 colSpan={Math.max(orgs.length + 1, 2)}
-                                className="text-xs text-muted-foreground"
+                                className="text-muted-foreground text-xs"
                               >
                                 {t("org_models_no_access")}
                               </TableCell>
@@ -1514,15 +1485,15 @@ export const OrgPage = () => {
           <DialogHeader>
             <DialogTitle>{t("org_auth_settings")}</DialogTitle>
           </DialogHeader>
-          <div className="rounded-md border p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold">{t("org_auth_settings")}</p>
+          <div className="space-y-3 p-4 border rounded-md">
+            <div className="flex justify-between items-center">
+              <p className="font-semibold text-sm">{t("org_auth_settings")}</p>
               <Switch
                 checked={authSettings?.oidc_enabled ?? false}
                 onCheckedChange={(value) => updateAuthField("oidc_enabled", value)}
               />
             </div>
-            <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+            <div className="px-3 py-2 border rounded-md text-muted-foreground text-xs">
               <span className="font-semibold text-foreground">
                 {t("org_auth_redirect_url")}:
               </span>{" "}
@@ -1549,7 +1520,7 @@ export const OrgPage = () => {
               value={authSecret}
               onChange={(event) => setAuthSecret(event.target.value)}
             />
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="gap-3 grid md:grid-cols-2">
               <Input
                 placeholder={t("org_auth_oidc_scopes")}
                 value={authSettings?.oidc_scopes ?? ""}
@@ -1575,8 +1546,8 @@ export const OrgPage = () => {
                 }
               />
             </div>
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium">{t("org_auth_oidc_auto_create")}</p>
+            <div className="flex justify-between items-center">
+              <p className="font-medium text-sm">{t("org_auth_oidc_auto_create")}</p>
               <Switch
                 checked={authSettings?.oidc_auto_create_users ?? false}
                 onCheckedChange={(value) =>
@@ -1601,9 +1572,9 @@ export const OrgPage = () => {
           </DialogHeader>
           <div className="space-y-4">
             {providerConfigs.map((config) => (
-              <div key={config.provider} className="rounded-md border p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold">{config.provider}</p>
+              <div key={config.provider} className="space-y-3 p-4 border rounded-md">
+                <div className="flex justify-between items-center">
+                  <p className="font-semibold text-sm">{config.provider}</p>
                   <Select
                     value={config.mode}
                     onValueChange={(value) =>
@@ -1655,7 +1626,7 @@ export const OrgPage = () => {
                             event.target.value
                           )
                         }
-                        className="font-mono text-xs h-24"
+                        className="h-24 font-mono text-xs"
                       />
                     ) : config.provider === "azure" ? (
                       <Input
@@ -1692,7 +1663,7 @@ export const OrgPage = () => {
               </div>
             ))}
             {providerConfigs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("org_provider_none")}</p>
+              <p className="text-muted-foreground text-sm">{t("org_provider_none")}</p>
             ) : null}
           </div>
         </DialogContent>

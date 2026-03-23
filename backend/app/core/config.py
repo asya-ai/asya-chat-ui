@@ -22,7 +22,7 @@ class Settings(BaseSettings):
         default="chatui-python-exec:latest", validation_alias="EXEC_DOCKER_IMAGE"
     )
     exec_timeout_seconds: int = Field(
-        default=20, validation_alias="EXEC_TIMEOUT_SECONDS"
+        default=120, validation_alias="EXEC_TIMEOUT_SECONDS"
     )
     exec_max_output_bytes: int = Field(
         default=20000, validation_alias="EXEC_MAX_OUTPUT_BYTES"

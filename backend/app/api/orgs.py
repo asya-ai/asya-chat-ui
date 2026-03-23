@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -137,7 +139,15 @@ def _has_global_config(provider: str) -> bool:
         case "openrouter":
             return bool(settings.openrouter_api_key)
         case "vertex":
-            return bool(settings.google_vertex_project and settings.google_vertex_location)
+            if settings.google_vertex_project and settings.google_vertex_location:
+                return True
+            try:
+                parsed = json.loads(settings.gemini_vertex_json or "{}")
+            except Exception:
+                return False
+            if not isinstance(parsed, dict):
+                return False
+            return bool(parsed.get("project") and parsed.get("location"))
         case _:
             return False
 
