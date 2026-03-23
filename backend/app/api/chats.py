@@ -51,6 +51,7 @@ from app.services.tools.code_execution import (
 )
 from app.services.tools.registry import ToolRegistry, ToolSpec, ToolResult
 from app.services.tools.time_tool import TimeToolContext, get_time
+from app.services.tools.pdf_tool import PdfToolContext, extract_pdf
 from app.services.tools.web_tools import (
     WebToolContext,
     download_attachments,
@@ -325,6 +326,56 @@ def _build_tool_registry(
         ),
         _time_handler,
     )
+    async def _extract_pdf_handler(args: dict) -> object:
+        if not chat_id:
+            return ToolResult(
+                name="extract_pdf",
+                output={"error": "No active chat context for PDF extraction."},
+            )
+        return await extract_pdf(
+            PdfToolContext(session=session, chat_id=str(chat_id)),
+            attachment_id=args.get("attachment_id"),
+            file_name=args.get("file_name"),
+            page=args.get("page"),
+            page_from=args.get("page_from"),
+            page_to=args.get("page_to"),
+        )
+
+    registry.register(
+        ToolSpec(
+            name="extract_pdf",
+            description=(
+                "Extract text from a PDF attachment by page number or page range. "
+                "Always returns total page_count so you can plan next calls."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "Optional specific PDF attachment id from this chat",
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Optional PDF file name match from this chat",
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "1-based page number to extract",
+                    },
+                    "page_from": {
+                        "type": "integer",
+                        "description": "1-based start page for a range",
+                    },
+                    "page_to": {
+                        "type": "integer",
+                        "description": "1-based end page for a range",
+                    },
+                },
+            },
+        ),
+        _extract_pdf_handler,
+    )
     if web_tools_enabled and web_search_enabled:
         async def _search_handler(args: dict) -> object:
             return await web_search(
@@ -592,6 +643,22 @@ def _tool_call_input_preview(name: str, arguments: dict[str, Any]) -> str:
     if name == "download_attachments":
         urls = _ensure_list(arguments.get("urls")) or _ensure_list(arguments.get("url"))
         return f"urls: {', '.join(urls[:3])}" if urls else "urls: (empty)"
+    if name == "extract_pdf":
+        attachment_id = str(arguments.get("attachment_id") or "").strip()
+        file_name = str(arguments.get("file_name") or "").strip()
+        page = arguments.get("page")
+        page_from = arguments.get("page_from")
+        page_to = arguments.get("page_to")
+        target = (
+            f"attachment_id: {attachment_id}"
+            if attachment_id
+            else (f"file: {file_name}" if file_name else "latest PDF")
+        )
+        if isinstance(page, int):
+            return f"{target}; page: {page}"
+        if isinstance(page_from, int) or isinstance(page_to, int):
+            return f"{target}; range: {page_from or 1}..{page_to or page_from or 1}"
+        return f"{target}; page selection missing"
     if name == "code_execution":
         language = str(arguments.get("language") or "python").strip() or "python"
         code = str(arguments.get("code") or "").strip()
@@ -643,6 +710,12 @@ def _tool_call_output_preview(name: str, output: dict[str, Any]) -> str:
                 else:
                     files += 1
         return f"files: {files}, failed: {failures}"
+    if name == "extract_pdf":
+        page_count = output.get("page_count")
+        selected = output.get("selected_pages")
+        if isinstance(selected, list) and selected:
+            return f"page_count: {page_count}, extracted: {len(selected)} page(s)"
+        return f"page_count: {page_count}"
     if name == "code_execution":
         if output.get("requires_approval"):
             return "requires approval"
@@ -1072,6 +1145,8 @@ async def _run_agentic_loop(
             return ["Reading sources"]
         if name == "download_attachments":
             return ["Downloading attachments"]
+        if name == "extract_pdf":
+            return ["Extracting PDF pages"]
         if name == "generate_image":
             return ["Generating image"]
         if name == "edit_image":

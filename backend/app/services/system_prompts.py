@@ -17,6 +17,11 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "claim you cannot access Python or files. Use real tool calls (not plain-text pseudo "
         "calls). Uploaded files are available under /inputs with the listed filenames."
     ),
+    "extract_pdf": (
+        "Use extract_pdf for PDF files in chat attachments. "
+        "Always check page_count first, then request precise page/page ranges before answering. "
+        "Do not guess missing pages."
+    ),
     "web_search": (
         "Use web_search for fresh or uncertain facts. Keep queries focused and minimal."
     ),
@@ -42,6 +47,7 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
 
 TOOL_PROMPT_ORDER = (
     "code_execution",
+    "extract_pdf",
     "web_search",
     "web_scrape",
     "download_attachments",
