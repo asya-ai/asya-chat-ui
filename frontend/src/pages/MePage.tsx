@@ -18,9 +18,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { getTheme, toggleTheme } from "@/lib/theme"
 import type { ApiKey } from "@/lib/types"
-import { modelStore, orgStore } from "@/lib/storage"
+import { modelStore, orgStore, toolCallLogsVisibleStore } from "@/lib/storage"
 
 export const MePage = () => {
   const navigate = useNavigate()
@@ -43,6 +44,9 @@ export const MePage = () => {
   const [apiKeyCreating, setApiKeyCreating] = useState(false)
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
   const [createdKey, setCreatedKey] = useState<string | null>(null)
+  const [showToolCallLogs, setShowToolCallLogs] = useState<boolean>(() => {
+    return toolCallLogsVisibleStore.get() === "1"
+  })
   const hasError = Boolean(error)
 
   useEffect(() => {
@@ -77,6 +81,11 @@ export const MePage = () => {
     orgStore.clear()
     modelStore.clear()
     navigate("/login", { replace: true })
+  }
+
+  const onToggleToolCallLogs = (enabled: boolean) => {
+    setShowToolCallLogs(enabled)
+    toolCallLogsVisibleStore.set(enabled)
   }
 
   const onChangePassword = async () => {
@@ -187,13 +196,31 @@ export const MePage = () => {
           <CardHeader>
             <CardTitle>{t("me_preferences")}</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-3">
-            <LanguageSelect />
-            <Button variant="outline" onClick={onToggleTheme}>
-              {t("theme_label", {
-                theme: theme === "dark" ? t("theme_dark") : t("theme_light"),
-              })}
-            </Button>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <LanguageSelect />
+              <Button variant="outline" onClick={onToggleTheme}>
+                {t("theme_label", {
+                  theme: theme === "dark" ? t("theme_dark") : t("theme_light"),
+                })}
+              </Button>
+            </div>
+            <div className="pt-1 border-t">
+              <label className="flex items-start justify-between gap-4 py-2 cursor-pointer">
+                <div className="space-y-1">
+                  <p className="font-medium text-sm leading-5">
+                    {t("me_show_toolcall_logs")}
+                  </p>
+                  <p className="text-muted-foreground text-xs leading-5">
+                    {t("me_show_toolcall_logs_desc")}
+                  </p>
+                </div>
+                <Switch
+                  checked={showToolCallLogs}
+                  onCheckedChange={onToggleToolCallLogs}
+                />
+              </label>
+            </div>
           </CardContent>
         </Card>
 

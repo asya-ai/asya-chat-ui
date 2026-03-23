@@ -181,8 +181,9 @@ const cleanupDocument = (document) => {
     if (element.tagName === "HTML" || element.tagName === "BODY") continue;
 
     const identityTokens = elementIdentityTokens(element);
+    const blockedByIdentity = hasBlockedWord(identityTokens, config.blockedWords);
     if (
-      hasBlockedWord(identityTokens, config.blockedWords) ||
+      (blockedByIdentity && !hasLikelyContentStructure(element)) ||
       shouldPruneByStructure(element)
     ) {
       removeElement(element);
@@ -194,8 +195,7 @@ const cleanupDocument = (document) => {
       const combined = `${href} ${element.id || ""} ${Array.from(element.classList || []).join(" ")}`;
       const linkTokens = tokenizeValue(combined);
       if (
-        hasBlockedWord(linkTokens, config.blockedLinkWords) ||
-        hasBlockedWord(linkTokens, config.blockedWords)
+        hasBlockedWord(linkTokens, config.blockedLinkWords)
       ) {
         removeElement(element);
       }

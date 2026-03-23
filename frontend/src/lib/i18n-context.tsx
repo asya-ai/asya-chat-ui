@@ -73,6 +73,9 @@ const translations = {
     me_title: "Me",
     me_profile: "Profile",
     me_preferences: "Settings",
+    me_show_toolcall_logs: "Show tool activity in chat",
+    me_show_toolcall_logs_desc:
+      "Display compact tool-call lines above assistant answers.",
     me_security: "Security",
     me_account: "Account",
     me_logout: "Log out",
@@ -329,6 +332,9 @@ const translations = {
     me_title: "Mans profils",
     me_profile: "Profils",
     me_preferences: "Iestatījumi",
+    me_show_toolcall_logs: "Rādīt rīku aktivitāti čatā",
+    me_show_toolcall_logs_desc:
+      "Parāda īsas rindiņas par rīku izsaukumiem virs asistenta atbildēm.",
     me_security: "Drošība",
     me_account: "Konts",
     me_logout: "Izrakstīties",

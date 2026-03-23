@@ -9,6 +9,7 @@ import {
   modelStore,
   orgStore,
   reasoningEffortStore,
+  toolCallLogsVisibleStore,
   webSearchEnabledStore,
 } from "@/lib/storage"
 import type {
@@ -79,6 +80,9 @@ export const ChatPage = () => {
     const stored = codeExecutionEnabledStore.get()
     return stored == null ? true : stored === "1"
   })
+  const [showToolCallLogs, setShowToolCallLogs] = useState<boolean>(() => {
+    return toolCallLogsVisibleStore.get() === "1"
+  })
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -110,17 +114,23 @@ export const ChatPage = () => {
         const existingIndex = prev.findIndex((msg) => {
           if (msg.tool_event?.id !== event.id) return false
           if (taskId && msg.task_id && msg.task_id !== taskId) return false
-          if (msg.tool_event?.type !== "code_execution") return false
-          const output = msg.tool_event.output
-          const hasMaterializedOutput =
-            Boolean(output?.stdout) ||
-            Boolean(output?.stderr) ||
-            Boolean(output?.error) ||
-            Boolean(output?.requires_approval) ||
-            Boolean(output?.timed_out) ||
-            typeof output?.exit_code === "number" ||
-            Boolean(output?.output_files?.length)
-          return !hasMaterializedOutput
+          if (msg.tool_event?.type === "code_execution") {
+            const output = msg.tool_event.output
+            const hasMaterializedOutput =
+              Boolean(output?.stdout) ||
+              Boolean(output?.stderr) ||
+              Boolean(output?.error) ||
+              Boolean(output?.requires_approval) ||
+              Boolean(output?.timed_out) ||
+              typeof output?.exit_code === "number" ||
+              Boolean(output?.output_files?.length)
+            return !hasMaterializedOutput
+          }
+          if (msg.tool_event?.type === "tool_call") {
+            const status = msg.tool_event.output?.status
+            return status !== "ok" && status !== "error"
+          }
+          return false
         })
         if (existingIndex >= 0) {
           const next = [...prev]
@@ -608,7 +618,6 @@ export const ChatPage = () => {
 
   const mergeToolEvents = useCallback(
     (baseMessages: ChatMessage[], toolMessages: ChatMessage[]): ChatMessage[] => {
-      if (toolMessages.length === 0) return baseMessages
       const baseIds = new Set(baseMessages.map((msg) => msg.id))
       const activeTaskIds = new Set(
         baseMessages
@@ -632,7 +641,7 @@ export const ChatPage = () => {
           return !baseToolEventIds.has(toolEventId)
         }),
       ]
-      return merged.sort((a, b) => {
+      return [...merged].sort((a, b) => {
         if (a.task_id && b.task_id && a.task_id === b.task_id) {
           if (a.role === "tool" && b.role === "assistant") return -1
           if (a.role === "assistant" && b.role === "tool") return 1
@@ -766,6 +775,23 @@ export const ChatPage = () => {
   }, [codeExecutionEnabled])
 
   useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "chatui_toolcall_logs_visible") {
+        setShowToolCallLogs(event.newValue === "1")
+      }
+    }
+    const onFocus = () => {
+      setShowToolCallLogs(toolCallLogsVisibleStore.get() === "1")
+    }
+    window.addEventListener("storage", onStorage)
+    window.addEventListener("focus", onFocus)
+    return () => {
+      window.removeEventListener("storage", onStorage)
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!chatId) return
     if (loadingByChat[chatId]) return
     let cancelled = false
@@ -820,8 +846,12 @@ export const ChatPage = () => {
   ])
 
   const visibleMessages = useMemo(
-    () => mergeToolEvents(serverMessages, toolEvents),
-    [mergeToolEvents, serverMessages, toolEvents]
+    () =>
+      mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
+        if (!msg.tool_event || msg.tool_event.type !== "tool_call") return true
+        return showToolCallLogs
+      }),
+    [mergeToolEvents, serverMessages, toolEvents, showToolCallLogs]
   )
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {

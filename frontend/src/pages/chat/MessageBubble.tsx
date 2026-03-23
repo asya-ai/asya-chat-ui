@@ -67,6 +67,7 @@ const MessageBubbleComponent = ({
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
+  const toolCallEvent = msg.tool_event?.type === "tool_call" ? msg.tool_event : null
   const urlAttachmentsEvent =
     msg.tool_event?.type === "url_attachments" ? msg.tool_event : null
   const contextSummaryEvent =
@@ -126,6 +127,8 @@ const MessageBubbleComponent = ({
             >
               {isCodeEvent
                 ? t("chat_executing_code")
+                : toolCallEvent
+                  ? `Tool: ${toolCallEvent.tool_name}`
                 : urlAttachmentsEvent
                   ? "Downloading attachments"
                 : isContextSummaryEvent
@@ -218,6 +221,22 @@ const MessageBubbleComponent = ({
                 </div>
               ) : null}
             </details>
+          ) : toolCallEvent ? (
+            <div className="space-y-1 py-1 text-xs">
+              <div className="opacity-80">
+                {toolCallEvent.input_preview || "Running tool call"}
+              </div>
+              {toolCallEvent.output?.result_preview ? (
+                <div className="text-muted-foreground">
+                  {toolCallEvent.output.result_preview}
+                </div>
+              ) : null}
+              {toolCallEvent.output?.error ? (
+                <div className="text-destructive/90">
+                  Error: {toolCallEvent.output.error}
+                </div>
+              ) : null}
+            </div>
           ) : urlAttachmentsEvent ? (
             <details className="space-y-3">
               <summary className="text-xs uppercase tracking-wide cursor-pointer">

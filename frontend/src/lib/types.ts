@@ -155,10 +155,24 @@ export type UrlAttachmentsToolEvent = {
   } | null
 }
 
+export type ToolCallToolEvent = {
+  type: "tool_call"
+  id?: string
+  tool_name: string
+  state?: "start" | "end" | string
+  input_preview?: string | null
+  output?: {
+    status?: "ok" | "error" | string
+    result_preview?: string | null
+    error?: string | null
+  } | null
+}
+
 export type ToolEvent =
   | CodeExecutionToolEvent
   | ContextSummaryToolEvent
   | UrlAttachmentsToolEvent
+  | ToolCallToolEvent
 
 export type GenerationStatus =
   | "queued"

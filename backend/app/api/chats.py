@@ -573,6 +573,95 @@ def _sanitize_tool_output_for_context(value: object) -> object:
     return value
 
 
+def _tool_call_input_preview(name: str, arguments: dict[str, Any]) -> str:
+    if name == "web_search":
+        queries = _ensure_list(arguments.get("queries")) or _ensure_list(
+            arguments.get("query")
+        )
+        if queries:
+            return f"query: {', '.join(queries[:3])}"
+        return "query: (empty)"
+    if name == "web_scrape":
+        urls = _ensure_list(arguments.get("urls")) or _ensure_list(arguments.get("url"))
+        output = str(arguments.get("output") or "markdown").strip().lower() or "markdown"
+        question = str(arguments.get("question") or "").strip()
+        base = f"urls: {', '.join(urls[:2])}" if urls else "urls: (empty)"
+        if output == "answer" and question:
+            return f"{base}; question: {question[:160]}"
+        return f"{base}; output: {output}"
+    if name == "download_attachments":
+        urls = _ensure_list(arguments.get("urls")) or _ensure_list(arguments.get("url"))
+        return f"urls: {', '.join(urls[:3])}" if urls else "urls: (empty)"
+    if name == "code_execution":
+        language = str(arguments.get("language") or "python").strip() or "python"
+        code = str(arguments.get("code") or "").strip()
+        first_line = code.splitlines()[0][:120] if code else ""
+        return f"{language}: {first_line}" if first_line else f"{language}: (empty code)"
+    if name in {"generate_image", "edit_image"}:
+        prompt = str(arguments.get("prompt") or "").strip()
+        return f"prompt: {prompt[:180]}" if prompt else "prompt: (empty)"
+    if name == "get_time":
+        for key in ("timezone", "city", "country", "latitude", "longitude"):
+            value = arguments.get(key)
+            if value is not None and str(value).strip():
+                return f"{key}: {value}"
+        return "time lookup"
+    keys = ", ".join(sorted(arguments.keys())[:6])
+    return f"args: {keys}" if keys else "no args"
+
+
+def _tool_call_output_preview(name: str, output: dict[str, Any]) -> str:
+    if not isinstance(output, dict):
+        return "completed"
+    if name == "web_search":
+        queries = output.get("queries", []) or []
+        count = 0
+        if isinstance(queries, list):
+            for batch in queries:
+                if isinstance(batch, dict):
+                    count += len(batch.get("results", []) or [])
+        return f"results: {count}"
+    if name == "web_scrape":
+        results = output.get("results", []) or []
+        success = 0
+        failures = 0
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, dict) and item.get("error"):
+                    failures += 1
+                else:
+                    success += 1
+        return f"success: {success}, failed: {failures}"
+    if name == "download_attachments":
+        results = output.get("results", []) or []
+        files = 0
+        failures = 0
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, dict) and item.get("error"):
+                    failures += 1
+                else:
+                    files += 1
+        return f"files: {files}, failed: {failures}"
+    if name == "code_execution":
+        if output.get("requires_approval"):
+            return "requires approval"
+        if output.get("timed_out"):
+            return "timed out"
+        if output.get("error"):
+            return f"error: {str(output.get('error'))[:160]}"
+        exit_code = output.get("exit_code")
+        if isinstance(exit_code, int):
+            return f"exit code: {exit_code}"
+        return "completed"
+    if name in {"generate_image", "edit_image"}:
+        count = output.get("image_count")
+        if isinstance(count, int):
+            return f"images: {count}"
+        return "image generated"
+    return "completed"
+
+
 def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
     text = (content or "").strip()
     if not text:
@@ -1102,6 +1191,19 @@ async def _run_agentic_loop(
                     call.name,
                     list(call.arguments.keys()) if isinstance(call.arguments, dict) else [],
                 )
+                await _emit_tool_event(
+                    {
+                        "type": "tool_call",
+                        "id": f"call:{call.id}",
+                        "tool_name": call.name,
+                        "state": "start",
+                        "input_preview": _tool_call_input_preview(
+                            call.name,
+                            call.arguments if isinstance(call.arguments, dict) else {},
+                        ),
+                        "output": {},
+                    }
+                )
                 labels: list[str] = []
                 if call.name == "web_search":
                     if search_calls >= MAX_WEB_SEARCH_CALLS:
@@ -1245,6 +1347,35 @@ async def _run_agentic_loop(
                         last_tool_error = error_text
                 if result.output.get("requires_approval"):
                     last_tool_error = "Execution requires approval."
+                await _emit_tool_event(
+                    {
+                        "type": "tool_call",
+                        "id": f"call:{call.id}",
+                        "tool_name": call.name,
+                        "state": "end",
+                        "input_preview": _tool_call_input_preview(
+                            call.name,
+                            call.arguments if isinstance(call.arguments, dict) else {},
+                        ),
+                        "output": {
+                            "status": (
+                                "error"
+                                if isinstance(result.output, dict) and result.output.get("error")
+                                else "ok"
+                            ),
+                            "result_preview": _tool_call_output_preview(
+                                call.name,
+                                result.output if isinstance(result.output, dict) else {},
+                            ),
+                            "error": (
+                                str(result.output.get("error"))
+                                if isinstance(result.output, dict)
+                                and result.output.get("error") is not None
+                                else None
+                            ),
+                        },
+                    }
+                )
                 if result.attachments:
                     attachments.extend(result.attachments)
                 if call.name in {"generate_image", "edit_image"}:

@@ -6,6 +6,7 @@ const LOGIN_ORG_KEY = "chatui_login_org"
 const REASONING_EFFORT_KEY = "chatui_reasoning_effort"
 const WEB_SEARCH_ENABLED_KEY = "chatui_web_search_enabled"
 const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
+const TOOLCALL_LOGS_VISIBLE_KEY = "chatui_toolcall_logs_visible"
 
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
@@ -55,4 +56,11 @@ export const codeExecutionEnabledStore = {
   set: (enabled: boolean) =>
     localStorage.setItem(CODE_EXECUTION_ENABLED_KEY, enabled ? "1" : "0"),
   clear: () => localStorage.removeItem(CODE_EXECUTION_ENABLED_KEY),
+}
+
+export const toolCallLogsVisibleStore = {
+  get: () => localStorage.getItem(TOOLCALL_LOGS_VISIBLE_KEY),
+  set: (enabled: boolean) =>
+    localStorage.setItem(TOOLCALL_LOGS_VISIBLE_KEY, enabled ? "1" : "0"),
+  clear: () => localStorage.removeItem(TOOLCALL_LOGS_VISIBLE_KEY),
 }
