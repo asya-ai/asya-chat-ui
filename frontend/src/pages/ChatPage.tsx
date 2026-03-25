@@ -872,6 +872,7 @@ export const ChatPage = () => {
     () =>
       mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
         if (!msg.tool_event || msg.tool_event.type !== "tool_call") return true
+        if (msg.tool_event.tool_name === "code_execution") return false
         return showToolCallLogs
       }),
     [mergeToolEvents, serverMessages, toolEvents, showToolCallLogs]

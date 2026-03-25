@@ -610,9 +610,17 @@ def _image_attachment_metadata(attachment: ChatMessageAttachment) -> str | None:
 
 def _attachment_lines(attachments: list[ChatMessageAttachment]) -> list[str]:
     lines: list[str] = []
-    if attachments:
+    has_non_image = any(
+        not (attachment.content_type or "").lower().startswith("image/")
+        for attachment in attachments
+    )
+    if has_non_image:
         lines.append(
             "Use the code_execution tool to read/analyze these files before answering."
+        )
+    elif attachments:
+        lines.append(
+            "Image metadata is already provided below; avoid code_execution unless deeper pixel-level analysis is required."
         )
     for attachment in attachments:
         metadata = _image_attachment_metadata(attachment)
