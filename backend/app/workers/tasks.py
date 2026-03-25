@@ -143,6 +143,8 @@ def _build_provider_messages(
             for attachment in msg_attachments
             if attachment.content_type.startswith("image/")
         ]
+        # Keep only the latest image per user message to reduce remote fetch pressure.
+        image_attachments = image_attachments[-1:]
         attachment_lines = _attachment_lines(msg_attachments)
         if not image_attachments:
             text = msg.content or ""

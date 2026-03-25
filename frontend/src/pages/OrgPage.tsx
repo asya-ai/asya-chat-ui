@@ -8,6 +8,7 @@ import { SettingsShell } from "@/components/SettingsShell"
 import type {
   ChatModel,
   Invite,
+  ModelSuggestionProvider,
   Org,
   OrgAuthSettings,
   OrgMember,
@@ -68,6 +69,7 @@ export const OrgPage = () => {
   const [modelName, setModelName] = useState("")
   const [modelDisplayName, setModelDisplayName] = useState("")
   const [modelReasoningEffort, setModelReasoningEffort] = useState("none")
+  const [modelSuggestions, setModelSuggestions] = useState<ModelSuggestionProvider[]>([])
   const { t } = useI18n()
   const [selectedOrg, setSelectedOrg] = useState<string | null>(orgStore.get())
   const [orgSettingsId, setOrgSettingsId] = useState<string | null>(orgStore.get())
@@ -88,7 +90,12 @@ export const OrgPage = () => {
     if (model.supports_image_output === true) return true
     if (model.supports_image_output === false) return false
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
-    return name.includes("image")
+    return (
+      name.includes("image") ||
+      name.includes("dall-e") ||
+      name.includes("gpt-image") ||
+      name.includes("imagen")
+    )
   }
 
   const isEmbeddingModel = (model: ChatModel) => {
@@ -210,6 +217,17 @@ export const OrgPage = () => {
       modelApi.list(selectedOrg).then(setModels).catch(() => null)
     }
   }, [selectedOrg, isSuperAdmin])
+
+  useEffect(() => {
+    if (!isSuperAdmin || activeSection !== "models") {
+      setModelSuggestions([])
+      return
+    }
+    modelApi
+      .suggestions(selectedOrg ?? undefined, false)
+      .then(setModelSuggestions)
+      .catch(() => setModelSuggestions([]))
+  }, [activeSection, isSuperAdmin, selectedOrg])
 
   useEffect(() => {
     if (!isSuperAdmin || activeSection !== "models" || orgs.length === 0) {
@@ -530,6 +548,10 @@ export const OrgPage = () => {
   const providerOptions = useMemo(() => {
     return [...PROVIDERS]
   }, [])
+  const currentProviderSuggestions = useMemo(() => {
+    const entry = modelSuggestions.find((item) => item.provider === modelProvider)
+    return entry?.models ?? []
+  }, [modelProvider, modelSuggestions])
 
   const reasoningOptions = ["none", "low", "medium", "high"]
   const reasoningLabel = (value: string) => {
@@ -1267,7 +1289,17 @@ export const OrgPage = () => {
                         <Input
                           placeholder={t("org_models_name_placeholder")}
                           value={modelName}
-                          onChange={(event) => setModelName(event.target.value)}
+                          onChange={(event) => {
+                            const value = event.target.value
+                            setModelName(value)
+                            const match = currentProviderSuggestions.find(
+                              (item) => item.model_name === value
+                            )
+                            if (match && !modelDisplayName.trim()) {
+                              setModelDisplayName(match.display_name || value)
+                            }
+                          }}
+                          list="model-name-suggestions"
                         />
                         <Input
                           placeholder={t("org_models_display_placeholder")}
@@ -1295,6 +1327,13 @@ export const OrgPage = () => {
                           {t("org_models_add")}
                         </Button>
                       </div>
+                      <datalist id="model-name-suggestions">
+                        {currentProviderSuggestions.map((item) => (
+                          <option key={item.model_name} value={item.model_name}>
+                            {item.display_name}
+                          </option>
+                        ))}
+                      </datalist>
                     </>
                   ) : null}
                       <div className="space-y-2">

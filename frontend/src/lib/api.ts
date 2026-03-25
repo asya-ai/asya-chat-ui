@@ -400,6 +400,24 @@ export const chatApi = {
   list: (orgId: string) => apiFetch<Chat[]>(`/chats?org_id=${orgId}`),
   create: (payload: { org_id: string; model_id?: string; title?: string }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
+  uploadAttachment: (
+    chatId: string,
+    payload: {
+      file_name: string
+      content_type: string
+      data_base64: string
+    }
+  ) =>
+    apiFetch<{
+      id: string
+      file_name: string
+      content_type: string
+      size_bytes: number
+      created_at: string
+    }>(`/chats/${chatId}/uploads`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),
   messages: (chatId: string) => apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`),

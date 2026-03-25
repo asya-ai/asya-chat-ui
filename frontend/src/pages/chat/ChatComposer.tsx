@@ -18,6 +18,7 @@ type ChatComposerProps = {
   loading: boolean
   isDragActive: boolean
   pendingAttachments: ChatMessageAttachmentInput[]
+  attachmentError?: string | null
   reasoningEffort: string | null
   webSearchEnabled: boolean
   codeExecutionEnabled: boolean
@@ -46,6 +47,7 @@ export const ChatComposer = ({
   loading,
   isDragActive,
   pendingAttachments,
+  attachmentError,
   reasoningEffort,
   webSearchEnabled,
   codeExecutionEnabled,
@@ -123,6 +125,9 @@ export const ChatComposer = ({
           className="max-h-48 overflow-y-auto"
           disabled={loading}
         />
+        {attachmentError ? (
+          <p className="text-destructive text-sm">{attachmentError}</p>
+        ) : null}
         {pendingAttachments.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {pendingAttachments.map((attachment, index) => {

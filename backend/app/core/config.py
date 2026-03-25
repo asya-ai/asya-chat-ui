@@ -34,10 +34,10 @@ class Settings(BaseSettings):
         default=10, validation_alias="ATTACHMENTS_MAX_FILES"
     )
     attachments_max_file_bytes: int = Field(
-        default=5_000_000, validation_alias="ATTACHMENTS_MAX_FILE_BYTES"
+        default=20_000_000, validation_alias="ATTACHMENTS_MAX_FILE_BYTES"
     )
     attachments_max_total_bytes: int = Field(
-        default=10_000_000, validation_alias="ATTACHMENTS_MAX_TOTAL_BYTES"
+        default=50_000_000, validation_alias="ATTACHMENTS_MAX_TOTAL_BYTES"
     )
     exec_max_code_chars: int = Field(
         default=20000, validation_alias="EXEC_MAX_CODE_CHARS"

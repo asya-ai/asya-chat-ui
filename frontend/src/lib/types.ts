@@ -208,13 +208,16 @@ export type ChatMessageAttachment = {
   id: string
   file_name: string
   content_type: string
-  data_base64: string
+  data_base64?: string
+  content_url?: string
 }
 
 export type ChatMessageAttachmentInput = {
+  upload_id?: string
   file_name: string
   content_type: string
-  data_base64: string
+  data_base64?: string
+  content_url?: string
 }
 
 export type ChatMessageAttachmentLike =

@@ -127,6 +127,11 @@ const translations = {
     chat_message_placeholder: "Write a message...",
     chat_select_model: "Select a model",
     chat_add_files: "Add files",
+    chat_attachment_limit_files: "You can attach up to {count} files per message.",
+    chat_attachment_limit_file_size: "{file} is too large. Maximum file size is {max_mb} MB.",
+    chat_attachment_limit_total_size:
+      "Combined attachments are too large. Maximum total size is {max_mb} MB.",
+    chat_attachment_upload_failed: "Attachment upload failed.",
     chat_reasoning_effort: "Reasoning effort",
     chat_reasoning_default: "Default",
     chat_reasoning_low: "Low",
@@ -386,6 +391,12 @@ const translations = {
     chat_message_placeholder: "Rakstiet ziņu...",
     chat_select_model: "Izvēlieties modeli",
     chat_add_files: "Pievienot failus",
+    chat_attachment_limit_files: "Vienai ziņai var pievienot līdz {count} failiem.",
+    chat_attachment_limit_file_size:
+      "{file} ir pārāk liels. Maksimālais faila izmērs ir {max_mb} MB.",
+    chat_attachment_limit_total_size:
+      "Kopējais pielikumu izmērs ir pārāk liels. Maksimālais kopējais izmērs ir {max_mb} MB.",
+    chat_attachment_upload_failed: "Pielikuma augšupielāde neizdevās.",
     chat_reasoning_effort: "Spriešanas līmenis",
     chat_reasoning_default: "Noklusējums",
     chat_reasoning_low: "Zems",

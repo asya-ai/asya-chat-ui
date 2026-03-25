@@ -99,6 +99,23 @@ const MessageBubbleComponent = ({
       return <span key={`user-text-${index}`}>{part}</span>
     })
   }, [msg.content])
+  const attachmentSrc = (attachment: {
+    content_type: string
+    data_base64?: string
+    content_url?: string
+  }) => {
+    if (attachment.data_base64) {
+      return `data:${attachment.content_type};base64,${attachment.data_base64}`
+    }
+    return attachment.content_url || ""
+  }
+  const attachmentHref = (attachment: {
+    content_type: string
+    data_base64?: string
+    content_url?: string
+  }) => {
+    return attachmentSrc(attachment)
+  }
 
   const handleEditPickFiles = () => {
     editFileInputRef.current?.click()
@@ -299,7 +316,7 @@ const MessageBubbleComponent = ({
                             onClick={() => onPreviewAttachment(attachment)}
                           >
                             <img
-                              src={`data:${attachment.content_type};base64,${attachment.data_base64}`}
+                              src={attachmentSrc(attachment)}
                               alt={attachment.file_name}
                               className="rounded-md w-16 h-16 object-cover"
                             />
@@ -591,11 +608,12 @@ const MessageBubbleComponent = ({
                               file_name: attachment.file_name,
                               content_type: attachment.content_type,
                               data_base64: attachment.data_base64,
+                              content_url: attachment.content_url,
                             })
                           }
                         >
                           <img
-                            src={`data:${attachment.content_type};base64,${attachment.data_base64}`}
+                            src={attachmentSrc(attachment)}
                             alt={attachment.file_name}
                             className="rounded-md max-w-32 max-h-32 w-auto h-auto object-contain bg-muted/50"
                           />
@@ -606,7 +624,7 @@ const MessageBubbleComponent = ({
                       <a
                         key={`${attachment.file_name}-${index}`}
                         className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                        href={`data:${attachment.content_type};base64,${attachment.data_base64}`}
+                        href={attachmentHref(attachment)}
                         download={attachment.file_name}
                       >
                         {attachment.file_name}

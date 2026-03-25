@@ -3,6 +3,7 @@ import base64
 import html
 import logging
 import re
+from io import BytesIO
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -14,8 +15,9 @@ from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 from jose import JWTError, jwt
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
 from sqlmodel import Session, select
+from PIL import ExifTags, Image
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
@@ -27,6 +29,7 @@ from app.models import (
     ChatGenerationTask,
     ChatMessage,
     ChatMessageAttachment,
+    ChatUpload,
     ChatModel,
     GenerationStatus,
     Org,
@@ -108,6 +111,14 @@ def _attachment_image_url(attachment: ChatMessageAttachment) -> str:
     return f"data:{attachment.content_type};base64,{attachment.data_base64}"
 
 
+def _attachment_content_url(attachment_id: UUID) -> str:
+    token = _attachment_access_token(attachment_id)
+    base_url = _public_api_base_url()
+    if base_url:
+        return f"{base_url}/chats/attachments/{attachment_id}/content?token={token}"
+    return f"/api/chats/attachments/{attachment_id}/content?token={token}"
+
+
 def _estimate_tokens(messages: list[dict]) -> int:
     total_chars = 0
     for message in messages:
@@ -143,6 +154,13 @@ def _coerce_optional_bool(value: object) -> bool | None:
         if normalized in {"false", "0", "no", "off"}:
             return False
     return None
+
+
+def _base64_size_bytes(value: str | None) -> int:
+    if not value:
+        return 0
+    padding = value.count("=")
+    return max(len(value) * 3 // 4 - padding, 0)
 
 
 def _resolve_exec_policy(org_exec_policy: str, code_execution_enabled: object) -> str:
@@ -549,6 +567,47 @@ def _attachment_exec_path(attachment: ChatMessageAttachment) -> str:
     return f"/inputs/{attachment.id}_{safe_name}"
 
 
+def _image_attachment_metadata(attachment: ChatMessageAttachment) -> str | None:
+    if not (attachment.content_type or "").lower().startswith("image/"):
+        return None
+    if Image is None:
+        return None
+    try:
+        payload = base64.b64decode(attachment.data_base64)
+        with Image.open(BytesIO(payload)) as image:
+            width, height = image.size
+            parts = [f"width={width}", f"height={height}"]
+            exif_text = ""
+            try:
+                exif_raw = image.getexif()
+                if exif_raw:
+                    tag_map = ExifTags.TAGS if ExifTags else {}
+                    preferred = [
+                        "Make",
+                        "Model",
+                        "DateTime",
+                        "DateTimeOriginal",
+                        "LensModel",
+                        "Orientation",
+                    ]
+                    picked: dict[str, str] = {}
+                    for key, value in exif_raw.items():
+                        name = tag_map.get(key, str(key)) if isinstance(key, int) else str(key)
+                        if name in preferred and value not in (None, ""):
+                            picked[name] = str(value)
+                    if picked:
+                        exif_text = ", ".join(f"{k}={v}" for k, v in picked.items())
+                    else:
+                        exif_text = f"{len(exif_raw)} tags"
+            except Exception:
+                exif_text = ""
+            if exif_text:
+                parts.append(f"exif={exif_text}")
+            return "; ".join(parts)
+    except Exception:
+        return None
+
+
 def _attachment_lines(attachments: list[ChatMessageAttachment]) -> list[str]:
     lines: list[str] = []
     if attachments:
@@ -556,8 +615,10 @@ def _attachment_lines(attachments: list[ChatMessageAttachment]) -> list[str]:
             "Use the code_execution tool to read/analyze these files before answering."
         )
     for attachment in attachments:
+        metadata = _image_attachment_metadata(attachment)
+        metadata_suffix = f"; metadata: {metadata}" if metadata else ""
         lines.append(
-            f"- {attachment.file_name} ({attachment.content_type}) at {_attachment_exec_path(attachment)}"
+            f"- {attachment.file_name} ({attachment.content_type}) at {_attachment_exec_path(attachment)}{metadata_suffix}"
         )
     return lines
 
@@ -778,6 +839,20 @@ def _merge_chat_usage(
         cached_tokens=(first.cached_tokens or 0) + (second.cached_tokens or 0),
         thinking_tokens=(first.thinking_tokens or 0) + (second.thinking_tokens or 0),
     )
+
+
+def _validation_error_text(exc: ValidationError) -> str:
+    try:
+        entries: list[str] = []
+        for item in exc.errors()[:5]:
+            location = ".".join(str(part) for part in item.get("loc", [])) or "payload"
+            message = str(item.get("msg", "invalid value"))
+            entries.append(f"{location}: {message}")
+        if entries:
+            return "Invalid payload: " + "; ".join(entries)
+    except Exception:
+        pass
+    return "Invalid payload"
 
 
 async def _generate_web_scrape_answer(
@@ -1559,6 +1634,33 @@ class ChatRead(BaseModel):
 
 
 class ChatMessageAttachmentCreate(BaseModel):
+    upload_id: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None
+    data_base64: str | None = None
+
+    @field_validator("data_base64")
+    @classmethod
+    def _validate_attachment_size(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        estimated_bytes = _base64_size_bytes(value)
+        if estimated_bytes > settings.attachments_max_file_bytes:
+            raise ValueError("Attachment exceeds maximum size.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "ChatMessageAttachmentCreate":
+        if (self.upload_id or "").strip():
+            return self
+        if not (self.file_name and self.content_type and self.data_base64):
+            raise ValueError(
+                "Attachment requires upload_id or file_name/content_type/data_base64."
+            )
+        return self
+
+
+class ChatUploadCreateRequest(BaseModel):
     file_name: str
     content_type: str
     data_base64: str
@@ -1566,20 +1668,25 @@ class ChatMessageAttachmentCreate(BaseModel):
     @field_validator("data_base64")
     @classmethod
     def _validate_attachment_size(cls, value: str) -> str:
-        if not value:
-            return value
-        padding = value.count("=")
-        estimated_bytes = max(len(value) * 3 // 4 - padding, 0)
-        if estimated_bytes > settings.attachments_max_file_bytes:
+        if _base64_size_bytes(value) > settings.attachments_max_file_bytes:
             raise ValueError("Attachment exceeds maximum size.")
         return value
+
+
+class ChatUploadRead(BaseModel):
+    id: str
+    file_name: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
 
 
 class ChatMessageAttachmentRead(BaseModel):
     id: str
     file_name: str
     content_type: str
-    data_base64: str
+    data_base64: str | None = None
+    content_url: str | None = None
 
 
 class ChatMessageCreateRequest(BaseModel):
@@ -1599,8 +1706,7 @@ class ChatMessageCreateRequest(BaseModel):
             raise ValueError("Too many attachments.")
         total_bytes = 0
         for item in items:
-            padding = item.data_base64.count("=")
-            total_bytes += max(len(item.data_base64) * 3 // 4 - padding, 0)
+            total_bytes += _base64_size_bytes(item.data_base64)
         if total_bytes > settings.attachments_max_total_bytes:
             raise ValueError("Total attachments size exceeded.")
         return self
@@ -1658,8 +1764,7 @@ class ChatMessageEditRequest(BaseModel):
             raise ValueError("Too many attachments.")
         total_bytes = 0
         for item in items:
-            padding = item.data_base64.count("=")
-            total_bytes += max(len(item.data_base64) * 3 // 4 - padding, 0)
+            total_bytes += _base64_size_bytes(item.data_base64)
         if total_bytes > settings.attachments_max_total_bytes:
             raise ValueError("Total attachments size exceeded.")
         return self
@@ -1668,6 +1773,76 @@ class ChatMessageEditRequest(BaseModel):
 class ChatMessageEditResponse(BaseModel):
     user_message: ChatMessageRead
     assistant_message: ChatMessageRead
+
+
+def _resolve_attachment_inputs(
+    session: Session,
+    *,
+    chat: Chat,
+    current_user: User,
+    items: list[ChatMessageAttachmentCreate] | None,
+) -> list[ChatMessageAttachmentCreate]:
+    if not items:
+        return []
+    if len(items) > settings.attachments_max_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Too many attachments."
+        )
+
+    resolved: list[ChatMessageAttachmentCreate] = []
+    total_bytes = 0
+    for item in items:
+        upload_id = (item.upload_id or "").strip()
+        if upload_id:
+            try:
+                upload_uuid = UUID(upload_id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid upload_id.",
+                ) from exc
+            upload = session.exec(
+                select(ChatUpload).where(
+                    ChatUpload.id == upload_uuid,
+                    ChatUpload.chat_id == chat.id,
+                    ChatUpload.user_id == current_user.id,
+                )
+            ).first()
+            if upload:
+                resolved_item = ChatMessageAttachmentCreate(
+                    file_name=upload.file_name,
+                    content_type=upload.content_type,
+                    data_base64=upload.data_base64,
+                )
+            else:
+                # Backward/compat path: allow existing message attachment IDs too.
+                existing_attachment = session.exec(
+                    select(ChatMessageAttachment)
+                    .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
+                    .where(ChatMessage.chat_id == chat.id)
+                    .where(ChatMessageAttachment.id == upload_uuid)
+                ).first()
+                if not existing_attachment:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Upload not found for this chat.",
+                    )
+                resolved_item = ChatMessageAttachmentCreate(
+                    file_name=existing_attachment.file_name,
+                    content_type=existing_attachment.content_type,
+                    data_base64=existing_attachment.data_base64,
+                )
+        else:
+            resolved_item = item
+        total_bytes += _base64_size_bytes(resolved_item.data_base64)
+        resolved.append(resolved_item)
+
+    if total_bytes > settings.attachments_max_total_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Total attachments size exceeded.",
+        )
+    return resolved
 
 
 async def _stream_message_ws(
@@ -1734,13 +1909,23 @@ async def _stream_message_ws(
 
     attachments = []
     if payload.attachments:
-        for item in payload.attachments:
+        try:
+            resolved_attachments = _resolve_attachment_inputs(
+                session,
+                chat=chat,
+                current_user=current_user,
+                items=payload.attachments,
+            )
+        except HTTPException as exc:
+            await _ws_send_event(websocket, {"error": str(exc.detail)})
+            return
+        for item in resolved_attachments:
             attachments.append(
                 ChatMessageAttachment(
                     message_id=user_message.id,
-                    file_name=item.file_name,
-                    content_type=item.content_type,
-                    data_base64=item.data_base64,
+                    file_name=str(item.file_name or ""),
+                    content_type=str(item.content_type or ""),
+                    data_base64=str(item.data_base64 or ""),
                 )
             )
         session.add_all(attachments)
@@ -1898,15 +2083,25 @@ async def _stream_edit_ws(
             session.commit()
     else:
         if payload.attachments:
+            try:
+                resolved_attachments = _resolve_attachment_inputs(
+                    session,
+                    chat=chat,
+                    current_user=current_user,
+                    items=payload.attachments,
+                )
+            except HTTPException as exc:
+                await _ws_send_event(websocket, {"error": str(exc.detail)})
+                return
             session.add_all(
                 [
                     ChatMessageAttachment(
                         message_id=new_message.id,
-                        file_name=attachment.file_name,
-                        content_type=attachment.content_type,
-                        data_base64=attachment.data_base64,
+                        file_name=str(attachment.file_name or ""),
+                        content_type=str(attachment.content_type or ""),
+                        data_base64=str(attachment.data_base64 or ""),
                     )
-                    for attachment in payload.attachments
+                    for attachment in resolved_attachments
                 ]
             )
             session.commit()
@@ -2118,7 +2313,7 @@ def list_messages(
                 id=str(attachment.id),
                 file_name=attachment.file_name,
                 content_type=attachment.content_type,
-                data_base64=attachment.data_base64,
+                content_url=_attachment_content_url(attachment.id),
             )
         )
     tool_events_by_assistant: dict[UUID, list[ChatGenerationEvent]] = {}
@@ -2222,6 +2417,46 @@ def get_attachment_content(
             "Cache-Control": "private, max-age=300",
             "Content-Disposition": f'inline; filename="{attachment.file_name}"',
         },
+    )
+
+
+@router.post("/{chat_id}/uploads", response_model=ChatUploadRead)
+def upload_chat_attachment(
+    chat_id: str,
+    payload: ChatUploadCreateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatUploadRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+
+    upload = ChatUpload(
+        chat_id=chat.id,
+        user_id=current_user.id,
+        file_name=payload.file_name,
+        content_type=payload.content_type,
+        data_base64=payload.data_base64,
+    )
+    session.add(upload)
+    session.commit()
+    session.refresh(upload)
+    return ChatUploadRead(
+        id=str(upload.id),
+        file_name=upload.file_name,
+        content_type=upload.content_type,
+        size_bytes=_base64_size_bytes(upload.data_base64),
+        created_at=upload.created_at,
     )
 
 
@@ -2506,13 +2741,19 @@ async def create_message(
 
     attachments = []
     if payload.attachments:
-        for item in payload.attachments:
+        resolved_attachments = _resolve_attachment_inputs(
+            session,
+            chat=chat,
+            current_user=current_user,
+            items=payload.attachments,
+        )
+        for item in resolved_attachments:
             attachments.append(
                 ChatMessageAttachment(
                     message_id=user_message.id,
-                    file_name=item.file_name,
-                    content_type=item.content_type,
-                    data_base64=item.data_base64,
+                    file_name=str(item.file_name or ""),
+                    content_type=str(item.content_type or ""),
+                    data_base64=str(item.data_base64 or ""),
                 )
             )
         session.add_all(attachments)
@@ -2619,6 +2860,8 @@ async def create_message(
                 for attachment in msg_attachments
                 if attachment.content_type.startswith("image/")
             ]
+            # Keep only the latest image per user message to reduce remote fetch pressure.
+            image_attachments = image_attachments[-1:]
             if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -3151,7 +3394,17 @@ async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
         while True:
             payload = await websocket.receive_json()
             message_type = payload.get("type")
-            message_payload = payload.get("payload") or {}
+            raw_payload = payload.get("payload")
+            if isinstance(raw_payload, str):
+                try:
+                    parsed_payload = json.loads(raw_payload)
+                    message_payload = parsed_payload if isinstance(parsed_payload, dict) else {}
+                except Exception:
+                    message_payload = {}
+            elif isinstance(raw_payload, dict):
+                message_payload = raw_payload
+            else:
+                message_payload = {}
 
             with Session(engine) as session:
                 current_user = session.get(User, current_user_id)
@@ -3163,8 +3416,10 @@ async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
                 if message_type == "send":
                     try:
                         request = ChatMessageCreateRequest(**message_payload)
-                    except Exception:
-                        await _ws_send_event(websocket, {"error": "Invalid payload"})
+                    except ValidationError as exc:
+                        await _ws_send_event(
+                            websocket, {"error": _validation_error_text(exc)}
+                        )
                         continue
                     await _stream_message_ws(
                         websocket, session, current_user, chat_id, request
@@ -3184,8 +3439,10 @@ async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
                                 if key != "message_id"
                             }
                         )
-                    except Exception:
-                        await _ws_send_event(websocket, {"error": "Invalid payload"})
+                    except ValidationError as exc:
+                        await _ws_send_event(
+                            websocket, {"error": _validation_error_text(exc)}
+                        )
                         continue
                     await _stream_edit_ws(
                         websocket, session, current_user, chat_id, message_id, request
@@ -3360,15 +3617,21 @@ async def edit_message(
             session.commit()
     else:
         if payload.attachments:
+            resolved_attachments = _resolve_attachment_inputs(
+                session,
+                chat=chat,
+                current_user=current_user,
+                items=payload.attachments,
+            )
             session.add_all(
                 [
                     ChatMessageAttachment(
                         message_id=new_message.id,
-                        file_name=attachment.file_name,
-                        content_type=attachment.content_type,
-                        data_base64=attachment.data_base64,
+                        file_name=str(attachment.file_name or ""),
+                        content_type=str(attachment.content_type or ""),
+                        data_base64=str(attachment.data_base64 or ""),
                     )
-                    for attachment in payload.attachments
+                    for attachment in resolved_attachments
                 ]
             )
             session.commit()
@@ -3473,6 +3736,8 @@ async def edit_message(
                 for attachment in msg_attachments
                 if attachment.content_type.startswith("image/")
             ]
+            # Keep only the latest image per user message to reduce remote fetch pressure.
+            image_attachments = image_attachments[-1:]
             if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

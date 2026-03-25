@@ -246,6 +246,18 @@ class ChatMessageAttachment(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class ChatUpload(SQLModel, table=True):
+    __tablename__ = "chat_uploads"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    chat_id: UUID = Field(foreign_key="chats.id", index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    file_name: str
+    content_type: str
+    data_base64: str
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class GenerationStatus(str, Enum):
     queued = "queued"
     running = "running"

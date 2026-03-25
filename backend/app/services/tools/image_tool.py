@@ -72,6 +72,90 @@ def get_image_model(
     return model
 
 
+def _supports_openai_edit_api(model_name: str) -> bool:
+    name = (model_name or "").strip().lower()
+    return (
+        name == "dall-e-2"
+        or name.startswith("gpt-image")
+        or name.startswith("chatgpt-image")
+    )
+
+
+def _supports_openai_responses_image_edit(model_name: str) -> bool:
+    name = (model_name or "").strip().lower()
+    return name.startswith("chatgpt-image")
+
+
+def _get_edit_compatible_image_model(
+    session: Session,
+    org_id: str,
+    *,
+    provider: str,
+    exclude_model_id: UUID | None = None,
+) -> ChatModel | None:
+    enabled_model_ids = session.exec(
+        select(OrgModel.model_id).where(
+            OrgModel.org_id == org_id, OrgModel.is_enabled.is_(True)
+        )
+    ).all()
+    if not enabled_model_ids:
+        return None
+    candidates = session.exec(
+        select(ChatModel).where(
+            ChatModel.id.in_(enabled_model_ids),
+            ChatModel.is_active.is_(True),
+            ChatModel.provider == provider,
+            or_(
+                ChatModel.supports_image_output.is_(True),
+                ChatModel.model_name.ilike("%image%"),
+            ),
+        )
+    ).all()
+    for candidate in candidates:
+        if exclude_model_id is not None and candidate.id == exclude_model_id:
+            continue
+        if provider in {"openai", "azure"} and _supports_openai_edit_api(
+            candidate.model_name
+        ):
+            return candidate
+    return None
+
+
+def _get_responses_compatible_image_model(
+    session: Session,
+    org_id: str,
+    *,
+    provider: str,
+    exclude_model_id: UUID | None = None,
+) -> ChatModel | None:
+    if provider != "openai":
+        return None
+    enabled_model_ids = session.exec(
+        select(OrgModel.model_id).where(
+            OrgModel.org_id == org_id, OrgModel.is_enabled.is_(True)
+        )
+    ).all()
+    if not enabled_model_ids:
+        return None
+    candidates = session.exec(
+        select(ChatModel).where(
+            ChatModel.id.in_(enabled_model_ids),
+            ChatModel.is_active.is_(True),
+            ChatModel.provider == provider,
+            or_(
+                ChatModel.supports_image_output.is_(True),
+                ChatModel.model_name.ilike("%image%"),
+            ),
+        )
+    ).all()
+    for candidate in candidates:
+        if exclude_model_id is not None and candidate.id == exclude_model_id:
+            continue
+        if _supports_openai_responses_image_edit(candidate.model_name):
+            return candidate
+    return None
+
+
 async def generate_image(
     context: ImageToolContext, *, prompt: str, model_override: ChatModel | None = None
 ) -> ToolResult:
@@ -238,6 +322,31 @@ async def edit_image(
         context.org_id,
     )
 
+    supports_edit_api = _supports_openai_edit_api(model.model_name)
+    if model.provider in {"openai", "azure"} and not supports_edit_api:
+        fallback = _get_edit_compatible_image_model(
+            session, context.org_id, provider=model.provider, exclude_model_id=model.id
+        )
+        if fallback and fallback.id != model.id:
+            logger.info(
+                "Image edit model fallback org_id=%s from=%s to=%s",
+                context.org_id,
+                model.model_name,
+                fallback.model_name,
+            )
+            model = fallback
+        else:
+            return ToolResult(
+                name="edit_image",
+                output={
+                    "error": (
+                        f"Model '{model.model_name}' is not compatible with image edits API. "
+                        "Enable an image edit model for this org (chatgpt-image-latest, gpt-image-1.x, or dall-e-2)."
+                    )
+                },
+            )
+    supports_edit_api = _supports_openai_edit_api(model.model_name)
+
     if model.provider in {"openai", "azure"}:
         provider_config = require_provider_enabled(session, context.org_id, model.provider)
         if model.provider == "azure":
@@ -267,25 +376,56 @@ async def edit_image(
             mask_bytes = base64.b64decode(mask_base64)
             mask_file = io.BytesIO(mask_bytes)
             mask_file.name = "mask.png"
+        request_kwargs: dict[str, Any] = {
+            "model": model.model_name,
+            "image": image_file,
+            "prompt": prompt,
+        }
+        if (model.model_name or "").strip().lower() == "dall-e-2":
+            request_kwargs["response_format"] = "b64_json"
+        # OpenAI image edit expects mask to be omitted entirely when unused.
+        if mask_file is not None:
+            request_kwargs["mask"] = mask_file
         try:
-            result = await client.images.edit(
-                model=model.model_name,
-                image=image_file,
-                mask=mask_file,
-                prompt=prompt,
-                size="1024x1024",
-                response_format="b64_json",
-            )
+            result = await client.images.edit(**request_kwargs)
         except BadRequestError as exc:
             if "response_format" in str(exc):
                 logger.info("Image edit API does not support response_format; retrying without it")
-                result = await client.images.edit(
-                    model=model.model_name,
-                    image=image_file,
-                    mask=mask_file,
-                    prompt=prompt,
-                    size="1024x1024",
+                request_kwargs.pop("response_format", None)
+                image_file.seek(0)
+                if mask_file is not None:
+                    mask_file.seek(0)
+                result = await client.images.edit(**request_kwargs)
+            elif "Value must be 'dall-e-2'" in str(exc):
+                fallback = _get_edit_compatible_image_model(
+                    session,
+                    context.org_id,
+                    provider=model.provider,
+                    exclude_model_id=model.id,
                 )
+                if fallback:
+                    logger.info(
+                        "images.edit fallback org_id=%s from=%s to=%s",
+                        context.org_id,
+                        model.model_name,
+                        fallback.model_name,
+                    )
+                    request_kwargs["model"] = fallback.model_name
+                    image_file.seek(0)
+                    if mask_file is not None:
+                        mask_file.seek(0)
+                    result = await client.images.edit(**request_kwargs)
+                    model = fallback
+                else:
+                    return ToolResult(
+                        name="edit_image",
+                        output={
+                            "error": (
+                                f"Image edit failed: model '{model.model_name}' is not accepted by image edits API. "
+                                "Use an enabled image edit model."
+                            )
+                        },
+                    )
             else:
                 raise
         return await _build_image_result("edit_image", result, model_id=str(model.id))
@@ -403,4 +543,61 @@ def _extract_gemini_image(
     return ToolResult(
         name=name,
         output={"error": "Image generation failed"},
+    )
+
+
+def _extract_openai_response_image(
+    name: str,
+    response: Any,
+    *,
+    model_id: str | None = None,
+) -> ToolResult:
+    output_items = getattr(response, "output", []) or []
+    image_base64: str | None = None
+    for item in output_items:
+        item_type = getattr(item, "type", None)
+        if item_type is None and isinstance(item, dict):
+            item_type = item.get("type")
+        if item_type in {"image_generation_call", "image"}:
+            image_base64 = getattr(item, "result", None)
+            if image_base64 is None and isinstance(item, dict):
+                image_base64 = item.get("result") or item.get("b64_json")
+            if image_base64:
+                break
+        content = getattr(item, "content", None)
+        if content is None and isinstance(item, dict):
+            content = item.get("content")
+        if isinstance(content, list):
+            for part in content:
+                part_type = getattr(part, "type", None)
+                if part_type is None and isinstance(part, dict):
+                    part_type = part.get("type")
+                if part_type in {"output_image", "image"}:
+                    image_base64 = getattr(part, "image_base64", None)
+                    if image_base64 is None and isinstance(part, dict):
+                        image_base64 = part.get("image_base64") or part.get("b64_json")
+                    if image_base64:
+                        break
+            if image_base64:
+                break
+    if not image_base64:
+        return ToolResult(name=name, output={"error": "Image generation failed"})
+    output: dict[str, Any] = {
+        "content_type": "image/png",
+        "data_base64": image_base64,
+        "file_name": "generated.png",
+        "image_count": 1,
+    }
+    if model_id:
+        output["model_id"] = model_id
+    return ToolResult(
+        name=name,
+        output=output,
+        attachments=[
+            {
+                "file_name": "generated.png",
+                "content_type": "image/png",
+                "data_base64": image_base64,
+            }
+        ],
     )

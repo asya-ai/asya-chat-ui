@@ -44,6 +44,22 @@ import {
   readFilesAsAttachments,
 } from "@/lib/file-utils"
 
+const ATTACHMENTS_MAX_FILES = 10
+const ATTACHMENTS_MAX_FILE_BYTES = 20_000_000
+const ATTACHMENTS_MAX_TOTAL_BYTES = 50_000_000
+
+const estimateBase64Bytes = (value: string): number => {
+  if (!value) return 0
+  const padding = value.match(/=+$/)?.[0]?.length ?? 0
+  return Math.max(Math.floor((value.length * 3) / 4) - padding, 0)
+}
+
+const extractAttachmentIdFromContentUrl = (url?: string): string | undefined => {
+  if (!url) return undefined
+  const match = url.match(/\/attachments\/([0-9a-fA-F-]{36})\/content/)
+  return match?.[1]
+}
+
 export const ChatPage = () => {
   const navigate = useNavigate()
   const { chatId } = useParams()
@@ -67,6 +83,8 @@ export const ChatPage = () => {
   const [pendingAttachments, setPendingAttachments] = useState<
     ChatMessageAttachmentInput[]
   >([])
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [isDragActive, setIsDragActive] = useState(false)
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(() => {
     const stored = reasoningEffortStore.get()
@@ -234,7 +252,12 @@ export const ChatPage = () => {
     if (model.supports_image_output === true) return true
     if (model.supports_image_output === false) return false
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
-    return name.includes("image")
+    return (
+      name.includes("image") ||
+      name.includes("dall-e") ||
+      name.includes("gpt-image") ||
+      name.includes("imagen")
+    )
   }, [])
   const isEmbeddingModel = useCallback((model: ChatModel) => {
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
@@ -905,6 +928,7 @@ export const ChatPage = () => {
     setToolEvents([])
     setMessage("")
     setPendingAttachments([])
+    setAttachmentError(null)
     navigate("/chat", { replace: true })
   }
 
@@ -920,6 +944,43 @@ export const ChatPage = () => {
     return chat
   }
 
+  const uploadAttachmentsForChat = useCallback(async (
+    targetChatId: string,
+    attachments: ChatMessageAttachmentInput[]
+  ): Promise<ChatMessageAttachmentInput[]> => {
+    if (attachments.length === 0) return []
+    const uploaded: ChatMessageAttachmentInput[] = []
+    for (const attachment of attachments) {
+      const reusableId = attachment.upload_id || extractAttachmentIdFromContentUrl(attachment.content_url)
+      if (reusableId) {
+        uploaded.push({
+          upload_id: reusableId,
+          file_name: attachment.file_name,
+          content_type: attachment.content_type,
+          data_base64: attachment.data_base64,
+          content_url: attachment.content_url,
+        })
+        continue
+      }
+      if (!attachment.data_base64) {
+        throw new Error(`Attachment ${attachment.file_name} is missing data.`)
+      }
+      const created = await chatApi.uploadAttachment(targetChatId, {
+        file_name: attachment.file_name,
+        content_type: attachment.content_type,
+        data_base64: attachment.data_base64,
+      })
+      uploaded.push({
+        upload_id: created.id,
+        file_name: created.file_name,
+        content_type: created.content_type,
+        data_base64: attachment.data_base64,
+        content_url: attachment.content_url,
+      })
+    }
+    return uploaded
+  }, [])
+
   const deleteChat = async (chatIdToDelete: string) => {
     await deleteChatMutation.mutateAsync(chatIdToDelete)
     if (chatId === chatIdToDelete) {
@@ -933,6 +994,7 @@ export const ChatPage = () => {
     if (chatId && loadingByChat[chatId]) return
     const trimmed = message.trim()
     if (!trimmed && pendingAttachments.length === 0) return
+    setAttachmentError(null)
     setAutoScrollEnabled(true)
     let requestChatId: string | null = null
     try {
@@ -942,6 +1004,18 @@ export const ChatPage = () => {
       }
       if (!chat) return
       requestChatId = chat.id
+      let uploadedAttachments: ChatMessageAttachmentInput[] = []
+      try {
+        setIsUploadingAttachments(true)
+        uploadedAttachments = await uploadAttachmentsForChat(chat.id, pendingAttachments)
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : t("chat_attachment_upload_failed")
+        setAttachmentError(message)
+        return
+      } finally {
+        setIsUploadingAttachments(false)
+      }
       await queryClient.cancelQueries({ queryKey: ["chatMessages", chat.id] })
       setLoadingByChat((prev) => ({ ...prev, [chat.id]: true }))
       const updateMessages = (updater: (prev: ChatMessage[]) => ChatMessage[]) =>
@@ -954,7 +1028,7 @@ export const ChatPage = () => {
         role: "user",
         content: trimmed,
         created_at: activityAt,
-        attachments: pendingAttachments,
+        attachments: uploadedAttachments,
       }
       const assistantId = `temp-assistant-${Date.now()}`
       const assistantMessage: ChatMessage = {
@@ -973,7 +1047,11 @@ export const ChatPage = () => {
         chat.id,
         trimmed,
         selectedModel,
-        pendingAttachments,
+        uploadedAttachments.map((item) => ({
+          upload_id: item.upload_id,
+          file_name: item.file_name,
+          content_type: item.content_type,
+        })),
         reasoningEffort,
         webSearchEnabled,
         codeExecutionEnabled,
@@ -1007,6 +1085,7 @@ export const ChatPage = () => {
         }
       }
     } finally {
+      setIsUploadingAttachments(false)
       currentCancelRef.current = null
       if (requestChatId) {
         setLoadingByChat((prev) => ({ ...prev, [requestChatId as string]: false }))
@@ -1015,8 +1094,39 @@ export const ChatPage = () => {
   }
 
   const handleFilesSelected = async (files: File[]) => {
+    if (pendingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
+      setAttachmentError(
+        t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+      )
+      return
+    }
+    for (const file of files) {
+      if (file.size > ATTACHMENTS_MAX_FILE_BYTES) {
+        setAttachmentError(
+          t("chat_attachment_limit_file_size", {
+            file: file.name || "attachment",
+            max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
+          })
+        )
+        return
+      }
+    }
+    const currentTotal = pendingAttachments.reduce(
+      (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+      0
+    )
+    const incomingTotal = files.reduce((sum, file) => sum + file.size, 0)
+    if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
+      setAttachmentError(
+        t("chat_attachment_limit_total_size", {
+          max_mb: String(Math.round(ATTACHMENTS_MAX_TOTAL_BYTES / 1_000_000)),
+        })
+      )
+      return
+    }
     const next = await readFilesAsAttachments(files)
     if (next.length === 0) return
+    setAttachmentError(null)
     setPendingAttachments((prev) => [...prev, ...next])
   }
 
@@ -1078,7 +1188,45 @@ export const ChatPage = () => {
     const items = event.clipboardData.items
     const next = await readClipboardImagesAsAttachments(items)
     if (next.length > 0) {
+      if (pendingAttachments.length + next.length > ATTACHMENTS_MAX_FILES) {
+        event.preventDefault()
+        setAttachmentError(
+          t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+        )
+        return
+      }
+      for (const attachment of next) {
+        const size = estimateBase64Bytes(attachment.data_base64 || "")
+        if (size > ATTACHMENTS_MAX_FILE_BYTES) {
+          event.preventDefault()
+          setAttachmentError(
+            t("chat_attachment_limit_file_size", {
+              file: attachment.file_name || "attachment",
+              max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
+            })
+          )
+          return
+        }
+      }
+      const currentTotal = pendingAttachments.reduce(
+        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        0
+      )
+      const incomingTotal = next.reduce(
+        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        0
+      )
+      if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
+        event.preventDefault()
+        setAttachmentError(
+          t("chat_attachment_limit_total_size", {
+            max_mb: String(Math.round(ATTACHMENTS_MAX_TOTAL_BYTES / 1_000_000)),
+          })
+        )
+        return
+      }
       event.preventDefault()
+      setAttachmentError(null)
       setPendingAttachments((prev) => [...prev, ...next])
       return
     }
@@ -1102,6 +1250,7 @@ export const ChatPage = () => {
   }
 
   const removePendingAttachment = (index: number) => {
+    setAttachmentError(null)
     setPendingAttachments((prev) => prev.filter((_, idx) => idx !== index))
   }
 
@@ -1137,8 +1286,39 @@ export const ChatPage = () => {
     setIsDragActive(false)
     const files = Array.from(event.dataTransfer.files ?? [])
     if (files.length === 0) return
+    if (pendingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
+      setAttachmentError(
+        t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+      )
+      return
+    }
+    for (const file of files) {
+      if (file.size > ATTACHMENTS_MAX_FILE_BYTES) {
+        setAttachmentError(
+          t("chat_attachment_limit_file_size", {
+            file: file.name || "attachment",
+            max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
+          })
+        )
+        return
+      }
+    }
+    const currentTotal = pendingAttachments.reduce(
+      (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+      0
+    )
+    const incomingTotal = files.reduce((sum, file) => sum + file.size, 0)
+    if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
+      setAttachmentError(
+        t("chat_attachment_limit_total_size", {
+          max_mb: String(Math.round(ATTACHMENTS_MAX_TOTAL_BYTES / 1_000_000)),
+        })
+      )
+      return
+    }
     const next = await readFilesAsAttachments(files)
     if (next.length > 0) {
+      setAttachmentError(null)
       setPendingAttachments((prev) => [...prev, ...next])
     }
   }
@@ -1180,9 +1360,13 @@ export const ChatPage = () => {
     setEditingContent(msg.content)
     setEditingAttachments(
       (msg.attachments ?? []).map((attachment) => ({
+        upload_id:
+          ("id" in attachment ? attachment.id : undefined) ||
+          extractAttachmentIdFromContentUrl(attachment.content_url),
         file_name: attachment.file_name,
         content_type: attachment.content_type,
         data_base64: attachment.data_base64,
+        content_url: attachment.content_url,
       }))
     )
   }, [])
@@ -1198,6 +1382,21 @@ export const ChatPage = () => {
     if (msg.id.startsWith("temp-")) return
     const trimmed = editingContent.trim()
     if (!trimmed && editingAttachments.length === 0) return
+    let uploadedEditingAttachments: ChatMessageAttachmentInput[] = []
+    try {
+      setIsUploadingAttachments(true)
+      uploadedEditingAttachments = await uploadAttachmentsForChat(
+        activeChat.id,
+        editingAttachments
+      )
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t("chat_attachment_upload_failed")
+      setAttachmentError(message)
+      return
+    } finally {
+      setIsUploadingAttachments(false)
+    }
     stopGeneration()
     setAutoScrollEnabled(true)
     await queryClient.cancelQueries({ queryKey: ["chatMessages", activeChat.id] })
@@ -1214,7 +1413,7 @@ export const ChatPage = () => {
       const updated = {
         ...prev[index],
         content: trimmed,
-        attachments: editingAttachments,
+        attachments: uploadedEditingAttachments,
       }
       const placeholder: ChatMessage = {
         id: tempAssistantId,
@@ -1234,7 +1433,11 @@ export const ChatPage = () => {
       msg.id,
       trimmed,
       selectedModel,
-      editingAttachments,
+      uploadedEditingAttachments.map((attachment) => ({
+        upload_id: attachment.upload_id,
+        file_name: attachment.file_name,
+        content_type: attachment.content_type,
+      })),
       reasoningEffort,
       webSearchEnabled,
       codeExecutionEnabled,
@@ -1272,6 +1475,7 @@ export const ChatPage = () => {
     activeChat,
     editingContent,
     editingAttachments,
+    uploadAttachmentsForChat,
     stopGeneration,
     queryClient,
     updateChatMessagesFor,
@@ -1335,16 +1539,37 @@ export const ChatPage = () => {
       return [...prev.slice(0, userIndex + 1), placeholder]
     })
     const retryAttachments = (sourceUser.attachments ?? []).map((attachment) => ({
+      upload_id:
+        ("id" in attachment ? attachment.id : undefined) ||
+        extractAttachmentIdFromContentUrl(attachment.content_url),
       file_name: attachment.file_name,
       content_type: attachment.content_type,
       data_base64: attachment.data_base64,
+      content_url: attachment.content_url,
     }))
+    let uploadedRetryAttachments: ChatMessageAttachmentInput[] = []
+    try {
+      setIsUploadingAttachments(true)
+      uploadedRetryAttachments = await uploadAttachmentsForChat(chatId, retryAttachments)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t("chat_attachment_upload_failed")
+      setAttachmentError(message)
+      setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
+      return
+    } finally {
+      setIsUploadingAttachments(false)
+    }
     const { promise, cancel } = chatApi.editMessageStream(
       chatId,
       sourceUser.id,
       sourceUser.content,
       selectedModel,
-      retryAttachments,
+      uploadedRetryAttachments.map((attachment) => ({
+        upload_id: attachment.upload_id,
+        file_name: attachment.file_name,
+        content_type: attachment.content_type,
+      })),
       reasoningEffort,
       webSearchEnabled,
       codeExecutionEnabled,
@@ -1388,6 +1613,7 @@ export const ChatPage = () => {
     applyStreamEvent,
     refetchChats,
     t,
+    uploadAttachmentsForChat,
     updateChatMessagesFor,
     bumpChatActivity,
   ])
@@ -1568,9 +1794,10 @@ export const ChatPage = () => {
         <ChatComposer
           message={message}
           placeholder={t("chat_message_placeholder")}
-          loading={currentChatLoading}
+          loading={currentChatLoading || isUploadingAttachments}
           isDragActive={isDragActive}
           pendingAttachments={pendingAttachments}
+          attachmentError={attachmentError}
           reasoningEffort={reasoningEffort}
           webSearchEnabled={webSearchEnabled}
           codeExecutionEnabled={codeExecutionEnabled}
@@ -1601,7 +1828,11 @@ export const ChatPage = () => {
           <DialogContent className="flex justify-center items-center p-2 w-auto max-w-[90vw] sm:max-w-[90vw] h-auto max-h-[90vh]">
             {previewAttachment && previewAttachment.content_type.startsWith("image/") ? (
               <img
-                src={`data:${previewAttachment.content_type};base64,${previewAttachment.data_base64}`}
+                src={
+                  previewAttachment.data_base64
+                    ? `data:${previewAttachment.content_type};base64,${previewAttachment.data_base64}`
+                    : (previewAttachment.content_url ?? "")
+                }
                 alt={previewAttachment.file_name}
                 className="w-auto max-w-[90vw] h-auto max-h-[90vh] object-contain"
               />
