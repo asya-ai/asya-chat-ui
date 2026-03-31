@@ -2249,6 +2249,101 @@ def list_chats(
     ]
 
 
+@router.get("/search", response_model=list[ChatRead])
+def search_chats(
+    q: str,
+    org_id: str | None = None,
+    limit: int = 50,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatRead]:
+    org_uuid: UUID | None = None
+    if org_id:
+        try:
+            org_uuid = UUID(org_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+            ) from exc
+        require_org_member(
+            session, org_uuid, current_user.id, is_super_admin=current_user.is_super_admin
+        )
+    query = (q or "").strip()
+    if not query:
+        return []
+    capped_limit = max(1, min(limit, 100))
+    base_chat_filters = [
+        Chat.user_id == current_user.id,
+        Chat.is_deleted.is_(False),
+    ]
+    if org_uuid:
+        base_chat_filters.append(Chat.org_id == org_uuid)
+    eligible_chats_subq = select(Chat.id).where(*base_chat_filters).subquery()
+    search_query = func.plainto_tsquery("simple", query)
+    title_vector = func.to_tsvector("simple", func.coalesce(Chat.title, ""))
+    title_rank = func.ts_rank_cd(title_vector, search_query)
+    title_match = title_vector.op("@@")(search_query)
+    message_rank_subq = (
+        select(
+            ChatMessage.chat_id.label("chat_id"),
+            func.max(
+                func.ts_rank_cd(
+                    func.to_tsvector("simple", func.coalesce(ChatMessage.content, "")),
+                    search_query,
+                )
+            ).label("message_rank"),
+        )
+        .where(
+            ChatMessage.is_current.is_(True),
+            ChatMessage.chat_id.in_(select(eligible_chats_subq.c.id)),
+            func.to_tsvector("simple", func.coalesce(ChatMessage.content, "")).op("@@")(
+                search_query
+            ),
+        )
+        .group_by(ChatMessage.chat_id)
+        .subquery()
+    )
+    last_activity_subq = (
+        select(
+            ChatMessage.chat_id,
+            func.max(ChatMessage.created_at).label("last_activity_at"),
+        )
+        .where(ChatMessage.chat_id.in_(select(eligible_chats_subq.c.id)))
+        .group_by(ChatMessage.chat_id)
+        .subquery()
+    )
+    chats = session.exec(
+        select(
+            Chat,
+            last_activity_subq.c.last_activity_at,
+            (title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)).label(
+                "rank"
+            ),
+        )
+        .outerjoin(last_activity_subq, last_activity_subq.c.chat_id == Chat.id)
+        .outerjoin(message_rank_subq, message_rank_subq.c.chat_id == Chat.id)
+        .where(*base_chat_filters)
+        .where(title_match | (message_rank_subq.c.message_rank.is_not(None)))
+        .order_by(
+            (
+                title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)
+            ).desc(),
+            func.coalesce(last_activity_subq.c.last_activity_at, Chat.created_at).desc(),
+        )
+        .limit(capped_limit)
+    ).all()
+    return [
+        ChatRead(
+            id=str(chat.id),
+            title=chat.title,
+            model_id=str(chat.model_id) if chat.model_id else None,
+            created_at=chat.created_at,
+            last_activity_at=last_activity_at or chat.created_at,
+        )
+        for chat, last_activity_at, _rank in chats
+    ]
+
+
 @router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
 def list_messages(
     chat_id: str,
@@ -2855,6 +2950,22 @@ async def create_message(
 
     def build_messages() -> list[dict]:
         items: list[dict] = []
+        latest_user_image_id: UUID | None = None
+        for msg in reversed(history):
+            if msg.role != "user":
+                continue
+            msg_attachments = attachments_by_message.get(msg.id, [])
+            latest_image = next(
+                (
+                    attachment
+                    for attachment in reversed(msg_attachments)
+                    if attachment.content_type.startswith("image/")
+                ),
+                None,
+            )
+            if latest_image:
+                latest_user_image_id = latest_image.id
+                break
         for msg in history:
             if msg.role != "user":
                 items.append({"role": msg.role, "content": msg.content})
@@ -2868,8 +2979,15 @@ async def create_message(
                 for attachment in msg_attachments
                 if attachment.content_type.startswith("image/")
             ]
-            # Keep only the latest image per user message to reduce remote fetch pressure.
-            image_attachments = image_attachments[-1:]
+            # Keep only one latest image across the whole history to reduce remote fetch timeouts.
+            if latest_user_image_id is not None:
+                image_attachments = [
+                    attachment
+                    for attachment in image_attachments
+                    if attachment.id == latest_user_image_id
+                ]
+            else:
+                image_attachments = []
             if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -3731,6 +3849,22 @@ async def edit_message(
 
     def build_messages() -> list[dict]:
         items: list[dict] = []
+        latest_user_image_id: UUID | None = None
+        for msg in reversed(history):
+            if msg.role != "user":
+                continue
+            msg_attachments = attachments_by_message.get(msg.id, [])
+            latest_image = next(
+                (
+                    attachment
+                    for attachment in reversed(msg_attachments)
+                    if attachment.content_type.startswith("image/")
+                ),
+                None,
+            )
+            if latest_image:
+                latest_user_image_id = latest_image.id
+                break
         for msg in history:
             if msg.role != "user":
                 items.append({"role": msg.role, "content": msg.content})
@@ -3744,8 +3878,15 @@ async def edit_message(
                 for attachment in msg_attachments
                 if attachment.content_type.startswith("image/")
             ]
-            # Keep only the latest image per user message to reduce remote fetch pressure.
-            image_attachments = image_attachments[-1:]
+            # Keep only one latest image across the whole history to reduce remote fetch timeouts.
+            if latest_user_image_id is not None:
+                image_attachments = [
+                    attachment
+                    for attachment in image_attachments
+                    if attachment.id == latest_user_image_id
+                ]
+            else:
+                image_attachments = []
             if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

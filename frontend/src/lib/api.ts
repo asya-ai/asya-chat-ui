@@ -398,6 +398,13 @@ export const modelApi = {
 
 export const chatApi = {
   list: (orgId: string) => apiFetch<Chat[]>(`/chats?org_id=${orgId}`),
+  search: (query: string, limit = 50) => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    })
+    return apiFetch<Chat[]>(`/chats/search?${params.toString()}`)
+  },
   create: (payload: { org_id: string; model_id?: string; title?: string }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
   uploadAttachment: (

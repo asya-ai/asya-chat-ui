@@ -130,6 +130,23 @@ def _build_provider_messages(
     enabled_tool_names: list[str] | None,
 ) -> list[dict]:
     items: list[dict[str, Any]] = []
+    latest_user_image_id: UUID | None = None
+    for msg in reversed(history):
+        if msg.role != "user":
+            continue
+        msg_attachments = attachments_by_message.get(msg.id, [])
+        latest_image = next(
+            (
+                attachment
+                for attachment in reversed(msg_attachments)
+                if attachment.content_type.startswith("image/")
+            ),
+            None,
+        )
+        if latest_image:
+            latest_user_image_id = latest_image.id
+            break
+
     for msg in history:
         if msg.role != "user":
             items.append({"role": msg.role, "content": msg.content})
@@ -143,8 +160,13 @@ def _build_provider_messages(
             for attachment in msg_attachments
             if attachment.content_type.startswith("image/")
         ]
-        # Keep only the latest image per user message to reduce remote fetch pressure.
-        image_attachments = image_attachments[-1:]
+        # Keep only one latest image across the whole history to reduce remote fetch timeouts.
+        if latest_user_image_id is not None:
+            image_attachments = [
+                attachment for attachment in image_attachments if attachment.id == latest_user_image_id
+            ]
+        else:
+            image_attachments = []
         attachment_lines = _attachment_lines(msg_attachments)
         if not image_attachments:
             text = msg.content or ""

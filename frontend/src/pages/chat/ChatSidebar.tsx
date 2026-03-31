@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import type { Chat } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   DropdownMenu,
@@ -21,9 +22,13 @@ type ChatSidebarProps = {
     untitled: string
     settings: string
     delete: string
+    searchPlaceholder: string
+    noResults: string
   }
   groups: ChatGroup[]
+  searchQuery: string
   activeChatId?: string | null
+  onSearchChange: (value: string) => void
   onNewChat: () => void
   onSelectChat: (chat: Chat) => void
   onDeleteChat: (chat: Chat) => void
@@ -37,7 +42,9 @@ export const ChatSidebar = ({
   title,
   labels,
   groups,
+  searchQuery,
   activeChatId,
+  onSearchChange,
   onNewChat,
   onSelectChat,
   onDeleteChat,
@@ -54,9 +61,16 @@ export const ChatSidebar = ({
           {labels.newChat}
         </Button>
       </div>
+      <Input
+        value={searchQuery}
+        onChange={(event) => onSearchChange(event.target.value)}
+        placeholder={labels.searchPlaceholder}
+      />
       <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-3 pr-3">
-          {groups.map((group) => (
+          {groups.length === 0 ? (
+            <p className="text-muted-foreground text-sm">{labels.noResults}</p>
+          ) : groups.map((group) => (
             <div key={group.label} className="space-y-2">
               <p className="text-muted-foreground text-xs uppercase tracking-wide">
                 {group.label}

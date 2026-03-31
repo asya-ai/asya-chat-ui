@@ -32,6 +32,7 @@ import { ChatComposer } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
 import {
+  useChatSearch,
   useChatMessages,
   useChats,
   useCreateChat,
@@ -104,6 +105,8 @@ export const ChatPage = () => {
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [chatSearchQuery, setChatSearchQuery] = useState("")
+  const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const { locale, t } = useI18n()
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => {
@@ -113,12 +116,20 @@ export const ChatPage = () => {
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
   const { data: models = [] } = useModels(orgId)
   const { data: chats = [], refetch: refetchChats } = useChats(orgId)
+  const { data: searchedChats = [] } = useChatSearch(orgId, chatSearchDebounced)
   const {
     data: serverMessages = [],
     isLoading: isMessagesLoading,
   } = useChatMessages(chatId ?? null)
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setChatSearchDebounced(chatSearchQuery.trim())
+    }, 250)
+    return () => window.clearTimeout(timerId)
+  }, [chatSearchQuery])
 
   const appendToolEvent = useCallback((
     event: NonNullable<ChatMessage["tool_event"]>,
@@ -679,7 +690,11 @@ export const ChatPage = () => {
     const now = new Date()
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const dayMs = 24 * 60 * 60 * 1000
-    const sorted = [...chats].sort(
+    const currentOrgChatIds = new Set(chats.map((chat) => chat.id))
+    const sourceChats = chatSearchDebounced
+      ? searchedChats.filter((chat) => currentOrgChatIds.has(chat.id))
+      : chats
+    const sorted = [...sourceChats].sort(
       (a, b) =>
         parseChatDate(getChatActivityDate(b)).getTime() -
         parseChatDate(getChatActivityDate(a)).getTime()
@@ -694,6 +709,8 @@ export const ChatPage = () => {
       let label = t("chat_group_older")
       if (dayDiff === 0) {
         label = t("chat_group_today")
+      } else if (dayDiff === 1) {
+        label = t("chat_group_yesterday")
       } else if (dayDiff <= 7) {
         label = t("chat_group_prev_7")
       } else if (dayDiff <= 30) {
@@ -707,7 +724,7 @@ export const ChatPage = () => {
       }
     }
     return groups
-  }, [chats, getChatActivityDate, parseChatDate, t])
+  }, [chatSearchDebounced, chats, getChatActivityDate, parseChatDate, searchedChats, t])
 
   const formatRelativeAge = (dateString: string) => {
     const diffMs = Date.now() - parseChatDate(dateString).getTime()
@@ -1714,9 +1731,13 @@ export const ChatPage = () => {
             untitled: t("chat_untitled"),
             settings: t("common_settings"),
             delete: t("chat_delete"),
+            searchPlaceholder: t("chat_search_placeholder"),
+            noResults: t("chat_search_no_results"),
           }}
           groups={groupedChats}
+          searchQuery={chatSearchQuery}
           activeChatId={chatId ?? null}
+          onSearchChange={setChatSearchQuery}
           onNewChat={startNewChat}
           onSelectChat={(chat: Chat) => handleSelectChat(chat)}
           onDeleteChat={(chat: Chat) => deleteChat(chat.id)}
@@ -1742,9 +1763,13 @@ export const ChatPage = () => {
                     untitled: t("chat_untitled"),
                     settings: t("common_settings"),
                     delete: t("chat_delete"),
+                    searchPlaceholder: t("chat_search_placeholder"),
+                    noResults: t("chat_search_no_results"),
                   }}
                   groups={groupedChats}
+                  searchQuery={chatSearchQuery}
                   activeChatId={chatId ?? null}
+                  onSearchChange={setChatSearchQuery}
                   onNewChat={startNewChat}
                   onSelectChat={(chat: Chat) => handleSelectChat(chat, () => setSidebarOpen(false))}
                   onDeleteChat={(chat: Chat) => deleteChat(chat.id)}

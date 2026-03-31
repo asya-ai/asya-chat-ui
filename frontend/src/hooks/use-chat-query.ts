@@ -36,6 +36,17 @@ export const useChats = (orgId: string | null) =>
     staleTime: 15_000,
   })
 
+export const useChatSearch = (orgId: string | null, query: string) =>
+  useQuery({
+    queryKey: orgId ? [...chatKeys.list(orgId), "search", query] : [...chatKeys.all, "search", query],
+    queryFn: () => {
+      if (!query.trim()) return []
+      return chatApi.search(query.trim())
+    },
+    enabled: Boolean(query.trim()),
+    staleTime: 10_000,
+  })
+
 export const useChatMessages = (chatId: string | null) =>
   useQuery({
     queryKey: chatId ? chatKeys.messages(chatId) : ["chatMessages"],
