@@ -49,7 +49,7 @@ export const useChatSearch = (orgId: string | null, query: string) =>
 
 export const useChatMessages = (chatId: string | null, shareToken?: string | null) =>
   useQuery({
-    queryKey: chatId ? [...chatKeys.messages(chatId), shareToken ?? ""] : ["chatMessages"],
+    queryKey: chatId ? chatKeys.messages(chatId) : ["chatMessages"],
     queryFn: () => {
       if (!chatId) return []
       return chatApi.messages(chatId, shareToken)
