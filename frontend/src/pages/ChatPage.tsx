@@ -747,7 +747,11 @@ export const ChatPage = () => {
   useEffect(() => {
     if (orgsLoading) return
     if (orgs.length === 0) {
-      navigate("/settings")
+      orgStore.clear()
+      setOrgId(null)
+      if (chatId) {
+        navigate("/chat", { replace: true })
+      }
       return
     }
     const storedId = orgId ?? orgStore.get()
@@ -758,7 +762,7 @@ export const ChatPage = () => {
       orgStore.set(nextId)
       setOrgId(nextId)
     }
-  }, [navigate, orgId, orgs, orgsLoading])
+  }, [chatId, navigate, orgId, orgs, orgsLoading])
 
   useEffect(() => {
     if (selectableChatModels.length === 0) return
