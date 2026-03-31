@@ -10,6 +10,7 @@ import { Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ChatMessage, ChatMessageAttachmentInput } from "@/lib/types"
+import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -127,6 +128,7 @@ const MessageBubbleComponent = ({
     onEditFilesSelected(files)
     event.target.value = ""
   }
+  const canSaveEdit = Boolean(editingContent.trim() || editingAttachments.length > 0)
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -298,6 +300,13 @@ const MessageBubbleComponent = ({
                 value={editingContent}
                 onChange={(event) => onEditContentChange(event.target.value)}
                 onPaste={onEditPasteAttachments}
+                onKeyDown={(event) => {
+                  if (!shouldSubmitOnEnter(event)) return
+                  event.preventDefault()
+                  if (canSaveEdit) {
+                    onSaveEditedMessage(msg)
+                  }
+                }}
                 rows={3}
                 className="bg-muted text-foreground"
               />
@@ -355,7 +364,7 @@ const MessageBubbleComponent = ({
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => onSaveEditedMessage(msg)}>
+                <Button size="sm" onClick={() => onSaveEditedMessage(msg)} disabled={!canSaveEdit}>
                   {t("chat_save")}
                 </Button>
                 <Button size="sm" variant="outline" onClick={onCancelEdit}>
@@ -656,7 +665,7 @@ const MessageBubbleComponent = ({
           )}
         </div>
         {!isUser && !isEditing && msg.generation_status === "failed" ? (
-          <div className="flex justify-start gap-2 opacity-0 group-hover:opacity-100 mt-2 transition">
+          <div className="flex justify-start gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 mt-2 transition">
             <Button
               type="button"
               variant="outline"
@@ -670,7 +679,7 @@ const MessageBubbleComponent = ({
           </div>
         ) : null}
         {isUser && !isEditing ? (
-          <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 mt-2 transition">
+          <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 mt-2 transition">
             <Button
               type="button"
               variant="ghost"

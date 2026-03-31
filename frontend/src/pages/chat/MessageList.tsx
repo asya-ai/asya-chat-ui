@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 type MessageListProps = {
   messages: ChatMessage[]
   isLoading?: boolean
-  emptyLabel: string
   onScroll: () => void
   containerRef: React.RefObject<HTMLDivElement | null>
   endRef: React.RefObject<HTMLDivElement | null>
@@ -18,7 +17,6 @@ type MessageListProps = {
 const MessageListComponent = ({
   messages,
   isLoading,
-  emptyLabel,
   onScroll,
   containerRef,
   endRef,
@@ -47,7 +45,20 @@ const MessageListComponent = ({
         </div>
       ))}
       {!isLoading && messages.length === 0 ? (
-        <p className="text-muted-foreground text-sm">{emptyLabel}</p>
+        <div className="flex flex-col justify-center items-center min-h-full text-center">
+          <h2 className="font-semibold text-2xl">Welcome to ChatUI</h2>
+          <p className="mt-2 text-muted-foreground text-sm">
+            Created by{" "}
+            <a
+              href="https://asya.ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2"
+            >
+              asya.ai
+            </a>
+          </p>
+        </div>
       ) : null}
       <div ref={endRef} />
     </div>
@@ -59,7 +70,6 @@ export const MessageList = memo(
   (prev, next) =>
     prev.messages === next.messages &&
     prev.isLoading === next.isLoading &&
-    prev.emptyLabel === next.emptyLabel &&
     prev.onScroll === next.onScroll &&
     prev.containerRef === next.containerRef &&
     prev.endRef === next.endRef &&

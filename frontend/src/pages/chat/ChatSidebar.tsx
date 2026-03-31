@@ -98,7 +98,7 @@ export const ChatSidebar = ({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="top-1/2 right-2 absolute opacity-0 group-hover:opacity-100 transition -translate-y-1/2"
+                          className="top-1/2 right-2 absolute opacity-100 md:opacity-0 md:group-hover:opacity-100 transition -translate-y-1/2"
                           onClick={(event) => event.stopPropagation()}
                         >
                           <MoreHorizontal className="w-4 h-4 text-muted-foreground" />

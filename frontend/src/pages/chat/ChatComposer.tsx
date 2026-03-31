@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Plus, X, Brain, Globe, SquareTerminal } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
+import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -111,9 +112,7 @@ export const ChatComposer = ({
           onChange={(event) => onMessageChange(event.target.value)}
           onPaste={onPasteAttachments}
           onKeyDown={(event) => {
-            if (event.key !== "Enter") return
-            if (event.nativeEvent.isComposing) return
-            if (event.shiftKey || event.metaKey) return
+            if (!shouldSubmitOnEnter(event)) return
 
             event.preventDefault()
             if (!loading && canSend) {

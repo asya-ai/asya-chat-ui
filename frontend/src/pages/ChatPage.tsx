@@ -1810,7 +1810,6 @@ export const ChatPage = () => {
         </div>
         <MessageList
           messages={visibleMessages}
-          emptyLabel={t("chat_no_messages")}
           isLoading={isMessagesLoading}
           onScroll={handleMessagesScroll}
           containerRef={messagesContainerRef}
