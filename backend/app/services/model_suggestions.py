@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import importlib
 import os
+import re
+import urllib.error
 import urllib.request
 from typing import Iterable
 
@@ -272,35 +274,74 @@ def _anthropic_models() -> tuple[list[dict[str, object]], str | None]:
 def _azure_models() -> tuple[list[dict[str, object]], str | None]:
     if not settings.azure_openai_api_key or not settings.azure_openai_endpoint:
         return [], "AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not set"
-    try:
-        endpoint = settings.azure_openai_endpoint.rstrip("/")
-        api_version = settings.azure_openai_api_version
+    endpoint = settings.azure_openai_endpoint.strip().rstrip("/")
+    endpoint = re.sub(r"/openai(?:/.*)?$", "", endpoint, flags=re.IGNORECASE)
+    if not endpoint.startswith("http"):
+        return [], "AZURE_OPENAI_ENDPOINT must be a full URL (https://...)"
+    versions = []
+    for candidate in (
+        settings.azure_openai_api_version,
+        "2024-06-01",
+        "2023-03-15-preview",
+    ):
+        value = (candidate or "").strip()
+        if value and value not in versions:
+            versions.append(value)
+
+    last_error: str | None = None
+    for api_version in versions:
         url = f"{endpoint}/openai/deployments?api-version={api_version}"
         request = urllib.request.Request(
             url,
             headers={"api-key": settings.azure_openai_api_key},
         )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        data = payload.get("data", [])
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:  # pragma: no cover - external API call
+            body = ""
+            try:
+                body = exc.read().decode("utf-8")
+            except Exception:
+                body = ""
+            last_error = f"Azure error ({exc.code}) for api-version={api_version}: {body or exc.reason}"
+            continue
+        except Exception as exc:  # pragma: no cover - external API call
+            last_error = f"Azure error for api-version={api_version}: {exc}"
+            continue
+
+        raw_data = payload.get("data")
+        if not isinstance(raw_data, list):
+            raw_data = payload.get("value")
+        if not isinstance(raw_data, list):
+            raw_data = []
         items = []
-        for item in data:
-            name = item.get("id") or item.get("name")
-            if not name:
+        for item in raw_data:
+            if not isinstance(item, dict):
                 continue
-            inferred_input, inferred_output = _infer_image_support(name)
+            name = item.get("id") or item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            deployment = name.strip()
+            inferred_input, inferred_output = _infer_image_support(deployment)
             items.append(
                 {
-                    "model_name": name,
-                    "display_name": name,
+                    "model_name": deployment,
+                    "display_name": deployment,
                     "context_length": None,
                     "supports_image_input": inferred_input,
                     "supports_image_output": inferred_output,
                 }
             )
-        return items, None
-    except Exception as exc:  # pragma: no cover - external API call
-        return [], f"Azure error: {exc}"
+        if items:
+            return items, None
+
+    if last_error:
+        return [], last_error
+    return [], (
+        "Azure returned no deployments. Deploy models in Azure OpenAI first, "
+        "then they will appear here."
+    )
 
 
 def _openrouter_models() -> tuple[list[dict[str, object]], str | None]:

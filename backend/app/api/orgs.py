@@ -129,7 +129,7 @@ def _has_global_config(provider: str) -> bool:
         case "openai":
             return bool(settings.openai_api_key)
         case "azure":
-            return bool(settings.azure_openai_api_key)
+            return bool(settings.azure_openai_api_key and settings.azure_openai_endpoint)
         case "gemini":
             return bool(settings.gemini_api_key)
         case "groq":

@@ -552,6 +552,10 @@ export const OrgPage = () => {
     const entry = modelSuggestions.find((item) => item.provider === modelProvider)
     return entry?.models ?? []
   }, [modelProvider, modelSuggestions])
+  const currentProviderSuggestionError = useMemo(() => {
+    const entry = modelSuggestions.find((item) => item.provider === modelProvider)
+    return entry?.error ?? null
+  }, [modelProvider, modelSuggestions])
 
   const reasoningOptions = ["none", "low", "medium", "high"]
   const reasoningLabel = (value: string) => {
@@ -1327,6 +1331,11 @@ export const OrgPage = () => {
                           {t("org_models_add")}
                         </Button>
                       </div>
+                      {currentProviderSuggestionError ? (
+                        <p className="text-muted-foreground text-xs">
+                          {currentProviderSuggestionError}
+                        </p>
+                      ) : null}
                       <datalist id="model-name-suggestions">
                         {currentProviderSuggestions.map((item) => (
                           <option key={item.model_name} value={item.model_name}>
