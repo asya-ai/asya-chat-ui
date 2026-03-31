@@ -115,6 +115,14 @@ const App = () => {
           }
         />
         <Route
+          path="/shared/:shareToken"
+          element={
+            <RequireAuth>
+              <ChatPage />
+            </RequireAuth>
+          }
+        />
+        <Route
           path="/usage"
           element={
             <RequireAuth>

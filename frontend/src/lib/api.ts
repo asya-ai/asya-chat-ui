@@ -25,6 +25,18 @@ const API_BASE = import.meta.env.VITE_API_URL || "/api"
 
 type RequestOptions = RequestInit & { skipAuth?: boolean }
 
+export class ApiError extends Error {
+  status: number
+  detail?: unknown
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+    this.detail = detail
+  }
+}
+
 type StreamEvent =
   | { delta: string }
   | { user_message_id: string; edited_message_id?: string }
@@ -151,6 +163,7 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
     }
     const contentType = response.headers.get("content-type") || ""
     let message = "Request failed"
+    let detailValue: unknown = undefined
     if (contentType.includes("application/json")) {
       try {
         const data = (await response.json()) as
@@ -160,6 +173,7 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
           message = data
         } else if (data && typeof data === "object") {
           const detail = (data as { detail?: unknown }).detail
+          detailValue = detail
           if (typeof detail === "string") {
             message = detail
           } else if (Array.isArray(detail)) {
@@ -191,6 +205,7 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
             const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown }
             if (typeof parsed?.detail === "string") {
               message = parsed.detail
+              detailValue = parsed.detail
             } else if (typeof parsed?.message === "string") {
               message = parsed.message
             } else {
@@ -204,7 +219,7 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
         // ignore
       }
     }
-    throw new Error(message)
+    throw new ApiError(message, response.status, detailValue)
   }
   if (response.status === 204) {
     return {} as T
@@ -397,6 +412,18 @@ export const modelApi = {
 }
 
 export const chatApi = {
+  resolveShared: (shareToken: string) =>
+    apiFetch<{ chat_id: string }>(`/chats/shared/${encodeURIComponent(shareToken)}`),
+  share: (chatId: string) =>
+    apiFetch<{ chat_id: string; is_shared: boolean; share_token?: string | null; share_url?: string | null }>(
+      `/chats/${chatId}/share`,
+      { method: "POST" }
+    ),
+  unshare: (chatId: string) =>
+    apiFetch<{ chat_id: string; is_shared: boolean; share_token?: string | null; share_url?: string | null }>(
+      `/chats/${chatId}/share`,
+      { method: "DELETE" }
+    ),
   list: (orgId: string) => apiFetch<Chat[]>(`/chats?org_id=${orgId}`),
   search: (query: string, limit = 50) => {
     const params = new URLSearchParams({
@@ -427,7 +454,12 @@ export const chatApi = {
     }),
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),
-  messages: (chatId: string) => apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`),
+  messages: (chatId: string, shareToken?: string | null) => {
+    const params = new URLSearchParams()
+    if (shareToken) params.set("share", shareToken)
+    const query = params.toString()
+    return apiFetch<ChatMessage[]>(`/chats/${chatId}/messages${query ? `?${query}` : ""}`)
+  },
   sendMessage: (
     chatId: string,
     content: string,

@@ -22,6 +22,8 @@ type ChatSidebarProps = {
     untitled: string
     settings: string
     delete: string
+    share: string
+    unshare: string
     searchPlaceholder: string
     noResults: string
   }
@@ -32,6 +34,7 @@ type ChatSidebarProps = {
   onNewChat: () => void
   onSelectChat: (chat: Chat) => void
   onDeleteChat: (chat: Chat) => void
+  onToggleShareChat: (chat: Chat) => void
   onOpenSettings: () => void
   formatRelativeAge: (dateString: string) => string
   getChatActivityDate: (chat: Chat) => string
@@ -48,6 +51,7 @@ export const ChatSidebar = ({
   onNewChat,
   onSelectChat,
   onDeleteChat,
+  onToggleShareChat,
   onOpenSettings,
   formatRelativeAge,
   getChatActivityDate,
@@ -105,6 +109,14 @@ export const ChatSidebar = ({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onToggleShareChat(chat)
+                          }}
+                        >
+                          {chat.is_shared ? labels.unshare : labels.share}
+                        </DropdownMenuItem>
                         <DropdownMenuItem
                           variant="destructive"
                           onClick={(event) => {

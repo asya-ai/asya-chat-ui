@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { useLocation, useNavigate, useParams } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { chatApi } from "@/lib/api"
+import { ApiError, chatApi } from "@/lib/api"
 import {
   codeExecutionEnabledStore,
   modelStore,
@@ -22,11 +22,12 @@ import type {
 import { getTheme } from "@/lib/theme"
 import { useI18n } from "@/lib/i18n-context"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Image as ImageIcon, Menu } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
@@ -63,7 +64,8 @@ const extractAttachmentIdFromContentUrl = (url?: string): string | undefined => 
 
 export const ChatPage = () => {
   const navigate = useNavigate()
-  const { chatId } = useParams()
+  const location = useLocation()
+  const { chatId, shareToken: shareTokenParam } = useParams()
   const [orgId, setOrgId] = useState<string | null>(orgStore.get())
   const [toolEvents, setToolEvents] = useState<ChatMessage[]>([])
   const [message, setMessage] = useState("")
@@ -107,8 +109,16 @@ export const ChatPage = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState("")
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
+  const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
+  const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
+  const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null)
+  const [shareCopied, setShareCopied] = useState<boolean | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const { locale, t } = useI18n()
+  const shareToken = useMemo(() => {
+    if (shareTokenParam) return shareTokenParam
+    return new URLSearchParams(location.search).get("share")
+  }, [location.search, shareTokenParam])
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => {
     return theme === "dark" ? oneDark : oneLight
   }, [theme])
@@ -120,7 +130,8 @@ export const ChatPage = () => {
   const {
     data: serverMessages = [],
     isLoading: isMessagesLoading,
-  } = useChatMessages(chatId ?? null)
+    error: messagesError,
+  } = useChatMessages(chatId ?? null, shareToken)
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
 
@@ -686,6 +697,65 @@ export const ChatPage = () => {
     [parseChatDate]
   )
 
+  const collapseActivityEvents = useCallback(
+    (messages: ChatMessage[]): ChatMessage[] => {
+      const debounceMs = 5 * 60 * 1000
+      const output: ChatMessage[] = []
+      let pending: ChatMessage[] = []
+
+      const flushPending = () => {
+        if (pending.length === 0) return
+        if (pending.length === 1) {
+          output.push(pending[0])
+          pending = []
+          return
+        }
+        const first = pending[0]
+        const opens = pending.flatMap((item) => {
+          const listed = item.activity_event?.opens ?? []
+          if (listed.length > 0) return listed
+          return [{ viewer: "Anonymous user", opened_at: item.created_at }]
+        })
+        output.push({
+          ...first,
+          id: `view-group-${first.id}-${pending[pending.length - 1].id}`,
+          role: "event",
+          activity_event: {
+            type: "chat_view",
+            count: opens.length,
+            opens,
+          },
+        })
+        pending = []
+      }
+
+      for (const msg of messages) {
+        const isViewEvent = msg.role === "event" && msg.activity_event?.type === "chat_view"
+        if (!isViewEvent) {
+          flushPending()
+          output.push(msg)
+          continue
+        }
+        if (pending.length === 0) {
+          pending = [msg]
+          continue
+        }
+        const prev = pending[pending.length - 1]
+        const delta =
+          parseChatDate(msg.created_at).getTime() - parseChatDate(prev.created_at).getTime()
+        if (delta <= debounceMs) {
+          pending.push(msg)
+        } else {
+          flushPending()
+          pending = [msg]
+        }
+      }
+      flushPending()
+      return output
+    },
+    [parseChatDate]
+  )
+
   const groupedChats = useMemo(() => {
     const now = new Date()
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -765,6 +835,46 @@ export const ChatPage = () => {
   }, [chatId, navigate, orgId, orgs, orgsLoading])
 
   useEffect(() => {
+    if (!shareTokenParam || chatId) return
+    let cancelled = false
+    chatApi
+      .resolveShared(shareTokenParam)
+      .then((resolved) => {
+        if (cancelled) return
+        navigate(`/chat/${resolved.chat_id}?share=${encodeURIComponent(shareTokenParam)}`, {
+          replace: true,
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        navigate("/chat", {
+          replace: true,
+          state: { blockedSharedChat: true },
+        })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [chatId, navigate, shareTokenParam])
+
+  useEffect(() => {
+    if (!chatId) return
+    if (!(messagesError instanceof ApiError)) return
+    if (messagesError.status !== 403 || messagesError.detail !== "CHAT_NOT_SHARED") return
+    navigate("/chat", {
+      replace: true,
+      state: { blockedSharedChat: true },
+    })
+  }, [chatId, messagesError, navigate])
+
+  useEffect(() => {
+    const state = location.state as { blockedSharedChat?: boolean } | null
+    if (!state?.blockedSharedChat) return
+    setBlockedLinkDialogOpen(true)
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
+  }, [location.pathname, location.search, location.state, navigate])
+
+  useEffect(() => {
     if (selectableChatModels.length === 0) return
     if (selectedModel && selectableChatModels.some((model) => model.id === selectedModel)) return
     const stored = modelStore.get()
@@ -779,6 +889,7 @@ export const ChatPage = () => {
     () => chats.find((item) => item.id === chatId) ?? null,
     [chatId, chats]
   )
+  const isSharedView = Boolean(chatId && shareToken && !activeChat)
   const currentChatLoading = Boolean(chatId && loadingByChat[chatId])
 
   const isChatSwitchRef = useRef(false)
@@ -889,15 +1000,14 @@ export const ChatPage = () => {
     queryClient,
   ])
 
-  const visibleMessages = useMemo(
-    () =>
-      mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
-        if (!msg.tool_event || msg.tool_event.type !== "tool_call") return true
-        if (msg.tool_event.tool_name === "code_execution") return false
-        return showToolCallLogs
-      }),
-    [mergeToolEvents, serverMessages, toolEvents, showToolCallLogs]
-  )
+  const visibleMessages = useMemo(() => {
+    const merged = mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
+      if (!msg.tool_event || msg.tool_event.type !== "tool_call") return true
+      if (msg.tool_event.tool_name === "code_execution") return false
+      return showToolCallLogs
+    })
+    return collapseActivityEvents(merged)
+  }, [collapseActivityEvents, mergeToolEvents, serverMessages, toolEvents, showToolCallLogs])
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     const container = messagesContainerRef.current
@@ -1009,6 +1119,54 @@ export const ChatPage = () => {
       replaceCurrentChatMessages([])
       setToolEvents([])
       navigate("/chat", { replace: true })
+    }
+  }
+
+  const toggleShareChat = async (chat: Chat) => {
+    if (chat.is_shared) {
+      await chatApi.unshare(chat.id)
+      queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
+        prev
+          ? prev.map((item) =>
+              item.id === chat.id
+                ? {
+                    ...item,
+                    is_shared: false,
+                  }
+                : item
+            )
+          : prev
+      )
+      if (chatId === chat.id && shareToken) {
+        navigate(`/chat/${chat.id}`, { replace: true })
+      }
+      return
+    }
+    const shared = await chatApi.share(chat.id)
+    queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
+      prev
+        ? prev.map((item) =>
+            item.id === chat.id
+              ? {
+                  ...item,
+                  is_shared: true,
+                }
+              : item
+          )
+        : prev
+    )
+    if (shared.share_token) {
+      const sharedPath = `/shared/${encodeURIComponent(shared.share_token)}`
+      const fullUrl = `${window.location.origin}${sharedPath}`
+      let copied = false
+      try {
+        await navigator.clipboard.writeText(fullUrl)
+        copied = true
+      } catch {
+        copied = false
+      }
+      setShareDialogUrl(fullUrl)
+      setShareCopied(copied)
     }
   }
 
@@ -1679,6 +1837,7 @@ export const ChatPage = () => {
           thinkingLabels={thinkingLabels}
           currentStepLabel={stepLabel}
           currentToolLabel={currentToolLabel}
+          actionsEnabled={!isSharedView}
           isEditing={isEditing}
           editingContent={isEditing ? editingContent : ""}
           editingAttachments={isEditing ? editingAttachments : []}
@@ -1714,6 +1873,7 @@ export const ChatPage = () => {
       handleEditPasteAttachments,
       handleEditFilesSelected,
       removeEditingAttachment,
+      isSharedView,
     ]
   )
 
@@ -1735,6 +1895,8 @@ export const ChatPage = () => {
             untitled: t("chat_untitled"),
             settings: t("common_settings"),
             delete: t("chat_delete"),
+            share: t("chat_share"),
+            unshare: t("chat_unshare"),
             searchPlaceholder: t("chat_search_placeholder"),
             noResults: t("chat_search_no_results"),
           }}
@@ -1744,7 +1906,8 @@ export const ChatPage = () => {
           onSearchChange={setChatSearchQuery}
           onNewChat={startNewChat}
           onSelectChat={(chat: Chat) => handleSelectChat(chat)}
-          onDeleteChat={(chat: Chat) => deleteChat(chat.id)}
+          onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
+          onToggleShareChat={toggleShareChat}
           onOpenSettings={() => navigate("/settings/me")}
           formatRelativeAge={formatRelativeAge}
           getChatActivityDate={getChatActivityDate}
@@ -1767,6 +1930,8 @@ export const ChatPage = () => {
                     untitled: t("chat_untitled"),
                     settings: t("common_settings"),
                     delete: t("chat_delete"),
+                    share: t("chat_share"),
+                    unshare: t("chat_unshare"),
                     searchPlaceholder: t("chat_search_placeholder"),
                     noResults: t("chat_search_no_results"),
                   }}
@@ -1776,7 +1941,8 @@ export const ChatPage = () => {
                   onSearchChange={setChatSearchQuery}
                   onNewChat={startNewChat}
                   onSelectChat={(chat: Chat) => handleSelectChat(chat, () => setSidebarOpen(false))}
-                  onDeleteChat={(chat: Chat) => deleteChat(chat.id)}
+                  onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
+                  onToggleShareChat={toggleShareChat}
                   onOpenSettings={() => {
                     setSidebarOpen(false)
                     navigate("/settings/me")
@@ -1824,6 +1990,7 @@ export const ChatPage = () => {
           message={message}
           placeholder={t("chat_message_placeholder")}
           loading={currentChatLoading || isUploadingAttachments}
+          readOnly={isSharedView}
           isDragActive={isDragActive}
           pendingAttachments={pendingAttachments}
           attachmentError={attachmentError}
@@ -1866,6 +2033,80 @@ export const ChatPage = () => {
                 className="w-auto max-w-[90vw] h-auto max-h-[90vh] object-contain"
               />
             ) : null}
+          </DialogContent>
+        </Dialog>
+        <Dialog open={blockedLinkDialogOpen} onOpenChange={setBlockedLinkDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("chat_link_not_shared_title")}</DialogTitle>
+              <DialogDescription>{t("chat_link_not_shared_desc")}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button autoFocus onClick={() => setBlockedLinkDialogOpen(false)}>
+                {t("common_close")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog
+          open={Boolean(deleteConfirmChat)}
+          onOpenChange={(open) => {
+            if (!open) setDeleteConfirmChat(null)
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("chat_delete_confirm_title")}</DialogTitle>
+              <DialogDescription>
+                {t("chat_delete_confirm_desc", {
+                  title: deleteConfirmChat?.title || t("chat_untitled"),
+                })}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteConfirmChat(null)}>
+                {t("chat_cancel")}
+              </Button>
+              <Button
+                autoFocus
+                onClick={() => {
+                  if (!deleteConfirmChat) return
+                  deleteChat(deleteConfirmChat.id).catch(() => null)
+                  setDeleteConfirmChat(null)
+                }}
+              >
+                {t("chat_delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog
+          open={Boolean(shareDialogUrl)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShareDialogUrl(null)
+              setShareCopied(null)
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("chat_share_dialog_title")}</DialogTitle>
+              <DialogDescription>{t("chat_share_dialog_desc")}</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Input readOnly value={shareDialogUrl ?? ""} />
+              {shareCopied ? (
+                <p className="text-muted-foreground text-sm">
+                  {t("chat_share_dialog_copied")}
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setShareDialogUrl(null)}>
+                {t("common_close")}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </main>

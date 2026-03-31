@@ -17,6 +17,7 @@ type ChatComposerProps = {
   message: string
   placeholder: string
   loading: boolean
+  readOnly?: boolean
   isDragActive: boolean
   pendingAttachments: ChatMessageAttachmentInput[]
   attachmentError?: string | null
@@ -46,6 +47,7 @@ export const ChatComposer = ({
   message,
   placeholder,
   loading,
+  readOnly = false,
   isDragActive,
   pendingAttachments,
   attachmentError,
@@ -84,7 +86,7 @@ export const ChatComposer = ({
     event.target.value = ""
   }
 
-  const canSend = Boolean(message.trim() || pendingAttachments.length > 0)
+  const canSend = !readOnly && Boolean(message.trim() || pendingAttachments.length > 0)
 
   const reasoningLevels = [
     { value: null, label: t("chat_reasoning_default") },
@@ -122,7 +124,7 @@ export const ChatComposer = ({
           placeholder={placeholder}
           rows={3}
           className="max-h-48 overflow-y-auto"
-          disabled={loading}
+          disabled={loading || readOnly}
         />
         {attachmentError ? (
           <p className="text-destructive text-sm">{attachmentError}</p>
@@ -174,13 +176,13 @@ export const ChatComposer = ({
               multiple
               className="hidden"
               onChange={handleFilesSelected}
-              disabled={loading}
+              disabled={loading || readOnly}
             />
             <Button
               variant="ghost"
               size="icon"
               onClick={handlePickFiles}
-              disabled={loading}
+              disabled={loading || readOnly}
               title={t("chat_add_files")}
             >
               <Plus className="w-5 h-5" />
@@ -192,7 +194,7 @@ export const ChatComposer = ({
                   size="sm"
                   className={`gap-2 ${reasoningEffort ? "text-primary bg-primary/10" : "text-muted-foreground"}`}
                   title={t("chat_reasoning_effort")}
-                  disabled={loading}
+                  disabled={loading || readOnly}
                 >
                   <Brain className="w-4 h-4" />
                   <span className="text-xs">{currentReasoningLabel}</span>
@@ -219,7 +221,7 @@ export const ChatComposer = ({
               title={
                 webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
               }
-              disabled={loading}
+              disabled={loading || readOnly}
               onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
             >
               <Globe className="w-4 h-4" />
@@ -236,7 +238,7 @@ export const ChatComposer = ({
                   ? t("chat_code_execution_on")
                   : t("chat_code_execution_off")
               }
-              disabled={loading}
+              disabled={loading || readOnly}
               onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
             >
               <SquareTerminal className="w-4 h-4" />

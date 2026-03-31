@@ -3,6 +3,7 @@ import base64
 import html
 import logging
 import re
+import secrets
 from io import BytesIO
 from typing import Any
 from urllib.parse import urlparse
@@ -29,6 +30,7 @@ from app.models import (
     ChatGenerationTask,
     ChatMessage,
     ChatMessageAttachment,
+    ChatViewEvent,
     ChatUpload,
     ChatModel,
     GenerationStatus,
@@ -72,6 +74,19 @@ TAIL_CONTEXT_MESSAGES = 12
 MAX_TOOL_STEPS = 25
 MAX_WEB_SEARCH_CALLS = 3
 MAX_WEB_SCRAPE_CALLS = 10
+CHAT_NOT_SHARED_DETAIL = "CHAT_NOT_SHARED"
+
+
+def _viewer_label(user: User | None) -> str:
+    if not user:
+        return "Anonymous user"
+    if user.display_name and user.display_name.strip():
+        return user.display_name.strip()
+    if user.username and user.username.strip():
+        return user.username.strip()
+    if user.email and user.email.strip():
+        return user.email.strip()
+    return "Anonymous user"
 
 
 def _attachment_access_token(attachment_id: UUID) -> str:
@@ -117,6 +132,12 @@ def _attachment_content_url(attachment_id: UUID) -> str:
     if base_url:
         return f"{base_url}/chats/attachments/{attachment_id}/content?token={token}"
     return f"/api/chats/attachments/{attachment_id}/content?token={token}"
+
+
+def _chat_share_url(chat: Chat) -> str | None:
+    if not chat.share_token:
+        return None
+    return f"/shared/{chat.share_token}"
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
@@ -1637,8 +1658,20 @@ class ChatRead(BaseModel):
     id: str
     title: str | None
     model_id: str | None
+    is_shared: bool = False
     created_at: datetime
     last_activity_at: datetime
+
+
+class ChatShareRead(BaseModel):
+    chat_id: str
+    is_shared: bool
+    share_token: str | None = None
+    share_url: str | None = None
+
+
+class SharedChatResolveRead(BaseModel):
+    chat_id: str
 
 
 class ChatMessageAttachmentCreate(BaseModel):
@@ -1730,6 +1763,7 @@ class ChatMessageRead(BaseModel):
     attachments: list[ChatMessageAttachmentRead] | None = None
     sources: list[dict] | None = None
     tool_event: dict | None = None
+    activity_event: dict | None = None
     task_id: str | None = None
     generation_status: str | None = None
 
@@ -2198,6 +2232,7 @@ def create_chat(
         id=str(chat.id),
         title=chat.title,
         model_id=str(chat.model_id) if chat.model_id else None,
+        is_shared=bool(chat.share_token),
         created_at=chat.created_at,
         last_activity_at=chat.created_at,
     )
@@ -2242,6 +2277,7 @@ def list_chats(
             id=str(chat.id),
             title=chat.title,
             model_id=str(chat.model_id) if chat.model_id else None,
+            is_shared=bool(chat.share_token),
             created_at=chat.created_at,
             last_activity_at=last_activity_at or chat.created_at,
         )
@@ -2337,6 +2373,7 @@ def search_chats(
             id=str(chat.id),
             title=chat.title,
             model_id=str(chat.model_id) if chat.model_id else None,
+            is_shared=bool(chat.share_token),
             created_at=chat.created_at,
             last_activity_at=last_activity_at or chat.created_at,
         )
@@ -2347,6 +2384,7 @@ def search_chats(
 @router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
 def list_messages(
     chat_id: str,
+    share: str | None = None,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ChatMessageRead]:
@@ -2360,20 +2398,33 @@ def list_messages(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id and not current_user.is_super_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+    is_owner = chat.user_id == current_user.id
+    if not is_owner:
+        shared_token = (chat.share_token or "").strip()
+        provided_token = (share or "").strip()
+        if not shared_token or provided_token != shared_token:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=CHAT_NOT_SHARED_DETAIL,
+            )
+        viewer_label = _viewer_label(current_user)
+        session.add(
+            ChatViewEvent(
+                chat_id=chat.id,
+                viewer_user_id=current_user.id,
+                viewer_label=viewer_label,
+            )
         )
-
-    org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
-    if not org:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        session.commit()
+    else:
+        org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
+        if not org:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+            )
+        require_org_member(
+            session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
         )
-
-    require_org_member(
-        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
-    )
 
     messages = session.exec(
         select(ChatMessage)
@@ -2434,6 +2485,11 @@ def list_messages(
             if not isinstance(event.payload_json, dict):
                 continue
             tool_events_by_assistant.setdefault(task.assistant_message_id, []).append(event)
+    view_events = session.exec(
+        select(ChatViewEvent)
+        .where(ChatViewEvent.chat_id == chat.id)
+        .order_by(ChatViewEvent.created_at)
+    ).all()
 
     results: list[ChatMessageRead] = []
     for message in messages:
@@ -2479,6 +2535,25 @@ def list_messages(
                         task_id=str(task_map[message.id].id) if message.id in task_map else None,
                     )
                 )
+    for event in view_events:
+        results.append(
+            ChatMessageRead(
+                id=f"view-{event.id}",
+                role="event",
+                content="",
+                created_at=event.created_at,
+                activity_event={
+                    "type": "chat_view",
+                    "count": 1,
+                    "opens": [
+                        {
+                            "viewer": event.viewer_label,
+                            "opened_at": event.created_at.isoformat(),
+                        }
+                    ],
+                },
+            )
+        )
     return sorted(results, key=lambda item: item.created_at)
 
 
@@ -2769,6 +2844,85 @@ def delete_chat(
     chat.is_deleted = True
     session.add(chat)
     session.commit()
+
+
+@router.get("/shared/{share_token}", response_model=SharedChatResolveRead)
+def resolve_shared_chat(
+    share_token: str,
+    session: Session = Depends(get_db),
+) -> SharedChatResolveRead:
+    token = (share_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token"
+        )
+    chat = session.exec(
+        select(Chat).where(Chat.share_token == token).where(Chat.is_deleted.is_(False))
+    ).first()
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=CHAT_NOT_SHARED_DETAIL
+        )
+    return SharedChatResolveRead(chat_id=str(chat.id))
+
+
+@router.post("/{chat_id}/share", response_model=ChatShareRead)
+def share_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatShareRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot share this chat"
+        )
+    if not chat.share_token:
+        chat.share_token = secrets.token_urlsafe(24)
+        session.add(chat)
+        session.commit()
+        session.refresh(chat)
+    return ChatShareRead(
+        chat_id=str(chat.id),
+        is_shared=True,
+        share_token=chat.share_token,
+        share_url=_chat_share_url(chat),
+    )
+
+
+@router.delete("/{chat_id}/share", response_model=ChatShareRead)
+def unshare_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatShareRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot unshare this chat"
+        )
+    chat.share_token = None
+    session.add(chat)
+    session.commit()
+    return ChatShareRead(chat_id=str(chat.id), is_shared=False)
 
 
 @router.post("/{chat_id}/messages", response_model=list[ChatMessageRead])

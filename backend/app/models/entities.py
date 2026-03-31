@@ -201,6 +201,7 @@ class Chat(SQLModel, table=True):
     user_id: UUID = Field(foreign_key="users.id", index=True)
     model_id: Optional[UUID] = Field(default=None, foreign_key="chat_models.id")
     title: Optional[str] = Field(default=None)
+    share_token: Optional[str] = Field(default=None, index=True, unique=True)
     is_deleted: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
@@ -255,6 +256,16 @@ class ChatUpload(SQLModel, table=True):
     file_name: str
     content_type: str
     data_base64: str
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class ChatViewEvent(SQLModel, table=True):
+    __tablename__ = "chat_view_events"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    chat_id: UUID = Field(foreign_key="chats.id", index=True)
+    viewer_user_id: Optional[UUID] = Field(default=None, foreign_key="users.id", index=True)
+    viewer_label: str
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 

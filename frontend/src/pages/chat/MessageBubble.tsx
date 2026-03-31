@@ -22,6 +22,7 @@ type MessageBubbleProps = {
   thinkingLabels: string[]
   currentStepLabel: string | null
   currentToolLabel: string | null
+  actionsEnabled: boolean
   isEditing: boolean
   editingContent: string
   editingAttachments: ChatMessageAttachmentInput[]
@@ -48,6 +49,7 @@ const MessageBubbleComponent = ({
   thinkingLabels,
   currentStepLabel,
   currentToolLabel,
+  actionsEnabled,
   isEditing,
   editingContent,
   editingAttachments,
@@ -69,6 +71,7 @@ const MessageBubbleComponent = ({
   const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
   const toolCallEvent = msg.tool_event?.type === "tool_call" ? msg.tool_event : null
+  const chatViewEvent = msg.activity_event?.type === "chat_view" ? msg.activity_event : null
   const urlAttachmentsEvent =
     msg.tool_event?.type === "url_attachments" ? msg.tool_event : null
   const contextSummaryEvent =
@@ -148,6 +151,8 @@ const MessageBubbleComponent = ({
                 ? t("chat_executing_code")
                 : toolCallEvent
                   ? `Tool: ${toolCallEvent.tool_name}`
+                : chatViewEvent
+                  ? "Activity"
                 : urlAttachmentsEvent
                   ? "Downloading attachments"
                 : isContextSummaryEvent
@@ -254,6 +259,24 @@ const MessageBubbleComponent = ({
                 <div className="text-destructive/90">
                   Error: {toolCallEvent.output.error}
                 </div>
+              ) : null}
+            </div>
+          ) : chatViewEvent ? (
+            <div className="space-y-1 py-1 text-xs">
+              {(chatViewEvent.opens ?? []).map((open, index) => {
+                const openedAt =
+                  open.opened_at && !Number.isNaN(new Date(open.opened_at).getTime())
+                    ? new Date(open.opened_at).toLocaleString()
+                    : null
+                return (
+                  <div key={`view-open-${index}`} className="opacity-80">
+                    {(open.viewer || "Anonymous user")} viewed the chat
+                    {openedAt ? ` at ${openedAt}` : ""}
+                  </div>
+                )
+              })}
+              {(chatViewEvent.opens ?? []).length === 0 ? (
+                <div className="opacity-80">Chat viewed</div>
               ) : null}
             </div>
           ) : urlAttachmentsEvent ? (
@@ -664,7 +687,7 @@ const MessageBubbleComponent = ({
             </>
           )}
         </div>
-        {!isUser && !isEditing && msg.generation_status === "failed" ? (
+        {!isUser && !isEditing && actionsEnabled && msg.generation_status === "failed" ? (
           <div className="flex justify-start gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 mt-2 transition">
             <Button
               type="button"
@@ -678,7 +701,7 @@ const MessageBubbleComponent = ({
             </Button>
           </div>
         ) : null}
-        {isUser && !isEditing ? (
+        {isUser && !isEditing && actionsEnabled ? (
           <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 mt-2 transition">
             <Button
               type="button"
@@ -714,6 +737,7 @@ export const MessageBubble = memo(
     if (prev.isThinking !== next.isThinking) return false
     if (prev.currentStepLabel !== next.currentStepLabel) return false
     if (prev.currentToolLabel !== next.currentToolLabel) return false
+    if (prev.actionsEnabled !== next.actionsEnabled) return false
     if (prev.isEditing !== next.isEditing) return false
     if (prev.codeTheme !== next.codeTheme) return false
     if (prev.t !== next.t) return false

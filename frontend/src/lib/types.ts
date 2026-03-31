@@ -84,6 +84,7 @@ export type Chat = {
   id: string
   title?: string | null
   model_id?: string | null
+  is_shared?: boolean
   created_at: string
   last_activity_at: string
 }
@@ -99,6 +100,14 @@ export type ChatMessage = {
   sources?: SourceItem[] | null
   thinking_steps?: string[] | null
   tool_event?: ToolEvent | null
+  activity_event?: {
+    type?: "chat_view" | string
+    count?: number | null
+    opens?: {
+      viewer?: string | null
+      opened_at?: string | null
+    }[] | null
+  } | null
   task_id?: string | null
   generation_status?: GenerationStatus | null
 }
