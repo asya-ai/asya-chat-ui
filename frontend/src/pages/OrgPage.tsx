@@ -73,7 +73,6 @@ export const OrgPage = () => {
   const { t } = useI18n()
   const [selectedOrg, setSelectedOrg] = useState<string | null>(orgStore.get())
   const [orgSettingsId, setOrgSettingsId] = useState<string | null>(orgStore.get())
-  const [orgSettingsName, setOrgSettingsName] = useState("")
   const [usersOrgId, setUsersOrgId] = useState<string | null>(orgStore.get())
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -274,8 +273,6 @@ export const OrgPage = () => {
 
   useEffect(() => {
     if (!orgSettingsId) return
-    const selected = orgs.find((org) => org.id === orgSettingsId)
-    setOrgSettingsName(selected?.name ?? "")
     orgApi
       .providers(orgSettingsId)
       .then((configs) =>
@@ -613,9 +610,6 @@ export const OrgPage = () => {
     if (!renameOrgId || !renameOrgName.trim()) return
     const updated = await orgApi.update(renameOrgId, { name: renameOrgName.trim() })
     setOrgs((prev) => prev.map((org) => (org.id === updated.id ? updated : org)))
-    if (orgSettingsId === updated.id) {
-      setOrgSettingsName(updated.name)
-    }
     closeRenameDialog()
   }
 
@@ -643,11 +637,14 @@ export const OrgPage = () => {
     closeDeleteDialog()
   }
 
-  const saveOrgSettingsName = async () => {
-    if (!orgSettingsId || !orgSettingsName.trim()) return
-    const updated = await orgApi.update(orgSettingsId, { name: orgSettingsName.trim() })
-    setOrgs((prev) => prev.map((org) => (org.id === updated.id ? updated : org)))
-    setOrgSettingsName(updated.name)
+  const openAuthForOrg = (orgId: string) => {
+    setOrgSettingsId(orgId)
+    setAuthModalOpen(true)
+  }
+
+  const openProvidersForOrg = (orgId: string) => {
+    setOrgSettingsId(orgId)
+    setProviderModalOpen(true)
   }
 
   const updateProviderConfig = async (config: ProviderConfigUI) => {
@@ -837,6 +834,20 @@ export const OrgPage = () => {
                         ) : null}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openAuthForOrg(org.id)}
+                        >
+                          {t("org_auth_open")}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openProvidersForOrg(org.id)}
+                        >
+                          {t("org_provider_configure")}
+                        </Button>
                         <Button variant="outline" size="sm" onClick={() => openRenameDialog(org)}>
                           {t("org_rename")}
                         </Button>
@@ -888,24 +899,6 @@ export const OrgPage = () => {
                   <CardTitle>{t("org_settings")}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex flex-col gap-2">
-                    <Input
-                      placeholder={t("org_settings_name")}
-                      value={orgSettingsName}
-                      onChange={(event) => setOrgSettingsName(event.target.value)}
-                    />
-                    <Button onClick={saveOrgSettingsName} disabled={!orgSettingsName.trim()}>
-                      {t("org_save_name")}
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={() => setAuthModalOpen(true)}>
-                      {t("org_auth_open")}
-                    </Button>
-                    <Button variant="outline" onClick={() => setProviderModalOpen(true)}>
-                      {t("org_provider_configure")}
-                    </Button>
-                  </div>
                   {isSuperAdmin ? (
                     <div className="border rounded-md w-full overflow-x-auto">
                       <Table>
