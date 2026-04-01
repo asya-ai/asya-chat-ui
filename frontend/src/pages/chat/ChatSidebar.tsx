@@ -57,8 +57,8 @@ export const ChatSidebar = ({
   getChatActivityDate,
   footer,
 }: ChatSidebarProps) => {
-    return (
-    <div className="flex flex-col gap-4 h-full min-h-0">
+  return (
+    <nav aria-label={title} className="flex flex-col gap-4 h-full min-h-0">
       <div className="flex justify-between items-center">
         <h2 className="font-semibold text-base">{title}</h2>
         <Button size="sm" onClick={onNewChat}>
@@ -86,6 +86,14 @@ export const ChatSidebar = ({
                     activeChatId === chat.id ? "border-primary" : ""
                   }`}
                   onClick={() => onSelectChat(chat)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault()
+                      onSelectChat(chat)
+                    }
+                  }}
                 >
                   <div className="relative flex items-center gap-2 w-full">
                     <p className="flex-1 min-w-0 max-w-48 font-medium truncate">
@@ -102,10 +110,11 @@ export const ChatSidebar = ({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="top-1/2 right-2 absolute opacity-100 md:opacity-0 md:group-hover:opacity-100 transition -translate-y-1/2"
+                          aria-label={`${chat.is_shared ? labels.unshare : labels.share} / ${labels.delete}`}
+                          className="top-1/2 right-2 absolute opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition -translate-y-1/2"
                           onClick={(event) => event.stopPropagation()}
                         >
-                          <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
+                          <MoreHorizontal aria-hidden="true" className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
@@ -143,7 +152,7 @@ export const ChatSidebar = ({
           {footer}
         </div>
       </div>
-    </div>
+    </nav>
   )
 }
 

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
-import { useNavigate } from "react-router-dom"
+import { Link } from "react-router-dom"
+import { useI18n } from "@/lib/i18n-context"
 
 import {
   Sidebar,
@@ -27,25 +28,24 @@ type SettingsShellProps = {
 }
 
 export const SettingsShell = ({ title, items, actions, children }: SettingsShellProps) => {
-  const navigate = useNavigate()
+  const { t } = useI18n()
   const visibleItems = items.filter((item) => item.visible !== false)
 
   return (
     <SidebarProvider className="h-svh overflow-hidden">
       <Sidebar>
         <SidebarContent className="px-2 py-4">
-          <SidebarMenu>
-            {visibleItems.map((item) => (
-              <SidebarMenuItem key={item.href}>
-                <SidebarMenuButton
-                  isActive={item.active}
-                  onClick={() => navigate(item.href)}
-                >
-                  <span>{item.label}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
+          <nav aria-label={t("settings_navigation")}>
+            <SidebarMenu>
+              {visibleItems.map((item) => (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton asChild isActive={item.active}>
+                    <Link to={item.href}>{item.label}</Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </nav>
         </SidebarContent>
       </Sidebar>
       <SidebarInset className="flex h-svh min-h-0 flex-col overflow-hidden">
@@ -54,7 +54,9 @@ export const SettingsShell = ({ title, items, actions, children }: SettingsShell
           <h1 className="text-xl font-semibold">{title}</h1>
           <div className="ml-auto flex items-center gap-2">{actions}</div>
         </header>
-        <div className="flex-1 min-h-0 overflow-y-auto p-6">{children}</div>
+        <main id="main-content" className="flex-1 min-h-0 overflow-y-auto p-6">
+          {children}
+        </main>
       </SidebarInset>
     </SidebarProvider>
   )

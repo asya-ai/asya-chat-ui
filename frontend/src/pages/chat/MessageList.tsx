@@ -2,6 +2,7 @@ import { memo } from "react"
 import type { ReactNode } from "react"
 
 import type { ChatMessage } from "@/lib/types"
+import { useI18n } from "@/lib/i18n-context"
 import { Skeleton } from "@/components/ui/skeleton"
 
 type MessageListProps = {
@@ -23,11 +24,14 @@ const MessageListComponent = ({
   renderMessage,
   loadingFallback,
 }: MessageListProps) => {
+  const { t } = useI18n()
   return (
     <div
       ref={containerRef}
       className="flex-1 space-y-4 p-6 min-h-0 overflow-y-auto"
       onScroll={onScroll}
+      aria-live="polite"
+      aria-relevant="additions text"
     >
       {isLoading
         ? loadingFallback ?? (
@@ -46,9 +50,9 @@ const MessageListComponent = ({
       ))}
       {!isLoading && messages.length === 0 ? (
         <div className="flex flex-col justify-center items-center min-h-full text-center">
-          <h2 className="font-semibold text-2xl">Welcome to ChatUI</h2>
+          <h2 className="font-semibold text-2xl">{t("chat_welcome_title")}</h2>
           <p className="mt-2 text-muted-foreground text-sm">
-            Created by{" "}
+            {t("chat_welcome_created_by")}{" "}
             <a
               href="https://asya.ai"
               target="_blank"

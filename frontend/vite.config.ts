@@ -11,6 +11,9 @@ const usePolling =
   process.env.WATCHPACK_POLLING === "true"
 
 export default defineConfig({
+  build: {
+    sourcemap: true,
+  },
   plugins: [
     react(),
     babel({ presets: [reactCompilerPreset()] }),

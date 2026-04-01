@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ReactNode } from "react"
-import { createContext, useContext, useMemo, useState } from "react"
+import { createContext, useContext, useEffect, useMemo, useState } from "react"
 
 import { localeStore } from "@/lib/storage"
 
@@ -17,9 +17,12 @@ const translations = {
     common_delete: "Delete",
     common_copy: "Copy",
     common_close: "Close",
+    common_skip_to_main: "Skip to main content",
     common_send: "Send",
     common_stop: "Stop",
     common_error: "Something went wrong",
+    common_reload: "Reload",
+    common_try_again: "Try again",
     common_load_failed: "Load failed",
     common_save_failed: "Save failed",
     common_back_to_chat: "Back to chat",
@@ -29,6 +32,7 @@ const translations = {
     sidebar_title: "Sidebar",
     sidebar_mobile_description: "Displays the mobile sidebar.",
     sidebar_toggle: "Toggle Sidebar",
+    settings_navigation: "Settings navigation",
     me_settings: "Me",
     theme_label: "Theme: {theme}",
     theme_dark: "Dark",
@@ -123,8 +127,26 @@ const translations = {
     chat_generation_failed: "Generation failed. Please retry.",
     chat_generation_cancelled: "Generation cancelled.",
     chat_retry: "Retry",
+    chat_edit_message: "Edit message",
+    chat_activity: "Activity",
+    chat_downloading_attachments: "Downloading attachments",
+    chat_running_tool_call: "Running tool call",
+    chat_anonymous_user: "Anonymous user",
+    chat_viewed_the_chat: "{user} viewed the chat",
+    chat_chat_viewed: "Chat viewed",
+    chat_no_urls_provided: "No URLs provided",
+    chat_result: "Result",
+    chat_unknown: "unknown",
+    chat_file: "file",
+    chat_waiting_for_download: "Waiting for download...",
+    chat_tool_label: "Tool: {name}",
+    chat_downloaded_attachments: "Downloaded attachments",
+    chat_attachment_fallback_name: "attachment",
+    chat_bytes_unit: "bytes",
     chat_no_messages: "No messages yet.",
     chat_message_placeholder: "Write a message...",
+    chat_welcome_title: "Welcome to ChatUI",
+    chat_welcome_created_by: "Created by",
     chat_select_model: "Select a model",
     chat_add_files: "Add files",
     chat_attachment_limit_files: "You can attach up to {count} files per message.",
@@ -283,6 +305,16 @@ const translations = {
     usage_cached: "Cached",
     usage_thinking: "Thinking",
     usage_total: "Total",
+    app_title: "Chat UI",
+    app_title_settings: "Settings - {app}",
+    app_title_usage: "Usage - {app}",
+    app_title_login: "Login - {app}",
+    app_title_register: "Register - {app}",
+    app_title_reset_password: "Reset Password - {app}",
+    app_title_invite: "Invite - {app}",
+    app_error_title: "Something went wrong",
+    org_move_model_up: "Move model up",
+    org_move_model_down: "Move model down",
   },
   lv: {
     language: "Valoda",
@@ -294,9 +326,12 @@ const translations = {
     common_delete: "Dzēst",
     common_copy: "Kopēt",
     common_close: "Aizvērt",
+    common_skip_to_main: "Pāriet uz galveno saturu",
     common_send: "Sūtīt",
     common_stop: "Apturēt",
     common_error: "Kaut kas nogāja greizi",
+    common_reload: "Pārlādēt",
+    common_try_again: "Mēģināt vēlreiz",
     common_load_failed: "Ielāde neizdevās",
     common_save_failed: "Saglabāšana neizdevās",
     common_back_to_chat: "Atpakaļ uz čatu",
@@ -306,6 +341,7 @@ const translations = {
     sidebar_title: "Sānjosla",
     sidebar_mobile_description: "Parāda mobilo sānjoslu.",
     sidebar_toggle: "Pārslēgt sānjoslu",
+    settings_navigation: "Iestatījumu navigācija",
     me_settings: "Mans profils",
     theme_label: "Tēma: {theme}",
     theme_dark: "Tumša",
@@ -400,8 +436,26 @@ const translations = {
     chat_generation_failed: "Ģenerēšana neizdevās. Mēģiniet vēlreiz.",
     chat_generation_cancelled: "Ģenerēšana atcelta.",
     chat_retry: "Mēģināt vēlreiz",
+    chat_edit_message: "Rediģēt ziņu",
+    chat_activity: "Aktivitāte",
+    chat_downloading_attachments: "Lejupielādē pielikumus",
+    chat_running_tool_call: "Izpilda rīka izsaukumu",
+    chat_anonymous_user: "Anonīms lietotājs",
+    chat_viewed_the_chat: "{user} apskatīja čatu",
+    chat_chat_viewed: "Čats apskatīts",
+    chat_no_urls_provided: "URL nav norādīti",
+    chat_result: "Rezultāts",
+    chat_unknown: "nezināms",
+    chat_file: "fails",
+    chat_waiting_for_download: "Gaida lejupielādi...",
+    chat_tool_label: "Rīks: {name}",
+    chat_downloaded_attachments: "Lejupielādētie pielikumi",
+    chat_attachment_fallback_name: "pielikums",
+    chat_bytes_unit: "baiti",
     chat_no_messages: "Nav ziņojumu.",
     chat_message_placeholder: "Rakstiet ziņu...",
+    chat_welcome_title: "Laipni lūdzam ChatUI",
+    chat_welcome_created_by: "Izveidoja",
     chat_select_model: "Izvēlieties modeli",
     chat_add_files: "Pievienot failus",
     chat_attachment_limit_files: "Vienai ziņai var pievienot līdz {count} failiem.",
@@ -562,6 +616,16 @@ const translations = {
     usage_cached: "Kešots",
     usage_thinking: "Domāšana",
     usage_total: "Kopā",
+    app_title: "Chat UI",
+    app_title_settings: "Iestatījumi - {app}",
+    app_title_usage: "Lietojums - {app}",
+    app_title_login: "Pieteikšanās - {app}",
+    app_title_register: "Reģistrācija - {app}",
+    app_title_reset_password: "Paroles atiestatīšana - {app}",
+    app_title_invite: "Ielūgums - {app}",
+    app_error_title: "Kaut kas nogāja greizi",
+    org_move_model_up: "Pārvietot modeli augšup",
+    org_move_model_down: "Pārvietot modeli lejup",
   },
 } as const
 
@@ -611,6 +675,11 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const t = useMemo(() => makeTranslator(locale), [locale])
+
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    document.documentElement.lang = locale
+  }, [locale])
 
   return (
     <I18nContext.Provider value={{ locale, setLocale, t }}>

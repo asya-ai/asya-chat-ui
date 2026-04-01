@@ -127,7 +127,9 @@ export const ChatComposer = ({
           disabled={loading || readOnly}
         />
         {attachmentError ? (
-          <p className="text-destructive text-sm">{attachmentError}</p>
+          <p className="text-destructive text-sm" role="alert">
+            {attachmentError}
+          </p>
         ) : null}
         {pendingAttachments.length > 0 ? (
           <div className="flex flex-wrap gap-2">
@@ -158,10 +160,11 @@ export const ChatComposer = ({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="-top-2 -right-2 absolute bg-background shadow rounded-full w-6 h-6"
+                    className="-top-2 -right-2 absolute bg-background shadow rounded-full w-8 h-8"
                     onClick={() => onRemoveAttachment(index)}
+                    aria-label={t("common_delete")}
                   >
-                    <X className="w-3 h-3" />
+                    <X aria-hidden="true" className="w-3 h-3" />
                   </Button>
                 </div>
               )
@@ -183,9 +186,9 @@ export const ChatComposer = ({
               size="icon"
               onClick={handlePickFiles}
               disabled={loading || readOnly}
-              title={t("chat_add_files")}
+              aria-label={t("chat_add_files")}
             >
-              <Plus className="w-5 h-5" />
+              <Plus aria-hidden="true" className="w-5 h-5" />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -196,7 +199,7 @@ export const ChatComposer = ({
                   title={t("chat_reasoning_effort")}
                   disabled={loading || readOnly}
                 >
-                  <Brain className="w-4 h-4" />
+                  <Brain aria-hidden="true" className="w-4 h-4" />
                   <span className="text-xs">{currentReasoningLabel}</span>
                 </Button>
               </DropdownMenuTrigger>
@@ -224,7 +227,7 @@ export const ChatComposer = ({
               disabled={loading || readOnly}
               onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
             >
-              <Globe className="w-4 h-4" />
+              <Globe aria-hidden="true" className="w-4 h-4" />
               <span className="text-xs">{t("chat_web_search")}</span>
             </Button>
             <Button
@@ -241,7 +244,7 @@ export const ChatComposer = ({
               disabled={loading || readOnly}
               onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
             >
-              <SquareTerminal className="w-4 h-4" />
+              <SquareTerminal aria-hidden="true" className="w-4 h-4" />
               <span className="text-xs">{t("org_code_execution")}</span>
             </Button>
           </div>

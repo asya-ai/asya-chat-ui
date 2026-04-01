@@ -1,18 +1,31 @@
 import type { ReactNode } from "react"
-import { Navigate, Route, Routes } from "react-router-dom"
+import { Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ErrorBoundary } from "react-error-boundary"
+import { Suspense, lazy, useEffect } from "react"
 
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
-import { ChatPage } from "@/pages/ChatPage"
-import { InviteAcceptPage } from "@/pages/InviteAccept"
-import { LoginPage } from "@/pages/Login"
-import { MePage } from "@/pages/MePage"
-import { OrgPage } from "@/pages/OrgPage"
-import { RegisterPage } from "@/pages/Register"
-import { ResetPasswordPage } from "@/pages/ResetPassword"
-import { SsoCallbackPage } from "@/pages/SsoCallback"
-import { UsagePage } from "@/pages/UsagePage"
+import { useI18n } from "@/lib/i18n-context"
+
+const ChatPage = lazy(() => import("@/pages/ChatPage").then((mod) => ({ default: mod.ChatPage })))
+const InviteAcceptPage = lazy(() =>
+  import("@/pages/InviteAccept").then((mod) => ({ default: mod.InviteAcceptPage }))
+)
+const LoginPage = lazy(() => import("@/pages/Login").then((mod) => ({ default: mod.LoginPage })))
+const MePage = lazy(() => import("@/pages/MePage").then((mod) => ({ default: mod.MePage })))
+const OrgPage = lazy(() => import("@/pages/OrgPage").then((mod) => ({ default: mod.OrgPage })))
+const RegisterPage = lazy(() =>
+  import("@/pages/Register").then((mod) => ({ default: mod.RegisterPage }))
+)
+const ResetPasswordPage = lazy(() =>
+  import("@/pages/ResetPassword").then((mod) => ({ default: mod.ResetPasswordPage }))
+)
+const SsoCallbackPage = lazy(() =>
+  import("@/pages/SsoCallback").then((mod) => ({ default: mod.SsoCallbackPage }))
+)
+const UsagePage = lazy(() =>
+  import("@/pages/UsagePage").then((mod) => ({ default: mod.UsagePage }))
+)
 
 const RequireAuth = ({ children }: { children: ReactNode }) => {
   const { token } = useAuth()
@@ -24,27 +37,70 @@ const RequireAuth = ({ children }: { children: ReactNode }) => {
 
 const App = () => {
   const { token } = useAuth()
+  const { t } = useI18n()
+  const location = useLocation()
+
+  useEffect(() => {
+    const appTitle = t("app_title")
+    const path = location.pathname
+    if (path.startsWith("/chat") || path.startsWith("/shared/")) {
+      return
+    }
+    if (path.startsWith("/settings/")) {
+      document.title = t("app_title_settings", { app: appTitle })
+      return
+    }
+    if (path === "/usage") {
+      document.title = t("app_title_usage", { app: appTitle })
+      return
+    }
+    if (path === "/login") {
+      document.title = t("app_title_login", { app: appTitle })
+      return
+    }
+    if (path === "/register") {
+      document.title = t("app_title_register", { app: appTitle })
+      return
+    }
+    if (path === "/reset-password") {
+      document.title = t("app_title_reset_password", { app: appTitle })
+      return
+    }
+    if (path === "/invite") {
+      document.title = t("app_title_invite", { app: appTitle })
+      return
+    }
+    document.title = appTitle
+  }, [location.pathname, t])
+
   return (
     <ErrorBoundary
       fallbackRender={({ error, resetErrorBoundary }) => {
-        const message = error instanceof Error ? error.message : "Unexpected error"
+        const message = error instanceof Error ? error.message : t("common_error")
         return (
         <div className="flex flex-col items-center justify-center min-h-screen gap-4 p-6 text-center">
-          <h1 className="text-lg font-semibold">Something went wrong</h1>
+          <h1 className="text-lg font-semibold">{t("app_error_title")}</h1>
           <p className="text-sm text-muted-foreground max-w-md">
             {message}
           </p>
           <div className="flex gap-2">
-            <Button onClick={() => resetErrorBoundary()}>Try again</Button>
+            <Button onClick={() => resetErrorBoundary()}>{t("common_try_again")}</Button>
             <Button variant="outline" onClick={() => window.location.reload()}>
-              Reload
+              {t("common_reload")}
             </Button>
           </div>
         </div>
         )
       }}
     >
-      <Routes>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        {t("common_skip_to_main")}
+      </a>
+      <Suspense fallback={null}>
+        <Routes>
         <Route
           path="/"
           element={token ? <Navigate to="/chat" replace /> : <Navigate to="/login" replace />}
@@ -131,7 +187,8 @@ const App = () => {
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+        </Routes>
+      </Suspense>
     </ErrorBoundary>
   )
 }

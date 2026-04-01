@@ -150,11 +150,11 @@ const MessageBubbleComponent = ({
               {isCodeEvent
                 ? t("chat_executing_code")
                 : toolCallEvent
-                  ? `Tool: ${toolCallEvent.tool_name}`
+                  ? t("chat_tool_label", { name: toolCallEvent.tool_name })
                 : chatViewEvent
-                  ? "Activity"
+                  ? t("chat_activity")
                 : urlAttachmentsEvent
-                  ? "Downloading attachments"
+                  ? t("chat_downloading_attachments")
                 : isContextSummaryEvent
                   ? t("chat_context_summarized")
                   : isUser
@@ -180,7 +180,7 @@ const MessageBubbleComponent = ({
                     codeEvent?.output?.stdout,
                     codeEvent?.output?.stderr,
                     codeEvent?.output?.error
-                      ? `Error: ${codeEvent.output.error}`
+                      ? `${t("common_error")}: ${codeEvent.output.error}`
                       : null,
                     codeEvent?.output?.requires_approval
                       ? t("chat_execution_requires_approval")
@@ -248,7 +248,7 @@ const MessageBubbleComponent = ({
           ) : toolCallEvent ? (
             <div className="space-y-1 py-1 text-xs">
               <div className="opacity-80">
-                {toolCallEvent.input_preview || "Running tool call"}
+                {toolCallEvent.input_preview || t("chat_running_tool_call")}
               </div>
               {toolCallEvent.output?.result_preview ? (
                 <div className="text-muted-foreground">
@@ -257,7 +257,7 @@ const MessageBubbleComponent = ({
               ) : null}
               {toolCallEvent.output?.error ? (
                 <div className="text-destructive/90">
-                  Error: {toolCallEvent.output.error}
+                  {t("common_error")}: {toolCallEvent.output.error}
                 </div>
               ) : null}
             </div>
@@ -270,38 +270,40 @@ const MessageBubbleComponent = ({
                     : null
                 return (
                   <div key={`view-open-${index}`} className="opacity-80">
-                    {(open.viewer || "Anonymous user")} viewed the chat
-                    {openedAt ? ` at ${openedAt}` : ""}
+                    {t("chat_viewed_the_chat", {
+                      user: open.viewer || t("chat_anonymous_user"),
+                    })}
+                    {openedAt ? ` (${openedAt})` : ""}
                   </div>
                 )
               })}
               {(chatViewEvent.opens ?? []).length === 0 ? (
-                <div className="opacity-80">Chat viewed</div>
+                <div className="opacity-80">{t("chat_chat_viewed")}</div>
               ) : null}
             </div>
           ) : urlAttachmentsEvent ? (
             <details className="space-y-3">
               <summary className="text-xs uppercase tracking-wide cursor-pointer">
-                Downloaded attachments
+                {t("chat_downloaded_attachments")}
               </summary>
               <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">Sources</p>
+                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_sources")}</p>
                 <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
-                  {(urlAttachmentsEvent.urls ?? []).join("\n") || "No URLs provided"}
+                  {(urlAttachmentsEvent.urls ?? []).join("\n") || t("chat_no_urls_provided")}
                 </pre>
               </div>
               <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">Result</p>
+                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_result")}</p>
                 <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
                   {urlAttachmentsEvent.output?.error
-                    ? `Error: ${urlAttachmentsEvent.output.error}`
+                    ? `${t("common_error")}: ${urlAttachmentsEvent.output.error}`
                     : (urlAttachmentsEvent.output?.results ?? [])
                         .map((row) =>
                           row.error
-                            ? `- ${row.url ?? "unknown"}: ERROR ${row.error}`
-                            : `- ${row.file_name ?? "file"} (${row.content_type ?? "unknown"}, ${row.size_bytes ?? 0} bytes)`
+                            ? `- ${row.url ?? t("chat_unknown")}: ${t("common_error")} ${row.error}`
+                            : `- ${row.file_name ?? t("chat_file")} (${row.content_type ?? t("chat_unknown")}, ${row.size_bytes ?? 0} ${t("chat_bytes_unit")})`
                         )
-                        .join("\n") || "Waiting for download..."}
+                        .join("\n") || t("chat_waiting_for_download")}
                 </pre>
               </div>
             </details>
@@ -362,10 +364,11 @@ const MessageBubbleComponent = ({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="-top-2 -right-2 absolute bg-background shadow rounded-full w-6 h-6"
+                          className="-top-2 -right-2 absolute bg-background shadow rounded-full w-8 h-8"
                           onClick={() => onRemoveEditingAttachment(index)}
+                          aria-label={t("common_delete")}
                         >
-                          <X className="w-3 h-3" />
+                          <X aria-hidden="true" className="w-3 h-3" />
                         </Button>
                       </div>
                     )
@@ -381,8 +384,13 @@ const MessageBubbleComponent = ({
                     className="hidden"
                     onChange={handleEditFilesSelected}
                   />
-                  <Button variant="ghost" size="icon" onClick={handleEditPickFiles}>
-                    <Plus className="w-5 h-5" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleEditPickFiles}
+                    aria-label={t("chat_add_files")}
+                  >
+                    <Plus aria-hidden="true" className="w-5 h-5" />
                   </Button>
                 </div>
               </div>
@@ -398,7 +406,7 @@ const MessageBubbleComponent = ({
           ) : (
             <>
               {isThinking ? (
-                <div className="space-y-2 py-2">
+                <div className="space-y-2 py-2" role="status" aria-live="polite">
                   {currentStepLabel || currentToolLabel ? (
                     <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
                       {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
@@ -406,14 +414,17 @@ const MessageBubbleComponent = ({
                   ) : null}
                   <div className="flex items-center gap-1">
                     <span
+                      aria-hidden="true"
                       className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
                       style={{ animationDelay: "0ms" }}
                     />
                     <span
+                      aria-hidden="true"
                       className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
                       style={{ animationDelay: "150ms" }}
                     />
                     <span
+                      aria-hidden="true"
                       className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
                       style={{ animationDelay: "300ms" }}
                     />
@@ -688,7 +699,7 @@ const MessageBubbleComponent = ({
           )}
         </div>
         {!isUser && !isEditing && actionsEnabled && msg.generation_status === "failed" ? (
-          <div className="flex justify-start gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 mt-2 transition">
+          <div className="flex justify-start gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 mt-2 transition">
             <Button
               type="button"
               variant="outline"
@@ -696,21 +707,22 @@ const MessageBubbleComponent = ({
               className="h-7 px-2 text-xs"
               onClick={() => onRetryMessage(msg)}
             >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" />
+              <RotateCcw aria-hidden="true" className="w-3.5 h-3.5 mr-1" />
               {t("chat_retry")}
             </Button>
           </div>
         ) : null}
         {isUser && !isEditing && actionsEnabled ? (
-          <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 mt-2 transition">
+          <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 mt-2 transition">
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className="opacity-70 hover:opacity-100"
               onClick={() => onStartEdit(msg)}
+              aria-label={t("chat_edit_message")}
             >
-              <Pencil className="w-3.5 h-3.5" />
+              <Pencil aria-hidden="true" className="w-3.5 h-3.5" />
             </Button>
             <Button
               type="button"
@@ -718,8 +730,9 @@ const MessageBubbleComponent = ({
               size="icon"
               className="opacity-70 hover:opacity-100"
               onClick={() => onDeleteFromMessage(msg)}
+              aria-label={t("chat_delete")}
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
             </Button>
           </div>
         ) : null}

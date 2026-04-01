@@ -1374,8 +1374,9 @@ export const OrgPage = () => {
                                 className="w-8 h-8"
                                 onClick={() => moveModel(model.id, -1)}
                                 disabled={index === 0}
+                                aria-label={t("org_move_model_up")}
                               >
-                                <ArrowUp className="w-4 h-4" />
+                                <ArrowUp aria-hidden="true" className="w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
@@ -1383,8 +1384,9 @@ export const OrgPage = () => {
                                 className="w-8 h-8"
                                 onClick={() => moveModel(model.id, 1)}
                                 disabled={index === orderedModels.length - 1}
+                                aria-label={t("org_move_model_down")}
                               >
-                                <ArrowDown className="w-4 h-4" />
+                                <ArrowDown aria-hidden="true" className="w-4 h-4" />
                               </Button>
                             </div>
                             <Select

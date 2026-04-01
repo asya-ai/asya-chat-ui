@@ -714,7 +714,7 @@ export const ChatPage = () => {
         const opens = pending.flatMap((item) => {
           const listed = item.activity_event?.opens ?? []
           if (listed.length > 0) return listed
-          return [{ viewer: "Anonymous user", opened_at: item.created_at }]
+          return [{ viewer: t("chat_anonymous_user"), opened_at: item.created_at }]
         })
         output.push({
           ...first,
@@ -753,7 +753,7 @@ export const ChatPage = () => {
       flushPending()
       return output
     },
-    [parseChatDate]
+    [parseChatDate, t]
   )
 
   const groupedChats = useMemo(() => {
@@ -1284,7 +1284,7 @@ export const ChatPage = () => {
       if (file.size > ATTACHMENTS_MAX_FILE_BYTES) {
         setAttachmentError(
           t("chat_attachment_limit_file_size", {
-            file: file.name || "attachment",
+            file: file.name || t("chat_attachment_fallback_name"),
             max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
           })
         )
@@ -1381,7 +1381,7 @@ export const ChatPage = () => {
           event.preventDefault()
           setAttachmentError(
             t("chat_attachment_limit_file_size", {
-              file: attachment.file_name || "attachment",
+              file: attachment.file_name || t("chat_attachment_fallback_name"),
               max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
             })
           )
@@ -1476,7 +1476,7 @@ export const ChatPage = () => {
       if (file.size > ATTACHMENTS_MAX_FILE_BYTES) {
         setAttachmentError(
           t("chat_attachment_limit_file_size", {
-            file: file.name || "attachment",
+            file: file.name || t("chat_attachment_fallback_name"),
             max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
           })
         )
@@ -1881,9 +1881,21 @@ export const ChatPage = () => {
     (chat: Chat, onSelect?: () => void) => {
       navigate(`/chat/${chat.id}`)
       onSelect?.()
+      window.setTimeout(() => {
+        composerInputRef.current?.focus()
+      }, 0)
     },
     [navigate]
   )
+
+  const activeChatTitle = useMemo(() => {
+    const active = chats.find((chat) => chat.id === chatId)
+    return active?.title || t("chat_title")
+  }, [chats, chatId, t])
+
+  useEffect(() => {
+    document.title = `${activeChatTitle} - ${t("app_title")}`
+  }, [activeChatTitle, t])
 
   return (
     <div className="flex bg-background h-svh overflow-hidden">
@@ -1913,12 +1925,13 @@ export const ChatPage = () => {
           getChatActivityDate={getChatActivityDate}
         />
       </aside>
-      <main className="flex flex-col flex-1 bg-background min-h-0 overflow-hidden">
+      <main id="main-content" className="flex flex-col flex-1 bg-background min-h-0 overflow-hidden">
+        <h1 className="sr-only">{activeChatTitle}</h1>
         <div className="flex items-center gap-3 p-4 border-b">
           <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="md:hidden">
-                <Menu className="w-5 h-5" />
+              <Button variant="ghost" size="icon" className="md:hidden" aria-label={t("sidebar_toggle")}>
+                <Menu aria-hidden="true" className="w-5 h-5" />
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="p-4 w-72">
@@ -1954,7 +1967,7 @@ export const ChatPage = () => {
             </SheetContent>
           </Sheet>
           <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger className="w-56">
+            <SelectTrigger className="w-56" aria-label={t("chat_select_model")}>
               <SelectValue placeholder={t("chat_select_model")} />
             </SelectTrigger>
             <SelectContent className="max-h-96">
@@ -2064,11 +2077,10 @@ export const ChatPage = () => {
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDeleteConfirmChat(null)}>
+              <Button autoFocus variant="outline" onClick={() => setDeleteConfirmChat(null)}>
                 {t("chat_cancel")}
               </Button>
               <Button
-                autoFocus
                 onClick={() => {
                   if (!deleteConfirmChat) return
                   deleteChat(deleteConfirmChat.id).catch(() => null)
