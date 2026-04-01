@@ -286,6 +286,10 @@ export const authApi = {
         new_password: newPassword,
       }),
     }),
+  logout: () =>
+    apiFetch("/auth/logout", {
+      method: "POST",
+    }),
   updateSuperAdmin: (userId: string, isSuperAdmin: boolean) =>
     apiFetch<{ id: string; email: string; is_super_admin: boolean; is_admin: boolean }>(
       `/auth/users/${userId}/super-admin`,

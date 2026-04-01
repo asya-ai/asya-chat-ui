@@ -77,10 +77,15 @@ export const MePage = () => {
   }
 
   const onLogout = () => {
-    clearToken()
-    orgStore.clear()
-    modelStore.clear()
-    navigate("/login", { replace: true })
+    authApi
+      .logout()
+      .catch(() => null)
+      .finally(() => {
+        clearToken()
+        orgStore.clear()
+        modelStore.clear()
+        navigate("/login", { replace: true })
+      })
   }
 
   const onToggleToolCallLogs = (enabled: boolean) => {

@@ -1,30 +1,32 @@
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlmodel import Session, select
 
-from app.core.security import decode_access_token, oauth2_scheme
+from app.core.security import decode_access_token_claims, oauth2_scheme
 from app.db.session import get_session
 from app.models import OrgMembership, User
 from app.services.api_keys import API_KEY_PREFIX, authenticate_api_key
 
 
-def get_db() -> Session:
-    yield from get_session()
-
-
-def get_current_user(
-    session: Session = Depends(get_db), token: str = Depends(oauth2_scheme)
+def _resolve_user_from_token_claims(
+    session: Session, claims: dict[str, Any]
 ) -> User:
+    subject = claims.get("sub")
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
     try:
-        user_id = UUID(decode_access_token(token))
+        user_id = UUID(str(subject))
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         ) from exc
-
     user = session.exec(select(User).where(User.id == user_id)).first()
     if not user:
         raise HTTPException(
@@ -36,7 +38,31 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
         )
+    token_version = claims.get("ver", 0)
+    try:
+        token_ver_int = int(token_version)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        ) from exc
+    if token_ver_int != int(user.token_version):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
     return user
+
+
+def get_db() -> Session:
+    yield from get_session()
+
+
+def get_current_user(
+    session: Session = Depends(get_db), token: str = Depends(oauth2_scheme)
+) -> User:
+    claims = decode_access_token_claims(token)
+    return _resolve_user_from_token_claims(session, claims)
 
 
 @dataclass
@@ -68,23 +94,13 @@ def get_auth_context(
             user=auth.user, org_id=UUID(auth.org_id), api_key_id=auth.api_key.id
         )
     try:
-        user_id = UUID(decode_access_token(token))
+        claims = decode_access_token_claims(token)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         ) from exc
-    user = session.exec(select(User).where(User.id == user_id)).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user",
-        )
+    user = _resolve_user_from_token_claims(session, claims)
     if x_org_id:
         try:
             org_id = UUID(x_org_id)

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -31,23 +31,33 @@ def validate_password(password: str) -> bool:
     return bool(_PASSWORD_POLICY.match(password))
 
 
-def create_access_token(subject: str, expires_minutes: Optional[int] = None) -> str:
+def create_access_token(
+    subject: str, expires_minutes: Optional[int] = None, token_version: int = 0
+) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=expires_minutes or settings.access_token_expire_minutes
     )
-    to_encode = {"sub": subject, "exp": expire}
+    to_encode = {"sub": subject, "exp": expire, "ver": token_version}
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 
 def decode_access_token(token: str) -> str:
+    payload = decode_access_token_claims(token)
+    subject = payload.get("sub")
+    if subject is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    return str(subject)
+
+
+def decode_access_token_claims(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(
             token, settings.secret_key, algorithms=[settings.jwt_algorithm]
         )
-        subject = payload.get("sub")
-        if subject is None:
-            raise ValueError("Missing subject")
-        return subject
+        return payload
     except (JWTError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

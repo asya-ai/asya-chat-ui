@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
+from app.core.secret_crypto import encrypt_secret
 from app.models import (
     ChatModel,
     Org,
@@ -676,7 +677,7 @@ def update_auth_settings(
         org.oidc_client_id = client_id.strip() or None if client_id is not None else None
     if "oidc_client_secret" in updates:
         secret = updates.pop("oidc_client_secret")
-        org.oidc_client_secret = secret.strip() or None if secret is not None else None
+        org.oidc_client_secret = encrypt_secret(secret) if secret is not None else None
     if "oidc_scopes" in updates:
         scopes = updates.pop("oidc_scopes")
         org.oidc_scopes = scopes.strip() if isinstance(scopes, str) else scopes
@@ -734,7 +735,7 @@ def update_provider_configs(
         if item.is_enabled is not None:
             config.is_enabled = item.is_enabled
         if item.api_key_override is not None:
-            config.api_key_override = item.api_key_override.strip() or None
+            config.api_key_override = encrypt_secret(item.api_key_override)
         if item.base_url_override is not None:
             config.base_url_override = item.base_url_override.strip() or None
         if item.endpoint_override is not None:

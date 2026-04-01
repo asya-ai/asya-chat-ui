@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import secrets
 import re
+import time
 from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
@@ -17,6 +18,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import get_super_admin_emails, settings
+from app.core.secret_crypto import decrypt_secret
 from app.core.security import (
     create_access_token,
     get_password_hash,
@@ -32,6 +34,42 @@ logger = logging.getLogger(__name__)
 
 OIDC_CACHE: dict[str, dict[str, Any]] = {}
 OIDC_JWKS: dict[str, dict[str, Any]] = {}
+OIDC_CACHE_EXPIRES_AT: dict[str, float] = {}
+OIDC_JWKS_EXPIRES_AT: dict[str, float] = {}
+OIDC_CONFIG_TTL_SECONDS = 3600
+OIDC_JWKS_TTL_SECONDS = 86400
+OIDC_CACHE_MAX_SIZE = 64
+
+
+def _cache_get(
+    store: dict[str, dict[str, Any]],
+    expires_store: dict[str, float],
+    key: str,
+) -> dict[str, Any] | None:
+    expires_at = expires_store.get(key)
+    if expires_at is None:
+        return None
+    now = time.time()
+    if expires_at <= now:
+        store.pop(key, None)
+        expires_store.pop(key, None)
+        return None
+    return store.get(key)
+
+
+def _cache_set(
+    store: dict[str, dict[str, Any]],
+    expires_store: dict[str, float],
+    key: str,
+    value: dict[str, Any],
+    ttl_seconds: int,
+) -> None:
+    if len(store) >= OIDC_CACHE_MAX_SIZE and key not in store:
+        oldest_key = min(expires_store.items(), key=lambda item: item[1])[0]
+        store.pop(oldest_key, None)
+        expires_store.pop(oldest_key, None)
+    store[key] = value
+    expires_store[key] = time.time() + ttl_seconds
 
 
 class RegisterRequest(BaseModel):
@@ -216,25 +254,39 @@ def _normalize_oidc_config_url(value: str) -> str:
 
 async def _get_oidc_config(issuer_or_config: str) -> dict[str, Any]:
     config_url = _normalize_oidc_config_url(issuer_or_config)
-    if config_url in OIDC_CACHE:
-        return OIDC_CACHE[config_url]
+    cached = _cache_get(OIDC_CACHE, OIDC_CACHE_EXPIRES_AT, config_url)
+    if cached is not None:
+        return cached
     url = config_url
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(url)
         response.raise_for_status()
         config = response.json()
-    OIDC_CACHE[config_url] = config
+    _cache_set(
+        OIDC_CACHE,
+        OIDC_CACHE_EXPIRES_AT,
+        config_url,
+        config,
+        OIDC_CONFIG_TTL_SECONDS,
+    )
     return config
 
 
 async def _get_oidc_jwks(jwks_uri: str) -> dict[str, Any]:
-    if jwks_uri in OIDC_JWKS:
-        return OIDC_JWKS[jwks_uri]
+    cached = _cache_get(OIDC_JWKS, OIDC_JWKS_EXPIRES_AT, jwks_uri)
+    if cached is not None:
+        return cached
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(jwks_uri)
         response.raise_for_status()
         jwks = response.json()
-    OIDC_JWKS[jwks_uri] = jwks
+    _cache_set(
+        OIDC_JWKS,
+        OIDC_JWKS_EXPIRES_AT,
+        jwks_uri,
+        jwks,
+        OIDC_JWKS_TTL_SECONDS,
+    )
     return jwks
 
 
@@ -325,7 +377,7 @@ def register(payload: RegisterRequest, session: Session = Depends(get_db)) -> To
     session.add(membership)
     session.commit()
 
-    token = create_access_token(str(user.id))
+    token = create_access_token(str(user.id), token_version=user.token_version)
     return TokenResponse(access_token=token)
 
 
@@ -368,7 +420,7 @@ def login(payload: LoginRequest, session: Session = Depends(get_db)) -> TokenRes
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials",
             )
-    token = create_access_token(str(user.id))
+    token = create_access_token(str(user.id), token_version=user.token_version)
     return TokenResponse(access_token=token)
 
 
@@ -468,7 +520,7 @@ async def oidc_callback(
 
     oidc_issuer = (org.oidc_issuer or "").strip()
     oidc_client_id = (org.oidc_client_id or "").strip()
-    oidc_client_secret = (org.oidc_client_secret or "").strip()
+    oidc_client_secret = (decrypt_secret(org.oidc_client_secret) or "").strip()
     config = await _get_oidc_config(oidc_issuer)
     config_issuer = (config.get("issuer") or oidc_issuer).strip()
     token_endpoint = config.get("token_endpoint")
@@ -636,7 +688,7 @@ async def oidc_callback(
         session.add(membership)
         session.commit()
 
-    token = create_access_token(str(user.id))
+    token = create_access_token(str(user.id), token_version=user.token_version)
     redirect_url = f"{redirect_base}/sso-callback?token={token}"
     return RedirectResponse(redirect_url)
 
@@ -682,6 +734,27 @@ def change_password(
             detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
         )
     current_user.hashed_password = get_password_hash(payload.new_password)
+    current_user.token_version += 1
+    existing_resets = session.exec(
+        select(PasswordReset).where(
+            PasswordReset.user_id == current_user.id,
+            PasswordReset.used_at.is_(None),
+        )
+    ).all()
+    now = datetime.now(timezone.utc)
+    for reset in existing_resets:
+        reset.used_at = now
+        session.add(reset)
+    session.add(current_user)
+    session.commit()
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    current_user.token_version += 1
     session.add(current_user)
     session.commit()
 
@@ -989,7 +1062,7 @@ def accept_invite(
     session.add(invite)
     session.commit()
 
-    token = create_access_token(str(user.id))
+    token = create_access_token(str(user.id), token_version=user.token_version)
     return TokenResponse(access_token=token)
 
 
@@ -1003,12 +1076,21 @@ def request_password_reset(
     user = session.exec(select(User).where(func.lower(User.email) == email)).first()
     if not user:
         return
+    now = datetime.now(timezone.utc)
+    existing_resets = session.exec(
+        select(PasswordReset).where(
+            PasswordReset.user_id == user.id,
+            PasswordReset.used_at.is_(None),
+        )
+    ).all()
+    for existing in existing_resets:
+        existing.used_at = now
+        session.add(existing)
     token = secrets.token_urlsafe(32)
     reset = PasswordReset(
         user_id=user.id,
         token=token,
-        expires_at=datetime.now(timezone.utc)
-        + timedelta(hours=settings.password_reset_expire_hours),
+        expires_at=now + timedelta(hours=settings.password_reset_expire_hours),
     )
     session.add(reset)
     session.commit()
@@ -1031,6 +1113,11 @@ def confirm_password_reset(
     payload: PasswordResetConfirm,
     session: Session = Depends(get_db),
 ) -> None:
+    if len(payload.token) > 256:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid token",
+        )
     reset = session.exec(
         select(PasswordReset).where(PasswordReset.token == payload.token)
     ).first()
@@ -1051,8 +1138,20 @@ def confirm_password_reset(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
         )
+    now = datetime.now(timezone.utc)
     user.hashed_password = get_password_hash(payload.new_password)
-    reset.used_at = datetime.now(timezone.utc)
+    user.token_version += 1
+    reset.used_at = now
+    other_resets = session.exec(
+        select(PasswordReset).where(
+            PasswordReset.user_id == user.id,
+            PasswordReset.used_at.is_(None),
+            PasswordReset.id != reset.id,
+        )
+    ).all()
+    for other in other_resets:
+        other.used_at = now
+        session.add(other)
     session.add(user)
     session.add(reset)
     session.commit()

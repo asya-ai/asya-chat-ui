@@ -16,6 +16,7 @@ class User(SQLModel, table=True):
     display_name: Optional[str] = Field(default=None)
     hashed_password: str
     auth_provider: str = Field(default="local", index=True)
+    token_version: int = Field(default=0, nullable=False)
     is_active: bool = Field(default=True)
     is_super_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)

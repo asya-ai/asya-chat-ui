@@ -1,6 +1,7 @@
 from fastapi import HTTPException, status
 from sqlmodel import Session, select
 
+from app.core.secret_crypto import decrypt_secret
 from app.models import Org, OrgMembership, OrgProviderConfig, Role
 
 
@@ -102,4 +103,6 @@ def require_provider_enabled(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Provider is not enabled for this organization",
         )
+    if config and config.api_key_override:
+        config.api_key_override = decrypt_secret(config.api_key_override)
     return config

@@ -22,7 +22,7 @@ from PIL import ExifTags, Image
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token_claims
 from app.db.session import engine
 from app.models import (
     Chat,
@@ -1110,7 +1110,14 @@ def _extract_ws_token(websocket: WebSocket) -> str | None:
 
 
 def _get_user_from_token(session: Session, token: str) -> User:
-    user_id = UUID(decode_access_token(token))
+    claims = decode_access_token_claims(token)
+    subject = claims.get("sub")
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    user_id = UUID(str(subject))
     user = session.exec(select(User).where(User.id == user_id)).first()
     if not user:
         raise HTTPException(
@@ -1119,6 +1126,12 @@ def _get_user_from_token(session: Session, token: str) -> User:
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
+        )
+    token_version = claims.get("ver", 0)
+    if int(token_version) != int(user.token_version):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
         )
     return user
 
