@@ -639,11 +639,17 @@ class AzureOpenAIProvider:
             choice = result.choices[0]
             finish_reason = getattr(choice, "finish_reason", None)
             for call in choice.message.tool_calls or []:
+                arguments = {}
+                if call.function.arguments:
+                    try:
+                        arguments = json.loads(call.function.arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
                 tool_calls.append(
                     ChatToolCall(
                         id=call.id,
                         name=call.function.name,
-                        arguments=call.function.arguments or {},
+                        arguments=arguments,
                     )
                 )
         prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (

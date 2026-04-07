@@ -211,7 +211,7 @@ export const MePage = () => {
               </Button>
             </div>
             <div className="pt-1 border-t">
-              <label className="flex items-start justify-between gap-4 py-2 cursor-pointer">
+              <label className="flex justify-between items-start gap-4 py-2 cursor-pointer">
                 <div className="space-y-1">
                   <p className="font-medium text-sm leading-5">
                     {t("me_show_toolcall_logs")}
@@ -260,7 +260,7 @@ export const MePage = () => {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             ) : null}
-            {success ? <p className="text-sm text-emerald-600">{success}</p> : null}
+            {success ? <p className="text-emerald-600 text-sm">{success}</p> : null}
             <Button onClick={onChangePassword} disabled={saving}>
               {saving ? t("me_password_updating") : t("me_update_password")}
             </Button>
@@ -292,7 +292,7 @@ export const MePage = () => {
                   <DialogTitle>{t("api_keys_title")}</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
-                  <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+                  <div className="px-3 py-2 border rounded-md text-muted-foreground text-xs">
                     <p>
                       {t("api_keys_endpoint_label")}{" "}
                       <span className="font-semibold text-foreground">
@@ -328,18 +328,18 @@ export const MePage = () => {
                   ) : null}
                   <div className="space-y-2">
                     {apiKeys.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-muted-foreground text-sm">
                         {t("api_keys_empty")}
                       </p>
                     ) : (
                       apiKeys.map((key) => (
                         <div
                           key={key.id}
-                          className="flex items-center justify-between rounded-md border px-3 py-2"
+                          className="flex justify-between items-center px-3 py-2 border rounded-md"
                         >
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">{key.name}</p>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="font-medium text-sm truncate">{key.name}</p>
+                            <p className="text-muted-foreground text-xs">
                               {t("api_keys_prefix")}: {key.prefix}
                             </p>
                           </div>

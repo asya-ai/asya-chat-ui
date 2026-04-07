@@ -110,10 +110,13 @@ async def web_search(context: WebToolContext, *, query: str | None = None, queri
 
     async def _search_one(item: str) -> dict:
         def _run() -> list[dict]:
-            with DDGS() as ddgs:
-                if region:
-                    return list(ddgs.text(item, max_results=limit, region=region))
-                return list(ddgs.text(item, max_results=limit))
+            with DDGS(timeout=10) as ddgs:
+                return list(ddgs.text(
+                    item,
+                    max_results=limit,
+                    region=region or "us-en",
+                    backend="duckduckgo,brave",
+                ))
 
         rows = await anyio.to_thread.run_sync(_run)
         results = [

@@ -161,10 +161,22 @@ def _normalize_groq_base_url(url: str) -> str:
     return cleaned
 
 
+def _normalize_azure_endpoint(url: str) -> str:
+    cleaned = url.strip().rstrip("/")
+    for suffix in ("/openai/v1", "/openai", "/v1"):
+        if cleaned.lower().endswith(suffix):
+            return cleaned[: -len(suffix)]
+    return cleaned
+
+
 settings = Settings()
 settings.database_url = _normalize_database_url(settings.database_url)
 settings.openai_base_url = _normalize_openai_base_url(settings.openai_base_url)
 settings.groq_base_url = _normalize_groq_base_url(settings.groq_base_url)
+if settings.azure_openai_endpoint:
+    settings.azure_openai_endpoint = _normalize_azure_endpoint(
+        settings.azure_openai_endpoint
+    )
 
 
 def get_super_admin_emails() -> set[str]:

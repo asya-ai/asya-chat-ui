@@ -94,6 +94,14 @@ class GeminiProvider:
         suffix = contents[-1:]
         if not all(self._is_cacheable_content(item) for item in prefix):
             return contents, None
+        total_chars = sum(
+            len(part.get("text", ""))
+            for item in prefix
+            for part in item.get("parts", [])
+            if isinstance(part, dict) and "text" in part
+        )
+        if total_chars < 4096:
+            return contents, None
         cache_key = self._cache_key_for_contents(model, prefix)
         cached_name = self._get_cached_content_name(cache_key)
         if not cached_name:
@@ -152,11 +160,50 @@ class GeminiProvider:
                         return str(raw)
         return None
 
+    @staticmethod
+    def _extract_system_instruction(messages: list[dict]) -> str | None:
+        parts: list[str] = []
+        for msg in messages:
+            if msg.get("role") != "system":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content:
+                parts.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text = item.get("text")
+                        if text:
+                            parts.append(text)
+        return "\n\n".join(parts) if parts else None
+
+    def _build_config(
+        self,
+        *,
+        system_instruction: str | None = None,
+        cache_config: types.GenerateContentConfig | None = None,
+        tools: list[types.Tool] | None = None,
+    ) -> types.GenerateContentConfig | None:
+        has_anything = system_instruction or cache_config or tools
+        if not has_anything:
+            return None
+        config = types.GenerateContentConfig()
+        if system_instruction:
+            config.system_instruction = system_instruction
+        if cache_config and getattr(cache_config, "cached_content", None):
+            config.cached_content = cache_config.cached_content
+        if tools:
+            config.tools = tools
+        return config
+
     async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
         def _run() -> ChatResponse:
+            system_instruction = self._extract_system_instruction(messages)
             contents: list[dict] = []
             for message in messages:
                 role = message.get("role")
+                if role == "system":
+                    continue
                 if role == "assistant":
                     role = "model"
                 content = message.get("content")
@@ -190,11 +237,15 @@ class GeminiProvider:
             contents_to_send, cache_config = self._maybe_cached_content_config(
                 model, contents
             )
+            config = self._build_config(
+                system_instruction=system_instruction,
+                cache_config=cache_config,
+            )
             try:
                 response = self.client.models.generate_content(
                     model=model,
                     contents=contents_to_send,
-                    config=cache_config,
+                    config=config,
                 )
             except Exception as exc:
                 if cache_config and getattr(cache_config, "cached_content", None):
@@ -203,9 +254,13 @@ class GeminiProvider:
                         exc,
                         exc_info=True,
                     )
+                    fallback_config = self._build_config(
+                        system_instruction=system_instruction,
+                    )
                     response = self.client.models.generate_content(
                         model=model,
                         contents=contents,
+                        config=fallback_config,
                     )
                 else:
                     raise
@@ -244,9 +299,12 @@ class GeminiProvider:
         tool_choice: object | None = None,
     ) -> ChatResponse:
         def _run() -> ChatResponse:
+            system_instruction = self._extract_system_instruction(messages)
             contents: list[dict] = []
             for message in messages:
                 role = message.get("role")
+                if role == "system":
+                    continue
                 if role == "assistant":
                     role = "model"
                 tool_calls = message.get("tool_calls")
@@ -275,16 +333,25 @@ class GeminiProvider:
                     contents.append({"role": "model", "parts": parts})
                     continue
                 if role == "tool":
-                    parts = [
-                        {
-                            "function_response": {
-                                "name": message.get("name"),
-                                "response": {"content": message.get("content", "")},
-                                "id": message.get("tool_call_id"),
-                            }
+                    fn_response_part = {
+                        "function_response": {
+                            "name": message.get("name"),
+                            "response": {"content": message.get("content", "")},
+                            "id": message.get("tool_call_id"),
                         }
-                    ]
-                    contents.append({"role": "user", "parts": parts})
+                    }
+                    if (
+                        contents
+                        and contents[-1].get("role") == "user"
+                        and contents[-1].get("parts")
+                        and all(
+                            "function_response" in p
+                            for p in contents[-1]["parts"]
+                        )
+                    ):
+                        contents[-1]["parts"].append(fn_response_part)
+                    else:
+                        contents.append({"role": "user", "parts": [fn_response_part]})
                     continue
                 content = message.get("content")
                 if content is None:
@@ -330,9 +397,11 @@ class GeminiProvider:
             contents_to_send, cache_config = self._maybe_cached_content_config(
                 model, contents
             )
-            config = types.GenerateContentConfig(tools=tool_declarations)
-            if cache_config and getattr(cache_config, "cached_content", None):
-                config.cached_content = cache_config.cached_content
+            config = self._build_config(
+                system_instruction=system_instruction,
+                cache_config=cache_config,
+                tools=tool_declarations,
+            )
             try:
                 response = self.client.models.generate_content(
                     model=model,
@@ -346,10 +415,14 @@ class GeminiProvider:
                         exc,
                         exc_info=True,
                     )
+                    fallback_config = self._build_config(
+                        system_instruction=system_instruction,
+                        tools=tool_declarations,
+                    )
                     response = self.client.models.generate_content(
                         model=model,
                         contents=contents,
-                        config=types.GenerateContentConfig(tools=tool_declarations),
+                        config=fallback_config,
                     )
                 else:
                     raise
@@ -401,6 +474,7 @@ class GeminiProvider:
 
     async def chat_grounded(self, model: str, messages: list[dict]) -> ChatResponse:
         def _run() -> ChatResponse:
+            system_instruction = self._extract_system_instruction(messages)
             contents: list[dict] = []
             for message in messages:
                 role = message.get("role")
@@ -439,9 +513,12 @@ class GeminiProvider:
             contents_to_send, cache_config = self._maybe_cached_content_config(
                 model, contents
             )
-            config = types.GenerateContentConfig(tools=[{"google_search": {}}])
-            if cache_config and getattr(cache_config, "cached_content", None):
-                config.cached_content = cache_config.cached_content
+            google_search_tools = [{"google_search": {}}]
+            config = self._build_config(
+                system_instruction=system_instruction,
+                cache_config=cache_config,
+                tools=google_search_tools,
+            )
             try:
                 response = self.client.models.generate_content(
                     model=model,
@@ -455,12 +532,14 @@ class GeminiProvider:
                         exc,
                         exc_info=True,
                     )
+                    fallback_config = self._build_config(
+                        system_instruction=system_instruction,
+                        tools=google_search_tools,
+                    )
                     response = self.client.models.generate_content(
                         model=model,
                         contents=contents,
-                        config=types.GenerateContentConfig(
-                            tools=[{"google_search": {}}]
-                        ),
+                        config=fallback_config,
                     )
                 else:
                     raise
