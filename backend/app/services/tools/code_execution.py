@@ -84,6 +84,30 @@ def _collect_imports(code: str) -> set[str]:
     return imports
 
 
+def _auto_display_last_expr(code: str) -> str:
+    """Wrap the last top-level bare expression in print(repr(...)) for REPL-like output."""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if not tree.body:
+        return code
+    last = tree.body[-1]
+    if not isinstance(last, ast.Expr) or last.col_offset != 0:
+        return code
+    lines = code.split("\n")
+    start = last.lineno - 1
+    end = (last.end_lineno or last.lineno)
+    expr_text = "\n".join(lines[start:end]).strip()
+    replacement = (
+        f"_result_ = {expr_text}\n"
+        f"if _result_ is not None:\n"
+        f"    print(repr(_result_))"
+    )
+    return "\n".join(lines[:start]) + "\n" + replacement + "\n" + "\n".join(lines[end:])
+
+
 def _validate_imports(code: str) -> None:
     allowlist = {name.lower() for name in DEFAULT_ALLOWLIST}
     stdlib = {name.lower() for name in sys.stdlib_module_names}
@@ -377,7 +401,7 @@ async def run_code_execution(
         return ToolResult(name="code_execution", output={"error": str(exc)})
     inputs = _write_inputs(attachments, inputs_dir)
     code_path = work_dir / "main.py"
-    code_path.write_text(code, encoding="utf-8")
+    code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
     def _runner():
         return _run_container(
             host_inputs_dir=host_inputs_dir,

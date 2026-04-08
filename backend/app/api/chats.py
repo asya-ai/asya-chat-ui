@@ -55,7 +55,6 @@ from app.services.tools.code_execution import (
     run_code_execution,
 )
 from app.services.tools.registry import ToolRegistry, ToolSpec, ToolResult
-from app.services.tools.time_tool import TimeToolContext, get_time
 from app.services.tools.pdf_tool import PdfToolContext, extract_pdf
 from app.services.tools.web_tools import (
     WebToolContext,
@@ -212,10 +211,12 @@ def _prepend_tool_guidance(
     messages: list[dict],
     *,
     locale: str | None = None,
+    timezone: str | None = None,
     enabled_tool_names: list[str] | None = None,
 ) -> list[dict]:
     system_messages = build_system_prompt_messages(
         locale=locale,
+        timezone=timezone,
         enabled_tool_names=enabled_tool_names,
     )
     enabled = set(enabled_tool_names or [])
@@ -332,38 +333,6 @@ def _build_tool_registry(
             },
         ),
         _edit_handler,
-    )
-    async def _time_handler(args: dict) -> object:
-        return await get_time(
-            TimeToolContext(org_id=str(org_id)),
-            timezone_name=args.get("timezone"),
-            city=args.get("city"),
-            country=args.get("country"),
-            latitude=args.get("latitude"),
-            longitude=args.get("longitude"),
-        )
-
-    registry.register(
-        ToolSpec(
-            name="get_time",
-            description=(
-                "Get the current time for a timezone, city, country, or coordinates."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "timezone": {
-                        "type": "string",
-                        "description": "IANA timezone name, e.g. Europe/Riga",
-                    },
-                    "city": {"type": "string", "description": "City name"},
-                    "country": {"type": "string", "description": "Country name"},
-                    "latitude": {"type": "number", "description": "Latitude"},
-                    "longitude": {"type": "number", "description": "Longitude"},
-                },
-            },
-        ),
-        _time_handler,
     )
     async def _extract_pdf_handler(args: dict) -> object:
         if not chat_id:
@@ -757,12 +726,6 @@ def _tool_call_input_preview(name: str, arguments: dict[str, Any]) -> str:
     if name in {"generate_image", "edit_image"}:
         prompt = str(arguments.get("prompt") or "").strip()
         return f"prompt: {prompt[:180]}" if prompt else "prompt: (empty)"
-    if name == "get_time":
-        for key in ("timezone", "city", "country", "latitude", "longitude"):
-            value = arguments.get(key)
-            if value is not None and str(value).strip():
-                return f"{key}: {value}"
-        return "time lookup"
     keys = ", ".join(sorted(arguments.keys())[:6])
     return f"args: {keys}" if keys else "no args"
 
@@ -1271,6 +1234,7 @@ async def _run_agentic_loop(
         if name == "code_execution":
             return ["Executing code"]
         return [f"Running {name}"]
+    consecutive_max_tokens = 0
     for step_index in range(MAX_TOOL_STEPS):
         step_label = f"Step {step_index + 1}/{MAX_TOOL_STEPS}"
         await _emit(step_label, "start")
@@ -1309,6 +1273,30 @@ async def _run_agentic_loop(
                 response.finish_reason,
                 len(response.content or ""),
             )
+            if str(response.finish_reason or "") in ("max_tokens", "length") and not response.content:
+                consecutive_max_tokens += 1
+                if consecutive_max_tokens >= 3:
+                    logger.warning(
+                        "Agentic loop aborting after %s consecutive max_tokens truncations with no content",
+                        consecutive_max_tokens,
+                    )
+                    messages.append(
+                        {"role": "user", "content": "Your previous responses were truncated. Please provide a brief final answer now."}
+                    )
+                    response = await provider.chat_with_tools(
+                        model.model_name, messages, tool_specs
+                    )
+                    last_usage = _merge_chat_usage(last_usage, response.usage)
+                    total_usage = _merge_chat_usage(last_usage, additional_usage)
+                    return (
+                        response.content or "",
+                        attachments,
+                        sources,
+                        image_usages,
+                        total_usage,
+                    )
+            else:
+                consecutive_max_tokens = 0
             if not tool_calls:
                 logger.info(
                     "No tool calls returned at %s. response_len=%s",
@@ -1752,6 +1740,7 @@ class ChatMessageCreateRequest(BaseModel):
     web_search_enabled: bool | None = None
     code_execution_enabled: bool | None = None
     locale: str | None = None
+    timezone: str | None = None
 
     @model_validator(mode="after")
     def _validate_attachments(self) -> "ChatMessageCreateRequest":
@@ -1811,6 +1800,7 @@ class ChatMessageEditRequest(BaseModel):
     web_search_enabled: bool | None = None
     code_execution_enabled: bool | None = None
     locale: str | None = None
+    timezone: str | None = None
 
     @model_validator(mode="after")
     def _validate_attachments(self) -> "ChatMessageEditRequest":
@@ -2009,6 +1999,7 @@ async def _stream_message_ws(
             "model_id": str(model.id),
             "model_name": model.display_name,
             "locale": payload.locale,
+            "timezone": payload.timezone,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
             "code_execution_enabled": _coerce_optional_bool(
@@ -2187,6 +2178,7 @@ async def _stream_edit_ws(
             "model_id": str(model.id),
             "model_name": model.display_name,
             "locale": payload.locale,
+            "timezone": payload.timezone,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
             "code_execution_enabled": _coerce_optional_bool(
@@ -3057,6 +3049,7 @@ async def create_message(
             "model_id": str(model.id),
             "model_name": model.display_name,
             "locale": payload.locale,
+            "timezone": payload.timezone,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
             "code_execution_enabled": _coerce_optional_bool(
@@ -3194,7 +3187,7 @@ async def create_message(
         return items
 
     messages = _truncate_messages(
-        _prepend_tool_guidance(build_messages(), locale=payload.locale),
+        _prepend_tool_guidance(build_messages(), locale=payload.locale, timezone=payload.timezone),
         token_limit=model.context_length,
     )
 
@@ -3966,6 +3959,7 @@ async def edit_message(
             "model_id": str(model.id),
             "model_name": model.display_name,
             "locale": payload.locale,
+            "timezone": payload.timezone,
             "reasoning_effort": payload.reasoning_effort,
             "web_search_enabled": payload.web_search_enabled,
             "code_execution_enabled": _coerce_optional_bool(
@@ -4093,7 +4087,7 @@ async def edit_message(
         return items
 
     messages = _truncate_messages(
-        _prepend_tool_guidance(build_messages(), locale=payload.locale),
+        _prepend_tool_guidance(build_messages(), locale=payload.locale, timezone=payload.timezone),
         token_limit=model.context_length,
     )
 

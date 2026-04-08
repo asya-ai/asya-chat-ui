@@ -127,6 +127,7 @@ def _build_provider_messages(
     attachments_by_message: dict[UUID, list[ChatMessageAttachment]],
     model: ChatModel,
     locale: str | None,
+    timezone: str | None = None,
     enabled_tool_names: list[str] | None,
 ) -> list[dict]:
     items: list[dict[str, Any]] = []
@@ -203,6 +204,7 @@ def _build_provider_messages(
     return _prepend_tool_guidance(
         items,
         locale=locale,
+        timezone=timezone,
         enabled_tool_names=enabled_tool_names,
     )
 
@@ -565,6 +567,7 @@ async def _run_generation(task_id: UUID) -> None:
             attachments_by_message=attachments_by_message,
             model=model,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
+            timezone=task.metadata_json.get("timezone") if task.metadata_json else None,
             enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
         )
         messages = await _summarize_context_if_needed(
@@ -871,7 +874,12 @@ async def _run_generation(task_id: UUID) -> None:
             logger.info("Generation cancelled for task=%s", task_id)
             return
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Generation failed for task=%s", task_id)
+            exc_name = type(exc).__name__
+            if exc_name in ("SoftTimeLimitExceeded", "TimeLimitExceeded"):
+                logger.error("Generation timed out for task=%s", task_id)
+                exc = Exception("Generation timed out. The request took too long to complete.")
+            else:
+                logger.exception("Generation failed for task=%s", task_id)
             # Clear failed transaction state before any ORM writes.
             try:
                 session.rollback()

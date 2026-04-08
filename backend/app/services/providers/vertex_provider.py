@@ -4,6 +4,7 @@ import importlib
 import os
 
 from google import genai
+from google.genai import types
 
 from app.core.config import settings
 from app.services.providers.gemini_provider import GeminiProvider
@@ -142,7 +143,10 @@ class VertexProvider(GeminiProvider):
         scopes = _extract_scopes(merged_config) or [
             "https://www.googleapis.com/auth/cloud-platform"
         ]
-        client_kwargs: dict = {"vertexai": True}
+        client_kwargs: dict = {
+            "vertexai": True,
+            "http_options": types.HttpOptions(timeout=180_000),
+        }
         if project:
             client_kwargs["project"] = project
         if location:

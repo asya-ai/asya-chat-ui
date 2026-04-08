@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime, timezone
 
 MAIN_SYSTEM_PROMPT = (
     "Follow the user's instructions carefully. "
@@ -42,9 +43,6 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "Use edit_image when the user asks to modify an existing image. "
         "If no image is specified, it will use the latest image attachment in the chat."
     ),
-    "get_time": (
-        "Use get_time for timezone/city/country/coordinate current-time lookups."
-    ),
 }
 
 TOOL_PROMPT_ORDER = (
@@ -55,7 +53,6 @@ TOOL_PROMPT_ORDER = (
     "download_attachments",
     "generate_image",
     "edit_image",
-    "get_time",
 )
 
 
@@ -75,9 +72,25 @@ def _locale_prompt(locale: str | None) -> str | None:
     )
 
 
+def _time_prompt(user_timezone: str | None) -> str:
+    now = datetime.now(timezone.utc)
+    utc_str = now.strftime("%Y-%m-%d %H:%M UTC")
+    parts = [f"Current UTC time: {utc_str}."]
+    if user_timezone:
+        try:
+            from zoneinfo import ZoneInfo
+            local_now = now.astimezone(ZoneInfo(user_timezone))
+            local_str = local_now.strftime("%Y-%m-%d %H:%M %Z")
+            parts.append(f"User's timezone: {user_timezone} (local time: {local_str}).")
+        except Exception:
+            parts.append(f"User's timezone: {user_timezone}.")
+    return " ".join(parts)
+
+
 def build_system_prompt_messages(
     *,
     locale: str | None = None,
+    timezone: str | None = None,
     enabled_tool_names: Iterable[str] | None = None,
 ) -> list[dict[str, str]]:
     tool_names = set(enabled_tool_names or [])
@@ -90,4 +103,5 @@ def build_system_prompt_messages(
     locale_instruction = _locale_prompt(locale)
     if locale_instruction:
         messages.append({"role": "system", "content": locale_instruction})
+    messages.append({"role": "system", "content": _time_prompt(timezone)})
     return messages

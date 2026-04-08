@@ -25,6 +25,7 @@ class GroqProvider:
         self.client = AsyncGroq(
             api_key=api_key or settings.groq_api_key,
             base_url=base_url or settings.groq_base_url,
+            timeout=180.0,
         )
         self.prompt_cache_key = prompt_cache_key
         self.prompt_cache_retention = prompt_cache_retention

@@ -12,7 +12,7 @@ from app.services.providers.base import (
     ChatUsage,
 )
 
-DEFAULT_MAX_TOKENS = 1024
+DEFAULT_MAX_TOKENS = 16384
 
 
 def _extract_system(messages: list[dict]) -> str | None:
@@ -103,6 +103,7 @@ class AnthropicProvider:
         self.client = AsyncAnthropic(
             api_key=api_key or settings.anthropic_api_key,
             base_url=base_url or settings.anthropic_base_url,
+            timeout=180.0,
         )
         self.logger = logging.getLogger(__name__)
 

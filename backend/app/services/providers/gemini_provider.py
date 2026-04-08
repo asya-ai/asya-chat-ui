@@ -31,7 +31,10 @@ class GeminiProvider:
     def __init__(
         self, *, api_key: str | None = None, prompt_cache_key: str | None = None
     ) -> None:
-        self.client = genai.Client(api_key=api_key or settings.gemini_api_key)
+        self.client = genai.Client(
+            api_key=api_key or settings.gemini_api_key,
+            http_options=types.HttpOptions(timeout=180_000),
+        )
         self.logger = logging.getLogger(__name__)
         self.prompt_cache_key = prompt_cache_key
 

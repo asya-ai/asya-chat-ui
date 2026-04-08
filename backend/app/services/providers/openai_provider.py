@@ -161,6 +161,7 @@ class OpenAIProvider:
         self.client = AsyncOpenAI(
             api_key=api_key or settings.openai_api_key,
             base_url=base_url or settings.openai_base_url,
+            timeout=180.0,
         )
         self.reasoning_effort = reasoning_effort
         self.prompt_cache_key = prompt_cache_key
@@ -515,6 +516,7 @@ class AzureOpenAIProvider:
             api_key=api_key or settings.azure_openai_api_key,
             api_version=settings.azure_openai_api_version,
             azure_endpoint=endpoint or settings.azure_openai_endpoint,
+            timeout=180.0,
         )
         self.reasoning_effort = reasoning_effort
         self.prompt_cache_key = prompt_cache_key

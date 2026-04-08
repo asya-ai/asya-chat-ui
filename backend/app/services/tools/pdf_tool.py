@@ -89,21 +89,15 @@ def _parse_page_selection(
         return [], "No page selected. Provide `page` or `page_from`/`page_to`."
 
     if page is not None:
-        if page < 1 or page > page_count:
-            return [], f"`page` out of range. Valid range: 1..{page_count}."
+        page = max(1, min(page, page_count))
         return [page], None
 
-    start = page_from if page_from is not None else 1
-    end = page_to if page_to is not None else start
-    if start < 1 or end < 1 or start > page_count or end > page_count:
-        return [], f"`page_from`/`page_to` out of range. Valid range: 1..{page_count}."
+    start = max(1, min(page_from if page_from is not None else 1, page_count))
+    end = max(1, min(page_to if page_to is not None else start, page_count))
     if end < start:
-        return [], "`page_to` must be greater than or equal to `page_from`."
+        start, end = end, start
     if (end - start + 1) > MAX_PAGE_RANGE:
-        return [], (
-            f"Requested range too large ({end - start + 1} pages). "
-            f"Maximum per call: {MAX_PAGE_RANGE} pages."
-        )
+        end = start + MAX_PAGE_RANGE - 1
     return list(range(start, end + 1)), None
 
 

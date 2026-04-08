@@ -484,6 +484,7 @@ export const chatApi = {
         web_search_enabled,
         code_execution_enabled,
         locale,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
     }),
   sendMessageStream: (
@@ -507,6 +508,7 @@ export const chatApi = {
         web_search_enabled,
         code_execution_enabled,
         locale,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
       onEvent
     ),
@@ -533,6 +535,7 @@ export const chatApi = {
         web_search_enabled,
         code_execution_enabled,
         locale,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
       onEvent,
       "edit"
