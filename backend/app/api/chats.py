@@ -949,13 +949,9 @@ async def _maybe_update_chat_title(
     history: list[ChatMessage],
 ) -> None:
     message_count = len(history)
-    should_update_title = message_count == 2 or message_count % 10 == 0
-    if not should_update_title:
+    if message_count != 2:
         return
-    if message_count == 2:
-        title_source = history[:2]
-    else:
-        title_source = history[-10:]
+    title_source = history[:2]
     prompt_lines = []
     for item in title_source:
         content = (item.content or "").strip()
