@@ -254,6 +254,10 @@ export const ChatPage = () => {
     title?: string | null
     host?: string | null
   }) => {
+    const isInternal = source.url.startsWith("/chat/")
+    if (isInternal) {
+      return source.title || t("chat_untitled")
+    }
     const host = source.host || (() => {
       try {
         return new URL(source.url).hostname
@@ -265,7 +269,7 @@ export const ChatPage = () => {
       return `${source.title} — ${host}`
     }
     return host
-  }, [])
+  }, [t])
 
   const modelNameById = useMemo(() => {
     return Object.fromEntries(models.map((model) => [model.id, model.display_name]))

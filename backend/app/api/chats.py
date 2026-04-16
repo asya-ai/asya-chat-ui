@@ -629,7 +629,9 @@ def _build_tool_registry(
                 name="search_past_chats",
                 description=(
                     "Search the user's past chat conversations by keyword. "
-                    "Returns matching chat titles and message previews. "
+                    "Returns matching chat titles, chat IDs, and message previews. "
+                    "Results are shown as references the user can click to navigate to. "
+                    "You can link to a found chat using /chat/{chat_id} in your response. "
                     "Use when the user references a previous conversation or you need context from earlier chats."
                 ),
                 parameters={
@@ -731,10 +733,13 @@ def _attachment_lines(attachments: list[ChatMessageAttachment]) -> list[str]:
 
 def _source_item(url: str, title: str | None = None) -> dict:
     host = ""
-    try:
-        host = urlparse(url).hostname or ""
-    except Exception:
-        host = ""
+    if url.startswith("/chat/"):
+        host = "chat"
+    else:
+        try:
+            host = urlparse(url).hostname or ""
+        except Exception:
+            host = ""
     return {
         "url": url,
         "title": title,
@@ -2660,1869 +2665,1852 @@ def list_messages(
             for event in sorted(deduped.values(), key=lambda item: item.sequence):
                 payload = event.payload_json if isinstance(event.payload_json, dict) else None
                 if payload is None:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                    contin
+                    continue
+                results.append(
+                    ChatMessageRead(
+                        id=str(event.id),
+                        role="tool",
+                        content="",
+                        created_at=event.created_at,
+                        tool_event=payload,
+                        task_id=str(task_map[message.id].id) if message.id in task_map else None,
+                    )
+                )
+    for event in view_events:
+        results.append(
+            ChatMessageRead(
+                id=f"view-{event.id}",
+                role="event",
+                content="",
+                created_at=event.created_at,
+                activity_event={
+                    "type": "chat_view",
+                    "count": 1,
+                    "opens": [
+                        {
+                            "viewer": event.viewer_label,
+                            "opened_at": event.created_at.isoformat(),
+                        }
+                    ],
+                },
+            )
+        )
+    return sorted(results, key=lambda item: item.created_at)
+
+
+@router.get("/attachments/{attachment_id}/content")
+def get_attachment_content(
+    attachment_id: str,
+    token: str,
+    session: Session = Depends(get_db),
+) -> Response:
+    try:
+        attachment_uuid = UUID(attachment_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment id"
+        ) from exc
+    token_attachment_id = _decode_attachment_access_token(token)
+    if token_attachment_id != attachment_uuid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid attachment token"
+        )
+    attachment = session.exec(
+        select(ChatMessageAttachment).where(ChatMessageAttachment.id == attachment_uuid)
+    ).first()
+    if not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found"
+        )
+    try:
+        data = base64.b64decode(attachment.data_base64)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Attachment decode failed",
+        ) from exc
+    return Response(
+        content=data,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": f'inline; filename="{attachment.file_name}"',
+        },
+    )
+
+
+@router.post("/{chat_id}/uploads", response_model=ChatUploadRead)
+def upload_chat_attachment(
+    chat_id: str,
+    payload: ChatUploadCreateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatUploadRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+
+    upload = ChatUpload(
+        chat_id=chat.id,
+        user_id=current_user.id,
+        file_name=payload.file_name,
+        content_type=payload.content_type,
+        data_base64=payload.data_base64,
+    )
+    session.add(upload)
+    session.commit()
+    session.refresh(upload)
+    return ChatUploadRead(
+        id=str(upload.id),
+        file_name=upload.file_name,
+        content_type=upload.content_type,
+        size_bytes=_base64_size_bytes(upload.data_base64),
+        created_at=upload.created_at,
+    )
+
+
+@router.get("/{chat_id}/generation", response_model=list[ChatGenerationTaskRead])
+def list_generation_tasks(
+    chat_id: str,
+    active_only: bool = True,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatGenerationTaskRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    query = select(ChatGenerationTask).where(ChatGenerationTask.chat_id == chat.id)
+    if active_only:
+        query = query.where(
+            ChatGenerationTask.status.notin_(
+                [
+                    GenerationStatus.completed,
+                    GenerationStatus.failed,
+                    GenerationStatus.cancelled,
+                ]
+            )
+        )
+    tasks = session.exec(query.order_by(ChatGenerationTask.created_at)).all()
+    return [
+        ChatGenerationTaskRead(
+            id=str(task.id),
+            chat_id=str(task.chat_id),
+            user_message_id=str(task.user_message_id),
+            assistant_message_id=str(task.assistant_message_id),
+            status=task.status.value,
+            error=task.error,
+            created_at=task.created_at,
+            started_at=task.started_at,
+            completed_at=task.completed_at,
+            model_id=(task.metadata_json or {}).get("model_id"),
+            model_name=(task.metadata_json or {}).get("model_name"),
+        )
+        for task in tasks
+    ]
+
+
+@router.get("/{chat_id}/generation/{task_id}", response_model=ChatGenerationTaskRead)
+def get_generation_task(
+    chat_id: str,
+    task_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatGenerationTaskRead:
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    return ChatGenerationTaskRead(
+        id=str(task.id),
+        chat_id=str(task.chat_id),
+        user_message_id=str(task.user_message_id),
+        assistant_message_id=str(task.assistant_message_id),
+        status=task.status.value,
+        error=task.error,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
+        model_id=(task.metadata_json or {}).get("model_id"),
+        model_name=(task.metadata_json or {}).get("model_name"),
+    )
+
+
+@router.post("/{chat_id}/generation/{task_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_generation_task(
+    chat_id: str,
+    task_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    if task.status in {
+        GenerationStatus.completed,
+        GenerationStatus.failed,
+        GenerationStatus.cancelled,
+    }:
+        return
+
+    task.status = GenerationStatus.cancelled
+    task.error = "Generation cancelled by user"
+    task.completed_at = datetime.utcnow()
+    session.add(task)
+
+    assistant_message = session.get(ChatMessage, task.assistant_message_id)
+    if assistant_message:
+        assistant_message.status = "cancelled"
+        assistant_message.completed_at = datetime.utcnow()
+        if not (assistant_message.content or "").strip():
+            assistant_message.content = "Generation cancelled by user"
+        assistant_message.error_message = "Generation cancelled by user"
+        session.add(assistant_message)
+    session.commit()
+
+
+@router.get(
+    "/{chat_id}/generation/{task_id}/events",
+    response_model=list[ChatGenerationEventRead],
+)
+def list_generation_events(
+    chat_id: str,
+    task_id: str,
+    after: int | None = None,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatGenerationEventRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    query = select(ChatGenerationEvent).where(ChatGenerationEvent.task_id == task_uuid)
+    if after is not None:
+        query = query.where(ChatGenerationEvent.sequence > after)
+    events = session.exec(query.order_by(ChatGenerationEvent.sequence)).all()
+    return [
+        ChatGenerationEventRead(
+            id=str(event.id),
+            event_type=event.event_type,
+            payload=event.payload_json,
+            sequence=event.sequence,
+            created_at=event.created_at,
+        )
+        for event in events
+    ]
+
+
+@router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id and not current_user.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete this chat"
+        )
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    chat.is_deleted = True
+    session.add(chat)
+    session.commit()
+
+
+@router.get("/shared/{share_token}", response_model=SharedChatResolveRead)
+def resolve_shared_chat(
+    share_token: str,
+    session: Session = Depends(get_db),
+) -> SharedChatResolveRead:
+    token = (share_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token"
+        )
+    chat = session.exec(
+        select(Chat).where(Chat.share_token == token).where(Chat.is_deleted.is_(False))
+    ).first()
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=CHAT_NOT_SHARED_DETAIL
+        )
+    return SharedChatResolveRead(chat_id=str(chat.id))
+
+
+@router.post("/{chat_id}/share", response_model=ChatShareRead)
+def share_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatShareRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot share this chat"
+        )
+    if not chat.share_token:
+        chat.share_token = secrets.token_urlsafe(24)
+        session.add(chat)
+        session.commit()
+        session.refresh(chat)
+    return ChatShareRead(
+        chat_id=str(chat.id),
+        is_shared=True,
+        share_token=chat.share_token,
+        share_url=_chat_share_url(chat),
+    )
+
+
+@router.delete("/{chat_id}/share", response_model=ChatShareRead)
+def unshare_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatShareRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot unshare this chat"
+        )
+    chat.share_token = None
+    session.add(chat)
+    session.commit()
+    return ChatShareRead(chat_id=str(chat.id), is_shared=False)
+
+
+@router.post("/{chat_id}/messages", response_model=list[ChatMessageRead])
+async def create_message(
+    chat_id: str,
+    payload: ChatMessageCreateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatMessageRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+
+    org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        )
+
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+
+    model_id = chat.model_id
+    if payload.model_id:
+        try:
+            model_id = UUID(payload.model_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
+            ) from exc
+        chat.model_id = model_id
+
+    if not model_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Chat model not set"
+        )
+
+    model = session.exec(select(ChatModel).where(ChatModel.id == model_id)).first()
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Model not found"
+        )
+    enabled = session.exec(
+        select(OrgModel).where(
+            OrgModel.org_id == chat.org_id,
+            OrgModel.model_id == model.id,
+            OrgModel.is_enabled.is_(True),
+        )
+    ).first()
+    if not enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Model is not enabled for this organization",
+        )
+
+    user_message = ChatMessage(
+        chat_id=chat.id,
+        role="user",
+        content=payload.content,
+        status="done",
+    )
+    session.add(user_message)
+    session.commit()
+    session.refresh(user_message)
+
+    attachments = []
+    if payload.attachments:
+        resolved_attachments = _resolve_attachment_inputs(
+            session,
+            chat=chat,
+            current_user=current_user,
+            items=payload.attachments,
+        )
+        for item in resolved_attachments:
+            attachments.append(
+                ChatMessageAttachment(
+                    message_id=user_message.id,
+                    file_name=str(item.file_name or ""),
+                    content_type=str(item.content_type or ""),
+                    data_base64=str(item.data_base64 or ""),
+                )
+            )
+        session.add_all(attachments)
+        session.commit()
+    attachment_reads = [
+        ChatMessageAttachmentRead(
+            id=str(attachment.id),
+            file_name=attachment.file_name,
+            content_type=attachment.content_type,
+            data_base64=attachment.data_base64,
+        )
+        for attachment in attachments
+    ]
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        model_id=model.id,
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    task = ChatGenerationTask(
+        chat_id=chat.id,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant_message.id,
+        status=GenerationStatus.queued,
+        metadata_json={
+            "model_id": str(model.id),
+            "model_name": model.display_name,
+            "locale": payload.locale,
+            "timezone": payload.timezone,
+            "reasoning_effort": payload.reasoning_effort,
+            "web_search_enabled": payload.web_search_enabled,
+            "code_execution_enabled": _coerce_optional_bool(
+                payload.code_execution_enabled
+            ),
+        },
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    _enqueue_generation_task(task.id)
+
+    if payload.stream:
+        async def event_stream():
+            yield (
+                f"data: {json.dumps({'user_message_id': str(user_message.id), 'task_id': str(task.id), 'assistant_message_id': str(assistant_message.id)})}\n\n"
+            )
+            async for chunk in _stream_task_events_sse(task.id):
+                yield chunk
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    return [
+        ChatMessageRead(
+            id=str(user_message.id),
+            role=user_message.role,
+            content=user_message.content,
+            created_at=user_message.created_at,
+            attachments=attachment_reads,
+        ),
+        ChatMessageRead(
+            id=str(assistant_message.id),
+            role=assistant_message.role,
+            content=assistant_message.content,
+            created_at=assistant_message.created_at,
+            model_id=str(model.id),
+            model_name=model.display_name,
+            task_id=str(task.id),
+            generation_status=task.status.value,
+        ),
+    ]
+
+    history = session.exec(
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat.id)
+        .where(ChatMessage.is_current.is_(True))
+        .order_by(ChatMessage.created_at)
+    ).all()
+    history_attachments = session.exec(
+        select(ChatMessageAttachment).where(
+            ChatMessageAttachment.message_id.in_([message.id for message in history])
+        )
+    ).all()
+    attachments_by_message: dict[UUID, list[ChatMessageAttachment]] = {}
+    for attachment in history_attachments:
+        attachments_by_message.setdefault(attachment.message_id, []).append(attachment)
+
+    def build_messages() -> list[dict]:
+        items: list[dict] = []
+        latest_user_image_id: UUID | None = None
+        for msg in reversed(history):
+            if msg.role != "user":
+                continue
+            msg_attachments = attachments_by_message.get(msg.id, [])
+            latest_image = next(
+                (
+                    attachment
+                    for attachment in reversed(msg_attachments)
+                    if attachment.content_type.startswith("image/")
+                ),
+                None,
+            )
+            if latest_image:
+                latest_user_image_id = latest_image.id
+                break
+        for msg in history:
+            if msg.role != "user":
+                items.append({"role": msg.role, "content": msg.content})
+                continue
+            msg_attachments = attachments_by_message.get(msg.id, [])
+            if not msg_attachments:
+                items.append({"role": msg.role, "content": msg.content})
+                continue
+            image_attachments = [
+                attachment
+                for attachment in msg_attachments
+                if attachment.content_type.startswith("image/")
+            ]
+            # Keep only one latest image across the whole history to reduce remote fetch timeouts.
+            if latest_user_image_id is not None:
+                image_attachments = [
+                    attachment
+                    for attachment in image_attachments
+                    if attachment.id == latest_user_image_id
+                ]
+            else:
+                image_attachments = []
+            if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Images are not supported for this model provider",
+                )
+            attachment_lines = _attachment_lines(msg_attachments)
+            if not image_attachments:
+                text = msg.content or ""
+                if attachment_lines:
+                    text += (
+                        "\n\nAttachments (available in /inputs for code execution):\n"
+                        + "\n".join(attachment_lines)
+                    )
+                items.append({"role": msg.role, "content": text})
+                continue
+            content_parts: list[dict] = []
+            if msg.content:
+                content_parts.append({"type": "text", "text": msg.content})
+            if attachment_lines:
+                content_parts.append(
+                    {
+                        "type": "text",
+                        "text": "Attachments (available in /inputs for code execution):\n"
+                        + "\n".join(attachment_lines),
+                    }
+                )
+            for attachment in image_attachments:
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": _attachment_image_url(attachment)
+                        },
+                    }
+                )
+            items.append({"role": msg.role, "content": content_parts})
+        return items
+
+    messages = _truncate_messages(
+        _prepend_tool_guidance(build_messages(), locale=payload.locale, timezone=payload.timezone),
+        token_limit=model.context_length,
+    )
+
+    provider_config = require_provider_enabled(session, chat.org_id, model.provider)
+    config = None
+    if provider_config and provider_config.config_json:
+        try:
+            config = json.loads(provider_config.config_json)
+        except json.JSONDecodeError:
+            pass
+    prompt_cache_key = f"chat:{chat.id}"
+    provider = get_provider(
+        model.provider,
+        api_key=provider_config.api_key_override if provider_config else None,
+        base_url=provider_config.base_url_override if provider_config else None,
+        endpoint=provider_config.endpoint_override if provider_config else None,
+        reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_retention=settings.openai_prompt_cache_retention,
+        config=config,
+    )
+    grounding_enabled = _grounding_enabled(org, model.provider)
+    effective_web_search_enabled = (
+        org.web_search_enabled
+        if payload.web_search_enabled is None
+        else org.web_search_enabled and payload.web_search_enabled
+    )
+    effective_exec_policy = _resolve_exec_policy(
+        org.exec_policy, payload.code_execution_enabled
+    )
+    tool_registry = _build_tool_registry(
+        session,
+        chat.org_id,
+        chat_id=chat.id,
+        preferred_provider=model.provider,
+        web_tools_enabled=not grounding_enabled,
+        web_search_enabled=effective_web_search_enabled,
+        web_scrape_enabled=org.web_scrape_enabled,
+        exec_policy=effective_exec_policy,
+        exec_network_enabled=org.exec_network_enabled,
+        locale=payload.locale,
+    )
+    tool_attachments: list[dict] | None = None
+
+    if _is_image_output_model(model) and payload.stream:
+        async def image_stream():
+            image_result = await generate_image(
+                ImageToolContext(
+                    session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                ),
+                prompt=payload.content,
+                model_override=model,
+            )
+            assistant_message = ChatMessage(
+                chat_id=chat.id,
+                role="assistant",
+                content="",
+                model_id=model.id,
+            )
+            session.add(assistant_message)
+            session.commit()
+            session.refresh(assistant_message)
+            if image_result.attachments:
+                session.add_all(
+                    [
+                        ChatMessageAttachment(
+                            message_id=assistant_message.id,
+                            file_name=item["file_name"],
+                            content_type=item["content_type"],
+                            data_base64=item["data_base64"],
+                        )
+                        for item in image_result.attachments
+                    ]
+                )
+                session.commit()
+            usage_event = UsageEvent(
+                org_id=chat.org_id,
+                user_id=current_user.id,
+                chat_id=chat.id,
+                message_id=assistant_message.id,
+                model_id=model.id,
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                input_tokens=0,
+                output_tokens=0,
+                cached_tokens=0,
+                thinking_tokens=0,
+                image_width=image_result.output.get("image_width"),
+                image_height=image_result.output.get("image_height"),
+                image_count=image_result.output.get("image_count"),
+                image_format=image_result.output.get("image_format"),
+            )
+            session.add(usage_event)
+            session.commit()
+            await _maybe_update_chat_title(
+                session=session,
+                chat=chat,
+                provider=provider,
+                model=model,
+                history=history + [assistant_message],
+            )
+            yield f"data: {json.dumps({'user_message_id': str(user_message.id)})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'message_id': str(assistant_message.id), 'content': '', 'model_name': model.display_name, 'model_id': str(model.id), 'attachments': image_result.attachments or []})}\n\n"
+
+        return StreamingResponse(image_stream(), media_type="text/event-stream")
+
+    if _is_image_output_model(model):
+        image_result = await generate_image(
+            ImageToolContext(
+                session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+            ),
+            prompt=payload.content,
+            model_override=model,
+        )
+        assistant_message = ChatMessage(
+            chat_id=chat.id,
+            role="assistant",
+            content="",
+            model_id=model.id,
+        )
+        session.add(assistant_message)
+        session.commit()
+        session.refresh(assistant_message)
+        if image_result.attachments:
+            session.add_all(
+                [
+                    ChatMessageAttachment(
+                        message_id=assistant_message.id,
+                        file_name=item["file_name"],
+                        content_type=item["content_type"],
+                        data_base64=item["data_base64"],
+                    )
+                    for item in image_result.attachments
+                ]
+            )
+            session.commit()
+        usage_event = UsageEvent(
+            org_id=chat.org_id,
+            user_id=current_user.id,
+            chat_id=chat.id,
+            message_id=assistant_message.id,
+            model_id=model.id,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            input_tokens=0,
+            output_tokens=0,
+            cached_tokens=0,
+            thinking_tokens=0,
+        )
+        session.add(usage_event)
+        session.commit()
+        await _maybe_update_chat_title(
+            session=session,
+            chat=chat,
+            provider=provider,
+            model=model,
+            history=history + [assistant_message],
+        )
+        return [
+            ChatMessageRead(
+                id=str(user_message.id),
+                role=user_message.role,
+                content=user_message.content,
+                created_at=user_message.created_at,
+                attachments=attachment_reads,
+            ),
+            ChatMessageRead(
+                id=str(assistant_message.id),
+                role=assistant_message.role,
+                content=assistant_message.content,
+                created_at=assistant_message.created_at,
+                model_id=str(model.id),
+                model_name=model.display_name,
+                attachments=image_result.attachments
+                and [
+                    ChatMessageAttachmentRead(
+                        id="",
+                        file_name=item["file_name"],
+                        content_type=item["content_type"],
+                        data_base64=item["data_base64"],
+                    )
+                    for item in image_result.attachments
+                ],
+            ),
+        ]
+    if payload.stream:
+        async def event_stream():
+            assistant_content = ""
+            usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
+
+            yield f"data: {json.dumps({'user_message_id': str(user_message.id)})}\n\n"
+
+            if grounding_enabled and hasattr(provider, "chat_grounded"):
+                response = await provider.chat_grounded(model.model_name, messages)
+                response.sources = await _normalize_sources(response.sources or [])
+                assistant_message = ChatMessage(
+                    chat_id=chat.id,
+                    role="assistant",
+                    content=response.content,
+                    model_id=model.id,
+                    sources=response.sources,
+                )
+                session.add(assistant_message)
+                session.commit()
+                session.refresh(assistant_message)
+
+                usage_event = UsageEvent(
+                    org_id=chat.org_id,
+                    user_id=current_user.id,
+                    chat_id=chat.id,
+                    message_id=assistant_message.id,
+                    model_id=model.id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    total_tokens=response.usage.total_tokens,
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    cached_tokens=response.usage.cached_tokens,
+                    thinking_tokens=response.usage.thinking_tokens,
+                )
+                session.add(usage_event)
+                session.commit()
+                await _maybe_update_chat_title(
+                    session=session,
+                    chat=chat,
+                    provider=provider,
+                    model=model,
+                    history=history + [assistant_message],
+                )
+
+                yield f"data: {json.dumps({'done': True, 'message_id': str(assistant_message.id), 'content': response.content, 'model_name': model.display_name, 'model_id': str(model.id), 'sources': response.sources or []})}\n\n"
+                return
+
+            if tool_registry and hasattr(provider, "chat_with_tools"):
+                content, tool_attachments, tool_sources, image_usages, last_usage = (
+                    await _run_agentic_loop(
+                        provider=provider,
+                        model=model,
+                        messages=messages,
+                        tool_registry=tool_registry,
+                    )
+                )
+                assistant_message = ChatMessage(
+                    chat_id=chat.id,
+                    role="assistant",
+                    content=content,
+                    model_id=model.id,
+                    sources=tool_sources or None,
+                )
+                session.add(assistant_message)
+                session.commit()
+                session.refresh(assistant_message)
+                if tool_attachments:
+                    session.add_all(
+                        [
+                            ChatMessageAttachment(
+                                message_id=assistant_message.id,
+                                file_name=item["file_name"],
+                                content_type=item["content_type"],
+                                data_base64=item["data_base64"],
+                            )
+                            for item in tool_attachments
+                        ]
+                    )
+                    session.commit()
+                usage = last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0)
+                usage_event = UsageEvent(
+                    org_id=chat.org_id,
+                    user_id=current_user.id,
+                    chat_id=chat.id,
+                    message_id=assistant_message.id,
+                    model_id=model.id,
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cached_tokens=usage.cached_tokens,
+                    thinking_tokens=usage.thinking_tokens,
+                )
+                session.add(usage_event)
+                session.commit()
+                if image_usages:
+                    for item in image_usages:
+                        session.add(
+                            UsageEvent(
+                                org_id=chat.org_id,
+                                user_id=current_user.id,
+                                chat_id=chat.id,
+                                message_id=assistant_message.id,
+                                model_id=UUID(item["model_id"]),
+                                prompt_tokens=item["prompt_tokens"],
+                                completion_tokens=item["completion_tokens"],
+                                total_tokens=item["total_tokens"],
+                                input_tokens=item["input_tokens"],
+                                output_tokens=item["output_tokens"],
+                                cached_tokens=item["cached_tokens"],
+                                thinking_tokens=item["thinking_tokens"],
+                                image_width=item.get("image_width"),
+                                image_height=item.get("image_height"),
+                                image_count=item.get("image_count"),
+                                image_format=item.get("image_format"),
+                            )
+                        )
+                    session.commit()
+                await _maybe_update_chat_title(
+                    session=session,
+                    chat=chat,
+                    provider=provider,
+                    model=model,
+                    history=history + [assistant_message],
+                )
+                yield f"data: {json.dumps({'delta': content})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'message_id': str(assistant_message.id), 'content': content, 'model_name': model.display_name, 'model_id': str(model.id), 'attachments': tool_attachments or [], 'sources': tool_sources or []})}\n\n"
+                return
+
+            response = await provider.chat(model.model_name, messages)
+            assistant_content = response.content or ""
+            usage = response.usage
+            if assistant_content:
+                yield f"data: {json.dumps({'delta': assistant_content})}\n\n"
+
+            assistant_message = ChatMessage(
+                chat_id=chat.id,
+                role="assistant",
+                content=assistant_content,
+                model_id=model.id,
+            )
+            session.add(assistant_message)
+            session.commit()
+            session.refresh(assistant_message)
+
+            usage_event = UsageEvent(
+                org_id=chat.org_id,
+                user_id=current_user.id,
+                chat_id=chat.id,
+                message_id=assistant_message.id,
+                model_id=model.id,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                total_tokens=usage.total_tokens,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_tokens=usage.cached_tokens,
+                thinking_tokens=usage.thinking_tokens,
+            )
+            session.add(usage_event)
+            session.commit()
+
+            await _maybe_update_chat_title(
+                session=session,
+                chat=chat,
+                provider=provider,
+                model=model,
+                history=history + [assistant_message],
+            )
+
+            yield f"data: {json.dumps({'done': True, 'message_id': str(assistant_message.id), 'content': assistant_content, 'model_name': model.display_name, 'model_id': str(model.id)})}\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    tool_attachments: list[dict] | None = None
+    if grounding_enabled and hasattr(provider, "chat_grounded"):
+        response = await provider.chat_grounded(model.model_name, messages)
+        response.sources = await _normalize_sources(response.sources or [])
+    elif tool_registry and hasattr(provider, "chat_with_tools"):
+        content, tool_attachments, tool_sources, image_usages, last_usage = (
+            await _run_agentic_loop(
+                provider=provider,
+                model=model,
+                messages=messages,
+                tool_registry=tool_registry,
+            )
+        )
+        response = ChatResponse(
+            content=content,
+            usage=last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0),
+            sources=tool_sources or None,
+        )
+    else:
+        response = await provider.chat(model.model_name, messages)
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content=response.content,
+        model_id=model.id,
+        sources=response.sources,
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    if tool_attachments:
+        session.add_all(
+            [
+                ChatMessageAttachment(
+                    message_id=assistant_message.id,
+                    file_name=item["file_name"],
+                    content_type=item["content_type"],
+                    data_base64=item["data_base64"],
+                )
+                for item in tool_attachments
+            ]
+        )
+        session.commit()
+
+    usage_event = UsageEvent(
+        org_id=chat.org_id,
+        user_id=current_user.id,
+        chat_id=chat.id,
+        message_id=assistant_message.id,
+        model_id=model.id,
+        prompt_tokens=response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens,
+        total_tokens=response.usage.total_tokens,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        cached_tokens=response.usage.cached_tokens,
+        thinking_tokens=response.usage.thinking_tokens,
+    )
+    session.add(usage_event)
+    session.commit()
+    await _maybe_update_chat_title(
+        session=session,
+        chat=chat,
+        provider=provider,
+        model=model,
+        history=history + [assistant_message],
+    )
+
+    attachment_reads = [
+        ChatMessageAttachmentRead(
+            id=str(attachment.id),
+            file_name=attachment.file_name,
+            content_type=attachment.content_type,
+            data_base64=attachment.data_base64,
+        )
+        for attachment in attachments
+    ]
+    assistant_attachment_reads = None
+    if tool_attachments:
+        assistant_attachment_reads = [
+            ChatMessageAttachmentRead(
+                id="",
+                file_name=item["file_name"],
+                content_type=item["content_type"],
+                data_base64=item["data_base64"],
+            )
+            for item in tool_attachments
+        ]
+    return [
+        ChatMessageRead(
+            id=str(user_message.id),
+            role=user_message.role,
+            content=user_message.content,
+            created_at=user_message.created_at,
+            attachments=attachment_reads,
+        ),
+        ChatMessageRead(
+            id=str(assistant_message.id),
+            role=assistant_message.role,
+            content=assistant_message.content,
+            created_at=assistant_message.created_at,
+            model_id=str(model.id),
+            model_name=model.display_name,
+            attachments=assistant_attachment_reads,
+            sources=assistant_message.sources,
+        ),
+    ]
+
+
+@router.websocket("/{chat_id}/ws")
+async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
+    token = _extract_ws_token(websocket)
+    if not token:
+        await websocket.close(code=4401)
+        return
+    protocols = websocket.headers.get("sec-websocket-protocol", "")
+    requested = [item.strip() for item in protocols.split(",") if item.strip()]
+    subprotocol = "chatui" if "chatui" in requested else None
+    await websocket.accept(subprotocol=subprotocol)
+    try:
+        with Session(engine) as auth_session:
+            auth_user = _get_user_from_token(auth_session, token)
+            current_user_id = auth_user.id
+
+        while True:
+            payload = await websocket.receive_json()
+            message_type = payload.get("type")
+            raw_payload = payload.get("payload")
+            if isinstance(raw_payload, str):
+                try:
+                    parsed_payload = json.loads(raw_payload)
+                    message_payload = parsed_payload if isinstance(parsed_payload, dict) else {}
+                except Exception:
+                    message_payload = {}
+            elif isinstance(raw_payload, dict):
+                message_payload = raw_payload
+            else:
+                message_payload = {}
+
+            with Session(engine) as session:
+                current_user = session.get(User, current_user_id)
+                if not current_user or not current_user.is_active:
+                    await _ws_send_event(websocket, {"error": "User not found"})
+                    await websocket.close(code=4401)
+                    return
+
+                if message_type == "send":
+                    try:
+                        request = ChatMessageCreateRequest(**message_payload)
+                    except ValidationError as exc:
+                        await _ws_send_event(
+                            websocket, {"error": _validation_error_text(exc)}
+                        )
+                        continue
+                    await _stream_message_ws(
+                        websocket, session, current_user, chat_id, request
+                    )
+                elif message_type == "edit":
+                    message_id = message_payload.get("message_id")
+                    if not message_id:
+                        await _ws_send_event(
+                            websocket, {"error": "Message id is required"}
+                        )
+                        continue
+                    try:
+                        request = ChatMessageEditRequest(
+                            **{
+                                key: value
+                                for key, value in message_payload.items()
+                                if key != "message_id"
+                            }
+                        )
+                    except ValidationError as exc:
+                        await _ws_send_event(
+                            websocket, {"error": _validation_error_text(exc)}
+                        )
+                        continue
+                    await _stream_edit_ws(
+                        websocket, session, current_user, chat_id, message_id, request
+                    )
+                elif message_type == "subscribe":
+                    task_id = message_payload.get("task_id")
+                    after = message_payload.get("after", 0)
+                    if not task_id:
+                        await _ws_send_event(websocket, {"error": "Task id is required"})
+                        continue
+                    try:
+                        task_uuid = UUID(task_id)
+                        chat_uuid = UUID(chat_id)
+                        after_sequence = int(after or 0)
+                    except ValueError:
+                        await _ws_send_event(websocket, {"error": "Invalid id"})
+                        continue
+                    task = session.exec(
+                        select(ChatGenerationTask).where(
+                            ChatGenerationTask.id == task_uuid,
+                            ChatGenerationTask.chat_id == chat_uuid,
+                        )
+                    ).first()
+                    if not task:
+                        await _ws_send_event(websocket, {"error": "Task not found"})
+                        continue
+                    await _stream_task_events_ws(
+                        websocket, task.id, after_sequence=after_sequence
+                    )
+                else:
+                    await _ws_send_event(websocket, {"error": "Unsupported message type"})
+                    continue
+    except WebSocketDisconnect:
+        return
+    except HTTPException as exc:
+        await _ws_send_event(
+            websocket, {"error": exc.detail, "status": exc.status_code}
+        )
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            await websocket.close(code=4401)
+        elif exc.status_code == status.HTTP_403_FORBIDDEN:
+            await websocket.close(code=4403)
+        else:
+            await websocket.close(code=4400)
+    except Exception:
+        logger.exception("Websocket error")
+        await _ws_send_event(websocket, {"error": "Websocket error"})
+        await websocket.close(code=1011)
+
+
+@router.patch("/{chat_id}/messages/{message_id}", response_model=ChatMessageEditResponse)
+async def edit_message(
+    chat_id: str,
+    message_id: str,
+    payload: ChatMessageEditRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatMessageRead:
+    try:
+        chat_uuid = UUID(chat_id)
+        message_uuid = UUID(message_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message"
+        )
+
+    org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        )
+
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+
+    message = session.exec(
+        select(ChatMessage).where(
+            ChatMessage.id == message_uuid, ChatMessage.chat_id == chat.id
+        )
+    ).first()
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
+        )
+    if message.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only user messages can be edited",
+        )
+
+    model_id = chat.model_id
+    if payload.model_id:
+        try:
+            model_id = UUID(payload.model_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
+            ) from exc
+        chat.model_id = model_id
+    if not model_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Chat model not set"
+        )
+    model = session.exec(select(ChatModel).where(ChatModel.id == model_id)).first()
+    if not model:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    enabled = session.exec(
+        select(OrgModel).where(
+            OrgModel.org_id == chat.org_id,
+            OrgModel.model_id == model.id,
+            OrgModel.is_enabled.is_(True),
+        )
+    ).first()
+    if not enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Model is not enabled for this organization",
+        )
+
+    to_hide = session.exec(
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat.id)
+        .where(ChatMessage.is_current.is_(True))
+        .where(ChatMessage.created_at >= message.created_at)
+        .order_by(ChatMessage.created_at)
+    ).all()
+    for item in to_hide:
+        item.is_current = False
+        session.add(item)
+    session.commit()
+
+    new_message = ChatMessage(
+        chat_id=chat.id,
+        role=message.role,
+        content=payload.content,
+        parent_id=message.id,
+        branch_id=uuid4(),
+        is_current=True,
+        status="done",
+    )
+    session.add(new_message)
+    session.commit()
+    session.refresh(new_message)
+
+    if payload.attachments is None:
+        prev_attachments = session.exec(
+            select(ChatMessageAttachment).where(
+                ChatMessageAttachment.message_id == message.id
+            )
+        ).all()
+        if prev_attachments:
+            session.add_all(
+                [
+                    ChatMessageAttachment(
+                        message_id=new_message.id,
+                        file_name=attachment.file_name,
+                        content_type=attachment.content_type,
+                        data_base64=attachment.data_base64,
+                    )
+                    for attachment in prev_attachments
+                ]
+            )
+            session.commit()
+    else:
+        if payload.attachments:
+            resolved_attachments = _resolve_attachment_inputs(
+                session,
+                chat=chat,
+                current_user=current_user,
+                items=payload.attachments,
+            )
+            session.add_all(
+                [
+                    ChatMessageAttachment(
+                        message_id=new_message.id,
+                        file_name=str(attachment.file_name or ""),
+                        content_type=str(attachment.content_type or ""),
+                        data_base64=str(attachment.data_base64 or ""),
+                    )
+                    for attachment in resolved_attachments
+                ]
+            )
+            session.commit()
+
+    edited_attachments = session.exec(
+        select(ChatMessageAttachment).where(
+            ChatMessageAttachment.message_id == new_message.id
+        )
+    ).all()
+    attachment_reads = [
+        ChatMessageAttachmentRead(
+            id=str(attachment.id),
+            file_name=attachment.file_name,
+            content_type=attachment.content_type,
+            data_base64=attachment.data_base64,
+        )
+        for attachment in edited_attachments
+    ]
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        model_id=model.id,
+        is_current=True,
+        status="generating",
+        started_at=datetime.utcnow(),
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    task = ChatGenerationTask(
+        chat_id=chat.id,
+        user_message_id=new_message.id,
+        assistant_message_id=assistant_message.id,
+        status=GenerationStatus.queued,
+        metadata_json={
+            "model_id": str(model.id),
+            "model_name": model.display_name,
+            "locale": payload.locale,
+            "timezone": payload.timezone,
+            "reasoning_effort": payload.reasoning_effort,
+            "web_search_enabled": payload.web_search_enabled,
+            "code_execution_enabled": _coerce_optional_bool(
+                payload.code_execution_enabled
+            ),
+        },
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    _enqueue_generation_task(task.id)
+
+    return ChatMessageEditResponse(
+        user_message=ChatMessageRead(
+            id=str(new_message.id),
+            role=new_message.role,
+            content=new_message.content,
+            created_at=new_message.created_at,
+            attachments=attachment_reads,
+        ),
+        assistant_message=ChatMessageRead(
+            id=str(assistant_message.id),
+            role=assistant_message.role,
+            content=assistant_message.content,
+            created_at=assistant_message.created_at,
+            model_id=str(model.id),
+            model_name=model.display_name,
+            task_id=str(task.id),
+            generation_status=task.status.value,
+        ),
+    )
+
+    history = session.exec(
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat.id)
+        .where(ChatMessage.is_current.is_(True))
+        .order_by(ChatMessage.created_at)
+    ).all()
+    history_attachments = session.exec(
+        select(ChatMessageAttachment).where(
+            ChatMessageAttachment.message_id.in_([message.id for message in history])
+        )
+    ).all()
+    attachments_by_message: dict[UUID, list[ChatMessageAttachment]] = {}
+    for attachment in history_attachments:
+        attachments_by_message.setdefault(attachment.message_id, []).append(attachment)
+
+    def build_messages() -> list[dict]:
+        items: list[dict] = []
+        latest_user_image_id: UUID | None = None
+        for msg in reversed(history):
+            if msg.role != "user":
+                continue
+            msg_attachments = attachments_by_message.get(msg.id, [])
+            latest_image = next(
+                (
+                    attachment
+                    for attachment in reversed(msg_attachments)
+                    if attachment.content_type.startswith("image/")
+                ),
+                None,
+            )
+            if latest_image:
+                latest_user_image_id = latest_image.id
+                break
+        for msg in history:
+            if msg.role != "user":
+                items.append({"role": msg.role, "content": msg.content})
+                continue
+            msg_attachments = attachments_by_message.get(msg.id, [])
+            if not msg_attachments:
+                items.append({"role": msg.role, "content": msg.content})
+                continue
+            image_attachments = [
+                attachment
+                for attachment in msg_attachments
+                if attachment.content_type.startswith("image/")
+            ]
+            # Keep only one latest image across the whole history to reduce remote fetch timeouts.
+            if latest_user_image_id is not None:
+                image_attachments = [
+                    attachment
+                    for attachment in image_attachments
+                    if attachment.id == latest_user_image_id
+                ]
+            else:
+                image_attachments = []
+            if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Images are not supported for this model provider",
+                )
+            attachment_lines = _attachment_lines(msg_attachments)
+            if not image_attachments:
+                text = msg.content or ""
+                if attachment_lines:
+                    text += (
+                        "\n\nAttachments (available in /inputs for code execution):\n"
+                        + "\n".join(attachment_lines)
+                    )
+                items.append({"role": msg.role, "content": text})
+                continue
+            content_parts: list[dict] = []
+            if msg.content:
+                content_parts.append({"type": "text", "text": msg.content})
+            if attachment_lines:
+                content_parts.append(
+                    {
+                        "type": "text",
+                        "text": "Attachments (available in /inputs for code execution):\n"
+                        + "\n".join(attachment_lines),
+                    }
+                )
+            for attachment in image_attachments:
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": _attachment_image_url(attachment)
+                        },
+                    }
+                )
+            items.append({"role": msg.role, "content": content_parts})
+        return items
+
+    messages = _truncate_messages(
+        _prepend_tool_guidance(build_messages(), locale=payload.locale, timezone=payload.timezone),
+        token_limit=model.context_length,
+    )
+
+    provider_config = require_provider_enabled(session, chat.org_id, model.provider)
+    config = None
+    if provider_config and provider_config.config_json:
+        try:
+            config = json.loads(provider_config.config_json)
+        except json.JSONDecodeError:
+            pass
+    prompt_cache_key = f"chat:{chat.id}"
+    provider = get_provider(
+        model.provider,
+        api_key=provider_config.api_key_override if provider_config else None,
+        base_url=provider_config.base_url_override if provider_config else None,
+        endpoint=provider_config.endpoint_override if provider_config else None,
+        reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_retention=settings.openai_prompt_cache_retention,
+        config=config,
+    )
+    grounding_enabled = _grounding_enabled(org, model.provider)
+    effective_web_search_enabled = (
+        org.web_search_enabled
+        if payload.web_search_enabled is None
+        else org.web_search_enabled and payload.web_search_enabled
+    )
+    effective_exec_policy = _resolve_exec_policy(
+        org.exec_policy, payload.code_execution_enabled
+    )
+    tool_registry = _build_tool_registry(
+        session,
+        chat.org_id,
+        chat_id=chat.id,
+        preferred_provider=model.provider,
+        web_tools_enabled=not grounding_enabled,
+        web_search_enabled=effective_web_search_enabled,
+        web_scrape_enabled=org.web_scrape_enabled,
+        exec_policy=effective_exec_policy,
+        exec_network_enabled=org.exec_network_enabled,
+        locale=payload.locale,
+    )
+
+    if model.supports_image_output:
+        image_result = await generate_image(
+            ImageToolContext(
+                session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+            ),
+            prompt=payload.content,
+            model_override=model,
+        )
+        assistant_message = ChatMessage(
+            chat_id=chat.id,
+            role="assistant",
+            content="",
+            model_id=model.id,
+            is_current=True,
+        )
+        session.add(assistant_message)
+        session.commit()
+        session.refresh(assistant_message)
+        if image_result.attachments:
+            session.add_all(
+                [
+                    ChatMessageAttachment(
+                        message_id=assistant_message.id,
+                        file_name=item["file_name"],
+                        content_type=item["content_type"],
+                        data_base64=item["data_base64"],
+                    )
+                    for item in image_result.attachments
+                ]
+            )
+            session.commit()
+        usage_event = UsageEvent(
+            org_id=chat.org_id,
+            user_id=current_user.id,
+            chat_id=chat.id,
+            message_id=assistant_message.id,
+            model_id=model.id,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            input_tokens=0,
+            output_tokens=0,
+            cached_tokens=0,
+            thinking_tokens=0,
+        )
+        session.add(usage_event)
+        session.commit()
+        return ChatMessageEditResponse(
+            user_message=ChatMessageRead(
+                id=str(new_message.id),
+                role=new_message.role,
+                content=new_message.content,
+                created_at=new_message.created_at,
+                attachments=attachment_reads,
+            ),
+            assistant_message=ChatMessageRead(
+                id=str(assistant_message.id),
+                role=assistant_message.role,
+                content=assistant_message.content,
+                created_at=assistant_message.created_at,
+                model_id=str(model.id),
+                model_name=model.display_name,
+                attachments=image_result.attachments
+                and [
+                    ChatMessageAttachmentRead(
+                        id="",
+                        file_name=item["file_name"],
+                        content_type=item["content_type"],
+                        data_base64=item["data_base64"],
+                    )
+                    for item in image_result.attachments
+                ],
+            ),
+        )
+
+    tool_attachments: list[dict] | None = None
+    if grounding_enabled and hasattr(provider, "chat_grounded"):
+        response = await provider.chat_grounded(model.model_name, messages)
+        response.sources = await _normalize_sources(response.sources or [])
+    elif tool_registry and hasattr(provider, "chat_with_tools"):
+        content, tool_attachments, tool_sources, image_usages, last_usage = (
+            await _run_agentic_loop(
+                provider=provider,
+                model=model,
+                messages=messages,
+                tool_registry=tool_registry,
+            )
+        )
+        response = ChatResponse(
+            content=content,
+            usage=last_usage or ChatUsage(0, 0, 0, 0, 0, 0, 0),
+            sources=tool_sources or None,
+        )
+    else:
+        response = await provider.chat(model.model_name, messages)
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content=response.content,
+        model_id=model.id,
+        is_current=True,
+        sources=response.sources,
+    )
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(assistant_message)
+
+    if tool_attachments:
+        session.add_all(
+            [
+                ChatMessageAttachment(
+                    message_id=assistant_message.id,
+                    file_name=item["file_name"],
+                    content_type=item["content_type"],
+                    data_base64=item["data_base64"],
+                )
+                for item in tool_attachments
+            ]
+        )
+        session.commit()
+
+    usage_event = UsageEvent(
+        org_id=chat.org_id,
+        user_id=current_user.id,
+        chat_id=chat.id,
+        message_id=assistant_message.id,
+        model_id=model.id,
+        prompt_tokens=response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens,
+        total_tokens=response.usage.total_tokens,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        cached_tokens=response.usage.cached_tokens,
+        thinking_tokens=response.usage.thinking_tokens,
+    )
+    session.add(usage_event)
+    session.commit()
+    if image_usages:
+        for item in image_usages:
+            session.add(
+                UsageEvent(
+                    org_id=chat.org_id,
+                    user_id=current_user.id,
+                    chat_id=chat.id,
+                    message_id=assistant_message.id,
+                    model_id=UUID(item["model_id"]),
+                    prompt_tokens=item["prompt_tokens"],
+                    completion_tokens=item["completion_tokens"],
+                    total_tokens=item["total_tokens"],
+                    input_tokens=item["input_tokens"],
+                    output_tokens=item["output_tokens"],
+                    cached_tokens=item["cached_tokens"],
+                    thinking_tokens=item["thinking_tokens"],
+                    image_width=item.get("image_width"),
+                    image_height=item.get("image_height"),
+                    image_count=item.get("image_count"),
+                    image_format=item.get("image_format"),
+                )
+            )
+        session.commit()
+
+    assistant_attachment_reads = None
+    if tool_attachments:
+        assistant_attachment_reads = [
+            ChatMessageAttachmentRead(
+                id="",
+                file_name=item["file_name"],
+                content_type=item["content_type"],
+                data_base64=item["data_base64"],
+            )
+            for item in tool_attachments
+        ]
+    return ChatMessageEditResponse(
+        user_message=ChatMessageRead(
+            id=str(new_message.id),
+            role=new_message.role,
+            content=new_message.content,
+            created_at=new_message.created_at,
+            attachments=attachment_reads,
+        ),
+        assistant_message=ChatMessageRead(
+            id=str(assistant_message.id),
+            role=assistant_message.role,
+            content=assistant_message.content,
+            created_at=assistant_message.created_at,
+            model_id=str(model.id),
+            model_name=model.display_name,
+            attachments=assistant_attachment_reads,
+            sources=assistant_message.sources,
+        ),
+    )
+
+
+@router.delete("/{chat_id}/messages/{message_id}/branch", status_code=status.HTTP_204_NO_CONTENT)
+def delete_message_branch(
+    chat_id: str,
+    message_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        chat_uuid = UUID(chat_id)
+        message_uuid = UUID(message_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message"
+        )
+
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+
+    message = session.exec(
+        select(ChatMessage).where(
+            ChatMessage.id == message_uuid, ChatMessage.chat_id == chat.id
+        )
+    ).first()
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
+        )
+    if message.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only user messages can be removed",
+        )
+
+    to_hide = session.exec(
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat.id)
+        .where(ChatMessage.is_current.is_(True))
+        .where(ChatMessage.created_at >= message.created_at)
+        .order_by(ChatMessage.created_at)
+    ).all()
+    for item in to_hide:
+        item.is_current = False
+        session.add(item)
+    session.commit()

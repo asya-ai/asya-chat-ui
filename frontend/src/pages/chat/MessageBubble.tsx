@@ -1,5 +1,6 @@
 import { memo, useMemo, useRef } from "react"
 import type { CSSProperties } from "react"
+import { useNavigate } from "react-router-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -67,6 +68,7 @@ const MessageBubbleComponent = ({
   onRemoveEditingAttachment,
   onPreviewAttachment,
 }: MessageBubbleProps) => {
+  const navigate = useNavigate()
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
@@ -680,18 +682,24 @@ const MessageBubbleComponent = ({
                 <div className="z-10 relative mt-3 overflow-hidden text-muted-foreground text-xs pointer-events-auto">
                   <span className="uppercase tracking-wide">{t("chat_sources")}</span>{" "}
                   <div className="flex flex-wrap gap-2 mt-2 max-w-full">
-                    {msg.sources.map((source, index) => (
-                      <a
-                        key={`${source.url}-${index}`}
-                        href={source.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={source.title ?? source.url}
-                        className="inline-flex px-2 py-0.5 border border-muted-foreground/30 rounded-full max-w-[240px] overflow-hidden text-[10px] text-muted-foreground hover:text-foreground text-ellipsis uppercase tracking-wide whitespace-nowrap cursor-pointer"
-                      >
-                        {getSourceLabel(source)}
-                      </a>
-                    ))}
+                    {msg.sources.map((source, index) => {
+                      const isInternal = source.url.startsWith("/chat/")
+                      return (
+                        <a
+                          key={`${source.url}-${index}`}
+                          href={source.url}
+                          {...(isInternal ? {} : { target: "_blank", rel: "noreferrer" })}
+                          title={source.title ?? source.url}
+                          className="inline-flex px-2 py-0.5 border border-muted-foreground/30 rounded-full max-w-[240px] overflow-hidden text-[10px] text-muted-foreground hover:text-foreground text-ellipsis uppercase tracking-wide whitespace-nowrap cursor-pointer"
+                          onClick={isInternal ? (e) => {
+                            e.preventDefault()
+                            navigate(source.url)
+                          } : undefined}
+                        >
+                          {getSourceLabel(source)}
+                        </a>
+                      )
+                    })}
                   </div>
                 </div>
               ) : null}
