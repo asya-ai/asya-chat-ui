@@ -19,12 +19,14 @@ class User(SQLModel, table=True):
     token_version: int = Field(default=0, nullable=False)
     is_active: bool = Field(default=True)
     is_super_admin: bool = Field(default=False)
+    memory_enabled: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     memberships: List["OrgMembership"] = Relationship(back_populates="user")
     chats: List["Chat"] = Relationship(back_populates="user")
     usage_events: List["UsageEvent"] = Relationship(back_populates="user")
     api_keys: List["ApiKey"] = Relationship(back_populates="user")
+    memories: List["UserMemory"] = Relationship(back_populates="user")
 
 
 class Org(SQLModel, table=True):
@@ -334,3 +336,14 @@ class UsageEvent(SQLModel, table=True):
     org: Org = Relationship(back_populates="usage_events")
     user: User = Relationship(back_populates="usage_events")
     model: Optional[ChatModel] = Relationship(back_populates="usage_events")
+
+
+class UserMemory(SQLModel, table=True):
+    __tablename__ = "user_memories"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    content: str
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    user: User = Relationship(back_populates="memories")

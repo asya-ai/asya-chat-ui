@@ -19,6 +19,7 @@ import type {
   OrgAuthSettingsUpdate,
   UsageSlice,
   ApiKey,
+  UserMemory,
 } from "@/lib/types"
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api"
@@ -275,8 +276,13 @@ export const authApi = {
       body: JSON.stringify({ org_id: orgId, email }),
     }),
   me: () =>
-    apiFetch<{ id: string; email: string; is_super_admin: boolean; is_admin: boolean }>(
+    apiFetch<{ id: string; email: string; is_super_admin: boolean; is_admin: boolean; memory_enabled: boolean }>(
       "/auth/me"
+    ),
+  toggleMemory: (memoryEnabled: boolean) =>
+    apiFetch<{ id: string; email: string; is_super_admin: boolean; is_admin: boolean; memory_enabled: boolean }>(
+      "/auth/me/memory",
+      { method: "PATCH", body: JSON.stringify({ memory_enabled: memoryEnabled }) }
     ),
   changePassword: (currentPassword: string, newPassword: string) =>
     apiFetch("/auth/me/password", {
@@ -299,6 +305,17 @@ export const authApi = {
   invites: (orgId: string) => apiFetch<Invite[]>(`/auth/invites?org_id=${orgId}`),
   resendInvite: (inviteId: string) => apiFetch<Invite>(`/auth/invites/${inviteId}/resend`, { method: "POST" }),
   cancelInvite: (inviteId: string) => apiFetch(`/auth/invites/${inviteId}`, { method: "DELETE" }),
+}
+
+export const memoryApi = {
+  list: () => apiFetch<UserMemory[]>("/auth/me/memories"),
+  update: (memoryId: string, content: string) =>
+    apiFetch<UserMemory>(`/auth/me/memories/${memoryId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    }),
+  remove: (memoryId: string) =>
+    apiFetch(`/auth/me/memories/${memoryId}`, { method: "DELETE" }),
 }
 
 export const apiKeyApi = {

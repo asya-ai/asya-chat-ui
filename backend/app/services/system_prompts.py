@@ -10,6 +10,15 @@ MAIN_SYSTEM_PROMPT = (
     "Always try to be helpful but not tease/request user to ask formore relevant info (you are not a youtuber and you do not need to raise engagement byy using these techniques)."
 )
 
+MEMORY_SYSTEM_PROMPT = (
+    "You have access to a persistent memory system. Stored memories are listed below "
+    "and represent important facts, preferences, or instructions from the user. "
+    "Use them to personalize your responses. You can store new memories for truly "
+    "important or global information (user preferences, key facts about them, explicit "
+    "requests to remember something). Do NOT store transient or chat-specific details. "
+    "You can also search the user's past chats when they reference previous conversations."
+)
+
 TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     "code_execution": (
         "Use the code_execution tool for data analysis, calculations, CSV/XLSX processing, "
@@ -43,6 +52,18 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "Use edit_image when the user asks to modify an existing image. "
         "If no image is specified, it will use the latest image attachment in the chat."
     ),
+    "store_memory": (
+        "Use store_memory to persist important facts the user shares about themselves, "
+        "their preferences, or explicit requests to remember something. Keep entries concise."
+    ),
+    "remove_memory": (
+        "Use remove_memory to delete a stored memory when the user asks you to forget "
+        "something or when a fact becomes outdated. Use the memory_id from the memories list."
+    ),
+    "search_past_chats": (
+        "Use search_past_chats to find information from the user's previous conversations. "
+        "Useful when they reference something discussed before."
+    ),
 }
 
 TOOL_PROMPT_ORDER = (
@@ -53,6 +74,9 @@ TOOL_PROMPT_ORDER = (
     "download_attachments",
     "generate_image",
     "edit_image",
+    "store_memory",
+    "remove_memory",
+    "search_past_chats",
 )
 
 
@@ -87,14 +111,24 @@ def _time_prompt(user_timezone: str | None) -> str:
     return " ".join(parts)
 
 
+def _memories_prompt(memories: list[dict[str, str]]) -> str:
+    lines = [MEMORY_SYSTEM_PROMPT, "", "## Stored memories"]
+    for mem in memories:
+        lines.append(f"- [{mem['id']}] {mem['content']}")
+    return "\n".join(lines)
+
+
 def build_system_prompt_messages(
     *,
     locale: str | None = None,
     timezone: str | None = None,
     enabled_tool_names: Iterable[str] | None = None,
+    memories: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     tool_names = set(enabled_tool_names or [])
     messages: list[dict[str, str]] = [{"role": "system", "content": MAIN_SYSTEM_PROMPT}]
+    if memories:
+        messages.append({"role": "system", "content": _memories_prompt(memories)})
     for name in TOOL_PROMPT_ORDER:
         if name in tool_names:
             prompt = TOOL_SYSTEM_PROMPTS.get(name)

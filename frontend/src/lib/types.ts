@@ -280,3 +280,9 @@ export type Invite = {
   accepted_at?: string | null
   created_at: string
 }
+
+export type UserMemory = {
+  id: string
+  content: string
+  created_at: string
+}

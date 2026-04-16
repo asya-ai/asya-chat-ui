@@ -25,7 +25,7 @@ from app.core.security import (
     validate_password,
     verify_password,
 )
-from app.models import Invite, Org, OrgMembership, PasswordReset, Role, User
+from app.models import Invite, Org, OrgMembership, PasswordReset, Role, User, UserMemory
 from app.services.email_service import send_invite_email, send_password_reset_email
 from app.services.org_service import ensure_default_roles, require_org_admin
 
@@ -122,6 +122,7 @@ class MeResponse(BaseModel):
     email: EmailStr
     is_super_admin: bool
     is_admin: bool
+    memory_enabled: bool
 
 
 class ChangePasswordRequest(BaseModel):
@@ -715,6 +716,7 @@ def get_me(
         email=current_user.email,
         is_super_admin=current_user.is_super_admin,
         is_admin=is_admin,
+        memory_enabled=current_user.memory_enabled,
     )
 
 
@@ -759,6 +761,104 @@ def logout(
     session.commit()
 
 
+class MemoryToggleRequest(BaseModel):
+    memory_enabled: bool
+
+
+@router.patch("/me/memory", response_model=MeResponse)
+def toggle_memory(
+    payload: MemoryToggleRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MeResponse:
+    current_user.memory_enabled = payload.memory_enabled
+    session.add(current_user)
+    session.commit()
+    is_admin = False
+    if current_user.is_super_admin:
+        is_admin = True
+    else:
+        membership = session.exec(
+            select(OrgMembership).where(OrgMembership.user_id == current_user.id)
+        ).first()
+        if membership:
+            role = session.exec(select(Role).where(Role.id == membership.role_id)).first()
+            if role and role.name in {"admin", "owner"}:
+                is_admin = True
+    return MeResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        is_super_admin=current_user.is_super_admin,
+        is_admin=is_admin,
+        memory_enabled=current_user.memory_enabled,
+    )
+
+
+class MemoryRead(BaseModel):
+    id: str
+    content: str
+    created_at: str
+
+
+class MemoryUpdateRequest(BaseModel):
+    content: str
+
+
+@router.get("/me/memories", response_model=list[MemoryRead])
+def list_memories(
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[MemoryRead]:
+    rows = session.exec(
+        select(UserMemory)
+        .where(UserMemory.user_id == current_user.id)
+        .order_by(UserMemory.created_at)
+    ).all()
+    return [
+        MemoryRead(id=str(m.id), content=m.content, created_at=m.created_at.isoformat())
+        for m in rows
+    ]
+
+
+@router.patch("/me/memories/{memory_id}", response_model=MemoryRead)
+def update_memory(
+    memory_id: str,
+    payload: MemoryUpdateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MemoryRead:
+    try:
+        mid = UUID(memory_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id") from exc
+    memory = session.get(UserMemory, mid)
+    if not memory or memory.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
+    memory.content = payload.content.strip()
+    session.add(memory)
+    session.commit()
+    return MemoryRead(
+        id=str(memory.id), content=memory.content, created_at=memory.created_at.isoformat()
+    )
+
+
+@router.delete("/me/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_memory(
+    memory_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        mid = UUID(memory_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id") from exc
+    memory = session.get(UserMemory, mid)
+    if not memory or memory.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
+    session.delete(memory)
+    session.commit()
+
+
 @router.patch("/users/{user_id}/super-admin", response_model=MeResponse)
 def update_super_admin(
     user_id: str,
@@ -793,6 +893,7 @@ def update_super_admin(
         email=user.email,
         is_super_admin=user.is_super_admin,
         is_admin=user.is_super_admin,
+        memory_enabled=user.memory_enabled,
     )
 
 

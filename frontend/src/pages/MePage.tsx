@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 
-import { apiKeyApi, authApi } from "@/lib/api"
+import { apiKeyApi, authApi, memoryApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n } from "@/lib/i18n-context"
 import { isValidPassword } from "@/lib/password"
@@ -20,7 +20,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { getTheme, toggleTheme } from "@/lib/theme"
-import type { ApiKey } from "@/lib/types"
+import type { ApiKey, UserMemory } from "@/lib/types"
+import { Pencil, Trash2, X, Check } from "lucide-react"
 import { modelStore, orgStore, toolCallLogsVisibleStore } from "@/lib/storage"
 
 export const MePage = () => {
@@ -47,6 +48,10 @@ export const MePage = () => {
   const [showToolCallLogs, setShowToolCallLogs] = useState<boolean>(() => {
     return toolCallLogsVisibleStore.get() === "1"
   })
+  const [memoryEnabled, setMemoryEnabled] = useState(false)
+  const [memories, setMemories] = useState<UserMemory[]>([])
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
+  const [editingContent, setEditingContent] = useState("")
   const hasError = Boolean(error)
 
   useEffect(() => {
@@ -56,9 +61,15 @@ export const MePage = () => {
         setEmail(me.email)
         setIsAdmin(me.is_admin)
         setIsSuperAdmin(me.is_super_admin)
+        setMemoryEnabled(me.memory_enabled)
       })
       .catch(() => setEmail(""))
   }, [])
+
+  useEffect(() => {
+    if (!memoryEnabled) return
+    memoryApi.list().then(setMemories).catch(() => setMemories([]))
+  }, [memoryEnabled])
 
   useEffect(() => {
     if (!apiKeysOpen) return
@@ -91,6 +102,43 @@ export const MePage = () => {
   const onToggleToolCallLogs = (enabled: boolean) => {
     setShowToolCallLogs(enabled)
     toolCallLogsVisibleStore.set(enabled)
+  }
+
+  const onToggleMemory = async (enabled: boolean) => {
+    setMemoryEnabled(enabled)
+    try {
+      await authApi.toggleMemory(enabled)
+      if (enabled) {
+        memoryApi.list().then(setMemories).catch(() => setMemories([]))
+      }
+    } catch {
+      setMemoryEnabled(!enabled)
+    }
+  }
+
+  const onDeleteMemory = async (memoryId: string) => {
+    try {
+      await memoryApi.remove(memoryId)
+      setMemories((prev) => prev.filter((m) => m.id !== memoryId))
+    } catch {
+      // ignore
+    }
+  }
+
+  const onStartEditMemory = (memory: UserMemory) => {
+    setEditingMemoryId(memory.id)
+    setEditingContent(memory.content)
+  }
+
+  const onSaveMemory = async () => {
+    if (!editingMemoryId) return
+    try {
+      const updated = await memoryApi.update(editingMemoryId, editingContent)
+      setMemories((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
+      setEditingMemoryId(null)
+    } catch {
+      // ignore
+    }
   }
 
   const onChangePassword = async () => {
@@ -226,6 +274,98 @@ export const MePage = () => {
                 />
               </label>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("me_memory_enabled")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="flex justify-between items-start gap-4 cursor-pointer">
+              <div className="space-y-1">
+                <p className="font-medium text-sm leading-5">
+                  {t("me_memory_enabled")}
+                </p>
+                <p className="text-muted-foreground text-xs leading-5">
+                  {t("me_memory_enabled_desc")}
+                </p>
+              </div>
+              <Switch
+                checked={memoryEnabled}
+                onCheckedChange={onToggleMemory}
+              />
+            </label>
+            {memoryEnabled ? (
+              <div className="pt-3 border-t space-y-2">
+                <p className="font-medium text-sm">{t("me_memory_title")}</p>
+                {memories.length === 0 ? (
+                  <p className="text-muted-foreground text-xs">
+                    {t("me_memory_empty")}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {memories.map((memory) => (
+                      <div
+                        key={memory.id}
+                        className="flex items-start gap-2 px-3 py-2 border rounded-md text-sm"
+                      >
+                        {editingMemoryId === memory.id ? (
+                          <div className="flex-1 flex items-center gap-2">
+                            <Input
+                              value={editingContent}
+                              onChange={(e) => setEditingContent(e.target.value)}
+                              className="h-8 text-sm"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") onSaveMemory()
+                                if (e.key === "Escape") setEditingMemoryId(null)
+                              }}
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={onSaveMemory}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={() => setEditingMemoryId(null)}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="flex-1 min-w-0 wrap-break-word">{memory.content}</span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={() => onStartEditMemory(memory)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                              onClick={() => onDeleteMemory(memory.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 

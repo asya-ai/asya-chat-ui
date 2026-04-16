@@ -40,6 +40,8 @@ from app.models.entities import (
     Org,
     OrgModel,
     UsageEvent,
+    User,
+    UserMemory,
 )
 from app.services.org_service import require_provider_enabled
 from app.services.providers.base import ChatUsage
@@ -129,6 +131,7 @@ def _build_provider_messages(
     locale: str | None,
     timezone: str | None = None,
     enabled_tool_names: list[str] | None,
+    memories: list[dict[str, str]] | None = None,
 ) -> list[dict]:
     items: list[dict[str, Any]] = []
     latest_user_image_id: UUID | None = None
@@ -206,6 +209,7 @@ def _build_provider_messages(
         locale=locale,
         timezone=timezone,
         enabled_tool_names=enabled_tool_names,
+        memories=memories,
     )
 
 
@@ -539,6 +543,7 @@ async def _run_generation(task_id: UUID) -> None:
         session.add(assistant_message)
         session.commit()
 
+        chat_user = session.get(User, chat.user_id)
         tool_registry = _build_tool_registry(
             session,
             chat.org_id,
@@ -561,7 +566,18 @@ async def _run_generation(task_id: UUID) -> None:
             ),
             exec_network_enabled=org.exec_network_enabled,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
+            memory_enabled=chat_user.memory_enabled if chat_user else False,
+            user_id=chat.user_id,
         )
+        user_memories = None
+        if chat_user and chat_user.memory_enabled:
+            mem_rows = session.scalars(
+                select(UserMemory)
+                .where(UserMemory.user_id == chat_user.id)
+                .order_by(UserMemory.created_at)
+            ).all()
+            if mem_rows:
+                user_memories = [{"id": str(m.id), "content": m.content} for m in mem_rows]
         messages = _build_provider_messages(
             history=history,
             attachments_by_message=attachments_by_message,
@@ -569,6 +585,7 @@ async def _run_generation(task_id: UUID) -> None:
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
             timezone=task.metadata_json.get("timezone") if task.metadata_json else None,
             enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
+            memories=user_memories,
         )
         messages = await _summarize_context_if_needed(
             session=session,

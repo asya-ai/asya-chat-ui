@@ -19,6 +19,7 @@ from app.models.entities import (
     RolePermission,
     UsageEvent,
     User,
+    UserMemory,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "RolePermission",
     "UsageEvent",
     "User",
+    "UserMemory",
 ]
