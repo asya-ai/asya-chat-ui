@@ -121,12 +121,16 @@ class ResponseInputMessage(BaseModel):
 
 
 class ResponseCreateRequest(BaseModel):
+    # OpenAI's Responses API includes many optional fields (e.g. stream, stream_options).
+    # Allow passthrough for OpenAI-compatible callers like Continue.
+    model_config = {"extra": "allow"}
     model: str
     input: Any
     temperature: float | None = None
     max_output_tokens: int | None = None
     tools: list[ToolSpec] | None = None
     tool_choice: object | None = None
+    stream: bool | None = None
 
 
 class ResponseOutputText(BaseModel):
@@ -646,12 +650,12 @@ async def chat_completions(
     return completion_response
 
 
-@router.post("/responses")
+@router.post("/responses", response_model=None)
 async def create_response(
     payload: ResponseCreateRequest,
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
-) -> dict[str, Any]:
+) -> Any:
     model = resolve_model(session, payload.model)
     enabled = session.exec(
         select(OrgModel).where(
@@ -683,6 +687,30 @@ async def create_response(
         base_url = base_url.rstrip("/")
         request_payload = payload.model_dump(mode="json", exclude_none=True)
         request_payload["model"] = model.model_name
+
+        if payload.stream:
+            # Pass through OpenAI's SSE stream as-is.
+            async def event_stream():
+                async with _httpx.AsyncClient(timeout=120.0) as http_client:
+                    async with http_client.stream(
+                        "POST",
+                        f"{base_url}/responses",
+                        json=request_payload,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                    ) as upstream_stream:
+                        async for chunk in upstream_stream.aiter_bytes():
+                            if chunk:
+                                yield chunk
+
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+            )
+
         async with _httpx.AsyncClient(timeout=120.0) as http_client:
             upstream = await http_client.post(
                 f"{base_url}/responses",
