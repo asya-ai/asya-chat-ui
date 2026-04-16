@@ -97,6 +97,52 @@ def _locale_to_region(locale: str | None) -> str | None:
     return f"{country}-{language}"
 
 
+async def _perplexity_search_one(item: str, limit: int) -> dict:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.perplexity_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.perplexity_model or "sonar-pro",
+                "messages": [{"role": "user", "content": item}],
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+    answer = ""
+    if data.get("choices"):
+        answer = data["choices"][0].get("message", {}).get("content", "")
+    citations = data.get("citations", [])
+    results = [{"url": url} for url in citations[:limit]]
+    return {"query": item, "answer": answer, "sources": citations, "results": results}
+
+
+async def _ddgs_search_one(item: str, limit: int, region: str | None) -> dict:
+    def _run() -> list[dict]:
+        with DDGS(timeout=8) as ddgs:
+            return list(ddgs.text(
+                item,
+                max_results=limit,
+                region=region or "us-en",
+                backend="duckduckgo",
+            ))
+
+    with anyio.fail_after(15):
+        rows = await anyio.to_thread.run_sync(_run, abandon_on_cancel=True)
+    results = [
+        {
+            "title": row.get("title"),
+            "url": row.get("href"),
+            "snippet": row.get("body"),
+        }
+        for row in rows
+    ]
+    return {"query": item, "results": results}
+
+
 async def web_search(context: WebToolContext, *, query: str | None = None, queries: list[str] | None = None, max_results: int | None = None) -> ToolResult:
     query_list = _ensure_list(queries) or _ensure_list(query)
     if not query_list:
@@ -106,31 +152,39 @@ async def web_search(context: WebToolContext, *, query: str | None = None, queri
         )
     limit = min(max_results or settings.web_search_limit, settings.web_search_limit, 10)
     parallel_limit = settings.scrape_parallel_max
+    perplexity_available = bool(settings.perplexity_api_key)
     region = _locale_to_region(context.locale)
 
+    if perplexity_available:
+        try:
+            probe = await _perplexity_search_one(query_list[0], limit)
+            perplexity_ok = True
+        except Exception as exc:
+            logger.warning("Perplexity probe failed, using DDGS for all queries: %s", exc)
+            probe = None
+            perplexity_ok = False
+    else:
+        probe = None
+        perplexity_ok = False
+
     async def _search_one(item: str) -> dict:
-        def _run() -> list[dict]:
-            with DDGS(timeout=10) as ddgs:
-                return list(ddgs.text(
-                    item,
-                    max_results=limit,
-                    region=region or "us-en",
-                    backend="duckduckgo,brave",
-                ))
+        if perplexity_ok:
+            try:
+                return await _perplexity_search_one(item, limit)
+            except Exception as exc:
+                logger.warning("Perplexity search failed for query, falling back to DDGS: %s", exc)
+        return await _ddgs_search_one(item, limit, region)
 
-        rows = await anyio.to_thread.run_sync(_run)
-        results = [
-            {
-                "title": row.get("title"),
-                "url": row.get("href"),
-                "snippet": row.get("body"),
-            }
-            for row in rows
-        ]
-        return {"query": item, "results": results}
-
-    logger.info("web_search org_id=%s queries=%s", context.org_id, len(query_list))
-    batches = await _run_parallel(query_list, parallel_limit, _search_one)
+    logger.info(
+        "web_search org_id=%s queries=%s provider=%s",
+        context.org_id,
+        len(query_list),
+        "perplexity" if perplexity_ok else "ddgs",
+    )
+    remaining = query_list[1:] if probe is not None else query_list
+    batches = await _run_parallel(remaining, parallel_limit, _search_one)
+    if probe is not None:
+        batches = [probe] + batches
     logger.info(
         "web_search done org_id=%s results=%s",
         context.org_id,
