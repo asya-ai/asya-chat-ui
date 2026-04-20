@@ -1,4 +1,4 @@
-# AsyaChatUI
+# Asya Chat UI (open-source ChatGPT shell)
 
 Open source multi-provider LLM chat platform with organization management, model routing, tool execution, usage analytics, and OpenAI-compatible APIs alternative to Open WebUI and LibreChat.
 
