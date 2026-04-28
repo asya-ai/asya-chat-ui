@@ -488,12 +488,17 @@ async def _run_generation(task_id: UUID) -> None:
                 config = None
 
         prompt_cache_key = f"chat:{chat.id}"
+        requested_reasoning_effort = (
+            (task.metadata_json or {}).get("reasoning_effort")
+            if isinstance(task.metadata_json, dict)
+            else None
+        )
         provider = get_provider(
             model.provider,
             api_key=provider_config.api_key_override if provider_config else None,
             base_url=provider_config.base_url_override if provider_config else None,
             endpoint=provider_config.endpoint_override if provider_config else None,
-            reasoning_effort=model.reasoning_effort,
+            reasoning_effort=requested_reasoning_effort or model.reasoning_effort,
             prompt_cache_key=prompt_cache_key,
             prompt_cache_retention=settings.openai_prompt_cache_retention,
             config=config,

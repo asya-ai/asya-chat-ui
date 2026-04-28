@@ -91,7 +91,10 @@ export const ChatPage = () => {
   const [isDragActive, setIsDragActive] = useState(false)
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(() => {
     const stored = reasoningEffortStore.get()
-    return stored && stored !== "none" ? stored : null
+    if (stored === "low" || stored === "medium" || stored === "high") {
+      return stored
+    }
+    return null
   })
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
     const stored = webSearchEnabledStore.get()

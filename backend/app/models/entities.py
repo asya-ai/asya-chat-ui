@@ -246,7 +246,8 @@ class ChatMessageAttachment(SQLModel, table=True):
     message_id: UUID = Field(foreign_key="chat_messages.id", index=True)
     file_name: str
     content_type: str
-    data_base64: str
+    file_path: Optional[str] = Field(default=None)
+    data_base64: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
@@ -258,7 +259,8 @@ class ChatUpload(SQLModel, table=True):
     user_id: UUID = Field(foreign_key="users.id", index=True)
     file_name: str
     content_type: str
-    data_base64: str
+    file_path: Optional[str] = Field(default=None)
+    data_base64: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
