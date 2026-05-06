@@ -122,14 +122,16 @@ def get_auth_context(
                     detail="Org membership required",
                 )
         return AuthContext(user=user, org_id=org_id)
-    if user.is_super_admin:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Org-Id required for super admin",
-        )
     membership = session.exec(
         select(OrgMembership).where(OrgMembership.user_id == user.id)
     ).first()
+    if user.is_super_admin and membership:
+        return AuthContext(user=user, org_id=membership.org_id)
+    if user.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization not found for user",
+        )
     if not membership:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

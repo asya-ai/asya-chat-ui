@@ -25,6 +25,8 @@ services:
     image: chatui-backend
     build:
       context: ./backend
+      args:
+        AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     env_file:
       - .env
     environment:
@@ -40,6 +42,8 @@ services:
     image: chatui-backend
     build:
       context: ./backend
+      args:
+        AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     env_file:
       - .env
     environment:
@@ -100,6 +104,8 @@ services:
     image: chatui-backend
     build:
       context: ./backend
+      args:
+        AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     env_file:
       - .env
     environment:

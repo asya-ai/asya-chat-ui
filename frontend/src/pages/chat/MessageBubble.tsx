@@ -208,7 +208,7 @@ const MessageBubbleComponent = ({
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {codeEvent.output.output_files
-                      .filter((file) => file.content_type.startsWith("image/"))
+                      .filter((file) => (file.content_type ?? "").startsWith("image/"))
                       .map((file: { file_name: string; content_type: string; data_base64: string }, index: number) => (
                         <Button
                           key={`${file.file_name}-${index}`}
@@ -232,7 +232,7 @@ const MessageBubbleComponent = ({
                         </Button>
                       ))}
                     {codeEvent.output.output_files
-                      .filter((file) => !file.content_type.startsWith("image/"))
+                      .filter((file) => !(file.content_type ?? "").startsWith("image/"))
                       .map((file: { file_name: string; content_type: string; data_base64: string }, index: number) => (
                         <a
                           key={`${file.file_name}-${index}`}
@@ -261,6 +261,14 @@ const MessageBubbleComponent = ({
                 <div className="text-destructive/90">
                   {t("common_error")}: {toolCallEvent.output.error}
                 </div>
+              ) : null}
+              {toolCallEvent.output?.raw_output ? (
+                <details className="pt-1">
+                  <summary className="cursor-pointer opacity-80">{t("chat_result")}</summary>
+                  <pre className="bg-background/40 mt-1 p-2 rounded overflow-x-auto whitespace-pre-wrap text-[11px]">
+                    {JSON.stringify(toolCallEvent.output.raw_output, null, 2)}
+                  </pre>
+                </details>
               ) : null}
             </div>
           ) : chatViewEvent ? (
@@ -340,7 +348,7 @@ const MessageBubbleComponent = ({
               {editingAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {editingAttachments.map((attachment, index) => {
-                    const isImage = attachment.content_type.startsWith("image/")
+                    const isImage = (attachment.content_type ?? "").startsWith("image/")
                     return (
                       <div key={`${attachment.file_name}-${index}`} className="relative">
                         {isImage ? (
@@ -639,7 +647,7 @@ const MessageBubbleComponent = ({
               {msg.attachments && msg.attachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2 mt-3">
                   {msg.attachments.map((attachment, index) => {
-                    const isImage = attachment.content_type.startsWith("image/")
+                    const isImage = (attachment.content_type ?? "").startsWith("image/")
                     if (isImage) {
                       return (
                         <Button
@@ -683,18 +691,25 @@ const MessageBubbleComponent = ({
                   <span className="uppercase tracking-wide">{t("chat_sources")}</span>{" "}
                   <div className="flex flex-wrap gap-2 mt-2 max-w-full">
                     {msg.sources.map((source, index) => {
-                      const isInternal = source.url.startsWith("/chat/")
+                      const sourceUrl = typeof source.url === "string" ? source.url : ""
+                      const isInternal = sourceUrl.startsWith("/chat/")
                       return (
                         <a
-                          key={`${source.url}-${index}`}
-                          href={source.url}
+                          key={`${sourceUrl || "source"}-${index}`}
+                          href={sourceUrl || "#"}
                           {...(isInternal ? {} : { target: "_blank", rel: "noreferrer" })}
-                          title={source.title ?? source.url}
+                          title={source.title ?? sourceUrl}
                           className="inline-flex px-2 py-0.5 border border-muted-foreground/30 rounded-full max-w-[240px] overflow-hidden text-[10px] text-muted-foreground hover:text-foreground text-ellipsis uppercase tracking-wide whitespace-nowrap cursor-pointer"
-                          onClick={isInternal ? (e) => {
-                            e.preventDefault()
-                            navigate(source.url)
-                          } : undefined}
+                          onClick={
+                            isInternal
+                              ? (e) => {
+                                  e.preventDefault()
+                                  navigate(sourceUrl)
+                                }
+                              : !sourceUrl
+                                ? (e) => e.preventDefault()
+                                : undefined
+                          }
                         >
                           {getSourceLabel(source)}
                         </a>

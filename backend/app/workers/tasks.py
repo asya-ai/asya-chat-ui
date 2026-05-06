@@ -30,6 +30,7 @@ from app.api.chats import (
 from app.core.config import settings
 from app.db.session import engine
 from app.models.entities import (
+    AgentSource,
     Chat,
     ChatGenerationEvent,
     ChatGenerationTask,
@@ -44,6 +45,12 @@ from app.models.entities import (
     UserMemory,
 )
 from app.services.org_service import require_provider_enabled
+from app.services.agents.runtime import reindex_source
+from app.services.langchain_runtime import (
+    chat_stream_with_langchain,
+    chat_with_langchain,
+    retrieve_agent_chunks,
+)
 from app.services.providers.base import ChatUsage
 from app.services.providers.registry import get_provider
 from app.services.tools.image_tool import ImageToolContext, edit_image, generate_image
@@ -355,7 +362,7 @@ async def _summarize_context_if_needed(
         },
     ]
     try:
-        summary_response = await provider.chat(model.model_name, summary_request)
+        summary_response = await chat_with_langchain(provider, model.model_name, summary_request)
         summary_text = (summary_response.content or "").strip()
         summary_usage = getattr(summary_response, "usage", None)
         if summary_usage:
@@ -592,6 +599,79 @@ async def _run_generation(task_id: UUID) -> None:
             enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
             memories=user_memories,
         )
+        agent_sources: list[dict[str, Any]] = []
+        if chat.agent_id:
+            latest_user_message = next(
+                (
+                    item
+                    for item in reversed(history)
+                    if item.role == "user" and item.content and item.content.strip()
+                ),
+                None,
+            )
+            if latest_user_message:
+                retrieval_event_id = str(uuid4())
+                _append_event(
+                    session,
+                    task.id,
+                    sequence_ref,
+                    "tool_event",
+                    {
+                        "type": "tool_call",
+                        "id": retrieval_event_id,
+                        "tool_name": "agent_source_retrieval",
+                        "state": "start",
+                        "input_preview": (latest_user_message.content or "")[:160],
+                    },
+                )
+                chunks = retrieve_agent_chunks(
+                    session,
+                    agent_id=chat.agent_id,
+                    query=latest_user_message.content,
+                    limit=6,
+                )
+                context_blocks: list[str] = []
+                for idx, (chunk, source, _score) in enumerate(chunks, start=1):
+                    agent_sources.append(
+                        {
+                            "source_id": str(source.id),
+                            "title": source.title,
+                            "url": source.url,
+                            "snippet": chunk.content[:300],
+                        }
+                    )
+                    context_blocks.append(f"[Source {idx}] {source.title}\n{chunk.content}")
+                _append_event(
+                    session,
+                    task.id,
+                    sequence_ref,
+                    "tool_event",
+                    {
+                        "type": "tool_call",
+                        "id": retrieval_event_id,
+                        "tool_name": "agent_source_retrieval",
+                        "state": "end",
+                        "output": {
+                            "status": "ok",
+                            "result_preview": (
+                                f"Retrieved {len(chunks)} source chunks"
+                                if chunks
+                                else "No matching source chunks found"
+                            ),
+                        },
+                    },
+                )
+                if context_blocks:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Use the provided agent source context when relevant. "
+                                "If context is insufficient, say so clearly.\n\n"
+                                f"Agent source context:\n{'\n\n'.join(context_blocks)}"
+                            ),
+                        }
+                    )
         messages = await _summarize_context_if_needed(
             session=session,
             task_id=task.id,
@@ -763,7 +843,25 @@ async def _run_generation(task_id: UUID) -> None:
                 usage = last_usage or usage
                 if tool_sources:
                     tool_sources = await _normalize_sources(tool_sources)
-                    assistant_message.sources = tool_sources
+                merged_sources: list[dict[str, Any]] = []
+                if tool_sources:
+                    merged_sources.extend(tool_sources)
+                if agent_sources:
+                    merged_sources.extend(agent_sources)
+                if merged_sources:
+                    seen: set[tuple[str, str, str]] = set()
+                    deduped: list[dict[str, Any]] = []
+                    for source in merged_sources:
+                        key = (
+                            str(source.get("title") or ""),
+                            str(source.get("url") or ""),
+                            str(source.get("snippet") or ""),
+                        )
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        deduped.append(source)
+                    assistant_message.sources = deduped
                     session.add(assistant_message)
                     session.commit()
                 if tool_attachments:
@@ -789,7 +887,7 @@ async def _run_generation(task_id: UUID) -> None:
             else:
                 if hasattr(provider, "chat_stream"):
                     assistant_content = ""
-                    async for chunk in provider.chat_stream(model.model_name, messages):
+                    async for chunk in chat_stream_with_langchain(provider, model.model_name, messages):
                         _ensure_task_not_cancelled(session, task.id)
                         if chunk.content:
                             assistant_content += chunk.content
@@ -809,7 +907,7 @@ async def _run_generation(task_id: UUID) -> None:
                     session.add(assistant_message)
                     session.commit()
                 else:
-                    response = await provider.chat(model.model_name, messages)
+                    response = await chat_with_langchain(provider, model.model_name, messages)
                     _ensure_task_not_cancelled(session, task.id)
                     assistant_message.content = response.content or ""
                     session.add(assistant_message)
@@ -883,7 +981,7 @@ async def _run_generation(task_id: UUID) -> None:
                     "model_name": model.display_name,
                     "model_id": str(model.id),
                     "attachments": tool_attachments or [],
-                    "sources": tool_sources or [],
+                    "sources": assistant_message.sources or [],
                 },
             )
             assistant_message.status = "done"
@@ -928,3 +1026,26 @@ async def _run_generation(task_id: UUID) -> None:
 @celery_app.task(name="chatui.generate_chat_response")
 def generate_chat_response(task_id: str) -> None:
     asyncio.run(_run_generation(UUID(task_id)))
+
+
+@celery_app.task(name="chatui.reindex_agent_source")
+def reindex_agent_source(source_id: str) -> None:
+    with Session(engine) as session:
+        source = session.get(AgentSource, UUID(source_id))
+        if not source:
+            logger.warning("Agent source not found for reindex: %s", source_id)
+            return
+        chunks_count, error = reindex_source(session, source)
+        session.commit()
+        if error:
+            logger.error(
+                "Agent source reindex failed source_id=%s error=%s",
+                source_id,
+                error,
+            )
+            raise RuntimeError(f"Agent source reindex failed: {error}")
+        logger.info(
+            "Agent source reindex complete source_id=%s chunks=%s",
+            source_id,
+            chunks_count,
+        )

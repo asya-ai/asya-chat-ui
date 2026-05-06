@@ -1,4 +1,13 @@
 from app.models.entities import (
+    Agent,
+    AgentAccess,
+    AgentAccessRole,
+    AgentChunk,
+    AgentEmbedding,
+    AgentSource,
+    AgentSourceKind,
+    AgentSourceStatus,
+    AgentVisibility,
     ApiKey,
     Chat,
     ChatGenerationEvent,
@@ -23,6 +32,15 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "Agent",
+    "AgentAccess",
+    "AgentAccessRole",
+    "AgentChunk",
+    "AgentEmbedding",
+    "AgentSource",
+    "AgentSourceKind",
+    "AgentSourceStatus",
+    "AgentVisibility",
     "Chat",
     "ApiKey",
     "ChatGenerationEvent",

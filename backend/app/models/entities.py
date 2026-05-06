@@ -1,9 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, JSON
+from sqlalchemy import Column, JSON, String
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -203,6 +203,7 @@ class Chat(SQLModel, table=True):
     org_id: UUID = Field(foreign_key="orgs.id", index=True)
     user_id: UUID = Field(foreign_key="users.id", index=True)
     model_id: Optional[UUID] = Field(default=None, foreign_key="chat_models.id")
+    agent_id: Optional[UUID] = Field(default=None, foreign_key="agents.id", index=True)
     title: Optional[str] = Field(default=None)
     share_token: Optional[str] = Field(default=None, index=True, unique=True)
     is_deleted: bool = Field(default=False, index=True)
@@ -349,3 +350,112 @@ class UserMemory(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     user: User = Relationship(back_populates="memories")
+
+
+class AgentVisibility(str, Enum):
+    private = "private"
+    shared = "shared"
+
+
+class AgentAccessRole(str, Enum):
+    owner = "owner"
+    editor = "editor"
+    viewer = "viewer"
+
+
+class AgentSourceKind(str, Enum):
+    text = "text"
+    file = "file"
+    url = "url"
+
+
+class AgentSourceStatus(str, Enum):
+    queued = "queued"
+    indexing = "indexing"
+    ready = "ready"
+    failed = "failed"
+
+
+class Agent(SQLModel, table=True):
+    __tablename__ = "agents"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    owner_user_id: UUID = Field(foreign_key="users.id", index=True)
+    name: str = Field(index=True)
+    description: Optional[str] = Field(default=None)
+    preferred_model_id: Optional[UUID] = Field(default=None, foreign_key="chat_models.id")
+    master_prompt: str
+    visibility: AgentVisibility = Field(
+        default=AgentVisibility.private,
+        sa_column=Column(String(32), nullable=False),
+    )
+    config_json: Optional[dict[str, Any]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class AgentAccess(SQLModel, table=True):
+    __tablename__ = "agent_access"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    agent_id: UUID = Field(foreign_key="agents.id", index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    role: AgentAccessRole = Field(sa_column=Column(String(32), nullable=False))
+    granted_by_user_id: Optional[UUID] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class AgentSource(SQLModel, table=True):
+    __tablename__ = "agent_sources"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    agent_id: UUID = Field(foreign_key="agents.id", index=True)
+    kind: AgentSourceKind = Field(sa_column=Column(String(32), nullable=False))
+    title: str
+    url: Optional[str] = Field(default=None)
+    file_name: Optional[str] = Field(default=None)
+    content_type: Optional[str] = Field(default=None)
+    content_text: str
+    status: AgentSourceStatus = Field(
+        default=AgentSourceStatus.queued,
+        sa_column=Column(String(32), nullable=False),
+    )
+    error_message: Optional[str] = Field(default=None)
+    metadata_json: Optional[dict[str, Any]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class AgentChunk(SQLModel, table=True):
+    __tablename__ = "agent_chunks"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    agent_id: UUID = Field(foreign_key="agents.id", index=True)
+    source_id: UUID = Field(foreign_key="agent_sources.id", index=True)
+    chunk_index: int = Field(index=True)
+    content: str
+    token_count_estimate: Optional[int] = Field(default=None)
+    metadata_json: Optional[dict[str, Any]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class AgentEmbedding(SQLModel, table=True):
+    __tablename__ = "agent_embeddings"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    chunk_id: UUID = Field(foreign_key="agent_chunks.id", index=True)
+    model_name: Optional[str] = Field(default=None)
+    embedding: Optional[list[float]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+

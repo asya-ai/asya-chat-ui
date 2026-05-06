@@ -201,7 +201,7 @@ export const UsagePage = () => {
   )
 
   const navItems = [
-    { label: t("me_settings"), href: "/settings/me", active: false },
+    { label: t("me_settings"), href: "/settings/me", active: location.pathname.startsWith("/settings/me") },
     {
       label: t("org_section_users"),
       href: "/settings/users",
@@ -219,6 +219,12 @@ export const UsagePage = () => {
       href: "/settings/models",
       visible: isSuperAdmin,
       active: location.pathname.startsWith("/settings/models"),
+    },
+    {
+      label: "Agents",
+      href: "/settings/agents",
+      visible: true,
+      active: location.pathname.startsWith("/settings/agents"),
     },
     {
       label: t("usage_title"),

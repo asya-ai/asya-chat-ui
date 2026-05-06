@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button"
 import { useI18n } from "@/lib/i18n-context"
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((mod) => ({ default: mod.ChatPage })))
+const AgentsPage = lazy(() =>
+  import("@/pages/AgentsPage").then((mod) => ({ default: mod.AgentsPage }))
+)
 const InviteAcceptPage = lazy(() =>
   import("@/pages/InviteAccept").then((mod) => ({ default: mod.InviteAcceptPage }))
 )
@@ -170,6 +173,15 @@ const App = () => {
             </RequireAuth>
           }
         />
+        <Route
+          path="/settings/agents"
+          element={
+            <RequireAuth>
+              <AgentsPage />
+            </RequireAuth>
+          }
+        />
+        <Route path="/agents" element={<Navigate to="/settings/agents" replace />} />
         <Route
           path="/shared/:shareToken"
           element={

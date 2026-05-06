@@ -3,7 +3,7 @@ import type { CSSProperties } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, chatApi } from "@/lib/api"
+import { ApiError, agentApi, chatApi } from "@/lib/api"
 import {
   codeExecutionEnabledStore,
   modelStore,
@@ -14,6 +14,7 @@ import {
 } from "@/lib/storage"
 import type {
   Chat,
+  Agent,
   ChatModel,
   ChatMessage,
   ChatMessageAttachmentInput,
@@ -66,7 +67,12 @@ export const ChatPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const { chatId, shareToken: shareTokenParam } = useParams()
+  const activeAgentIdFromQuery = useMemo(
+    () => new URLSearchParams(location.search).get("agent"),
+    [location.search]
+  )
   const [orgId, setOrgId] = useState<string | null>(orgStore.get())
+  const [agents, setAgents] = useState<Agent[]>([])
   const [toolEvents, setToolEvents] = useState<ChatMessage[]>([])
   const [message, setMessage] = useState("")
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
@@ -137,6 +143,30 @@ export const ChatPage = () => {
   } = useChatMessages(chatId ?? null, shareToken)
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
+
+  useEffect(() => {
+    if (!orgId) {
+      setAgents([])
+      return
+    }
+    let cancelled = false
+    agentApi
+      .list()
+      .then((items) => {
+        if (cancelled) return
+        setAgents(items)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAgents([])
+      })
+      .finally(() => {
+        if (cancelled) return
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [orgId])
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
@@ -253,19 +283,20 @@ export const ChatPage = () => {
 
 
   const getSourceLabel = useCallback((source: {
-    url: string
+    url: string | null | undefined
     title?: string | null
     host?: string | null
   }) => {
-    const isInternal = source.url.startsWith("/chat/")
+    const sourceUrl = typeof source.url === "string" ? source.url : ""
+    const isInternal = sourceUrl.startsWith("/chat/")
     if (isInternal) {
       return source.title || t("chat_untitled")
     }
     const host = source.host || (() => {
       try {
-        return new URL(source.url).hostname
+        return sourceUrl ? new URL(sourceUrl).hostname : "source"
       } catch {
-        return source.url
+        return sourceUrl || "source"
       }
     })()
     if (source.title) {
@@ -896,6 +927,8 @@ export const ChatPage = () => {
     () => chats.find((item) => item.id === chatId) ?? null,
     [chatId, chats]
   )
+  const activeAgentId = activeAgentIdFromQuery ?? activeChat?.agent_id ?? null
+  const isAgentMode = Boolean(activeAgentId)
   const isSharedView = Boolean(chatId && shareToken && !activeChat)
   const currentChatLoading = Boolean(chatId && loadingByChat[chatId])
 
@@ -1014,7 +1047,13 @@ export const ChatPage = () => {
       return showToolCallLogs
     })
     return collapseActivityEvents(merged)
-  }, [collapseActivityEvents, mergeToolEvents, serverMessages, toolEvents, showToolCallLogs])
+  }, [
+    collapseActivityEvents,
+    mergeToolEvents,
+    serverMessages,
+    toolEvents,
+    showToolCallLogs,
+  ])
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     const container = messagesContainerRef.current
@@ -1068,7 +1107,12 @@ export const ChatPage = () => {
     setMessage("")
     setPendingAttachments([])
     setAttachmentError(null)
-    navigate("/chat", { replace: true })
+    navigate(
+      isAgentMode && activeAgentId
+        ? `/chat?agent=${encodeURIComponent(activeAgentId)}`
+        : "/chat",
+      { replace: true }
+    )
   }
 
   const createChat = async (): Promise<Chat | null> => {
@@ -1076,8 +1120,14 @@ export const ChatPage = () => {
     const chat = await createChatMutation.mutateAsync({
       model_id: selectedModel,
       title: t("chat_new_title"),
+      agent_id: isAgentMode && activeAgentId ? activeAgentId : undefined,
     })
-    navigate(`/chat/${chat.id}`, { replace: true })
+    navigate(
+      isAgentMode && activeAgentId
+        ? `/chat/${chat.id}?agent=${encodeURIComponent(activeAgentId)}`
+        : `/chat/${chat.id}`,
+      { replace: true }
+    )
     replaceChatMessagesFor(chat.id, [])
     refetchChats().catch(() => null)
     return chat
@@ -1165,7 +1215,7 @@ export const ChatPage = () => {
     if (shared.share_token) {
       const sharedPath = `/shared/${encodeURIComponent(shared.share_token)}`
       const fullUrl = `${window.location.origin}${sharedPath}`
-      let copied = false
+      let copied: boolean
       try {
         await navigator.clipboard.writeText(fullUrl)
         copied = true
@@ -1186,6 +1236,9 @@ export const ChatPage = () => {
     let requestChatId: string | null = null
     try {
       let chat = activeChat
+      if (isAgentMode && activeAgentId && chat && chat.agent_id !== activeAgentId) {
+        chat = null
+      }
       if (!chat) {
         chat = await createChat()
       }
@@ -1734,7 +1787,7 @@ export const ChatPage = () => {
       data_base64: attachment.data_base64,
       content_url: attachment.content_url,
     }))
-    let uploadedRetryAttachments: ChatMessageAttachmentInput[] = []
+    let uploadedRetryAttachments: ChatMessageAttachmentInput[] | null = null
     try {
       setIsUploadingAttachments(true)
       uploadedRetryAttachments = await uploadAttachmentsForChat(chatId, retryAttachments)
@@ -1747,6 +1800,7 @@ export const ChatPage = () => {
     } finally {
       setIsUploadingAttachments(false)
     }
+    if (!uploadedRetryAttachments) return
     const { promise, cancel } = chatApi.editMessageStream(
       chatId,
       sourceUser.id,
@@ -1886,7 +1940,11 @@ export const ChatPage = () => {
 
   const handleSelectChat = useCallback(
     (chat: Chat, onSelect?: () => void) => {
-      navigate(`/chat/${chat.id}`)
+      navigate(
+        chat.agent_id
+          ? `/chat/${chat.id}?agent=${encodeURIComponent(chat.agent_id)}`
+          : `/chat/${chat.id}`
+      )
       onSelect?.()
       window.setTimeout(() => {
         composerInputRef.current?.focus()
@@ -1895,10 +1953,27 @@ export const ChatPage = () => {
     [navigate]
   )
 
+  const handleSelectAgent = useCallback(
+    (agent: Agent, onSelect?: () => void) => {
+      navigate(`/chat?agent=${encodeURIComponent(agent.id)}`)
+      onSelect?.()
+      window.setTimeout(() => {
+        composerInputRef.current?.focus()
+      }, 0)
+    },
+    [navigate]
+  )
+
+  const activeAgent = useMemo(
+    () => agents.find((item) => item.id === activeAgentId) ?? null,
+    [agents, activeAgentId]
+  )
+
   const activeChatTitle = useMemo(() => {
+    if (activeAgent) return activeAgent.name
     const active = chats.find((chat) => chat.id === chatId)
     return active?.title || t("chat_title")
-  }, [chats, chatId, t])
+  }, [activeAgent, chats, chatId, t])
 
   useEffect(() => {
     document.title = `${activeChatTitle} - ${t("app_title")}`
@@ -1911,6 +1986,7 @@ export const ChatPage = () => {
           title={t("chat_title")}
           labels={{
             newChat: t("chat_new"),
+            agents: "Agents",
             untitled: t("chat_untitled"),
             settings: t("common_settings"),
             delete: t("chat_delete"),
@@ -1920,11 +1996,14 @@ export const ChatPage = () => {
             noResults: t("chat_search_no_results"),
           }}
           groups={groupedChats}
+          agents={agents}
           searchQuery={chatSearchQuery}
           activeChatId={chatId ?? null}
+          activeAgentId={activeAgentId}
           onSearchChange={setChatSearchQuery}
           onNewChat={startNewChat}
           onSelectChat={(chat: Chat) => handleSelectChat(chat)}
+          onSelectAgent={(agent: Agent) => handleSelectAgent(agent)}
           onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
           onToggleShareChat={toggleShareChat}
           onOpenSettings={() => navigate("/settings/me")}
@@ -1947,6 +2026,7 @@ export const ChatPage = () => {
                   title={t("chat_title")}
                   labels={{
                     newChat: t("chat_new"),
+                    agents: "Agents",
                     untitled: t("chat_untitled"),
                     settings: t("common_settings"),
                     delete: t("chat_delete"),
@@ -1956,11 +2036,14 @@ export const ChatPage = () => {
                     noResults: t("chat_search_no_results"),
                   }}
                   groups={groupedChats}
+                  agents={agents}
                   searchQuery={chatSearchQuery}
                   activeChatId={chatId ?? null}
+                  activeAgentId={activeAgentId}
                   onSearchChange={setChatSearchQuery}
                   onNewChat={startNewChat}
                   onSelectChat={(chat: Chat) => handleSelectChat(chat, () => setSidebarOpen(false))}
+                  onSelectAgent={(agent: Agent) => handleSelectAgent(agent, () => setSidebarOpen(false))}
                   onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
                   onToggleShareChat={toggleShareChat}
                   onOpenSettings={() => {
@@ -1973,30 +2056,45 @@ export const ChatPage = () => {
               </div>
             </SheetContent>
           </Sheet>
-          <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger className="w-56" aria-label={t("chat_select_model")}>
-              <SelectValue placeholder={t("chat_select_model")} />
-            </SelectTrigger>
-            <SelectContent className="max-h-96">
-              {selectableChatModels.map((model) => (
-                <SelectItem
-                  key={model.id}
-                  value={model.id}
-                  disabled={model.is_available === false}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    {isImageOutputModel(model) ? (
-                      <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
-                    ) : null}
-                    <span>
-                      {model.display_name} ({model.provider}){" "}
-                      {model.is_available === false ? `(${t("common_disabled")})` : ""}
+          {isAgentMode ? (
+            <div className="flex items-center gap-3 text-muted-foreground text-sm">
+              <span>
+                Talking to agent: <span className="font-medium text-foreground">{activeAgent?.name ?? "Unknown agent"}</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate("/chat")}
+              >
+                Chat without agent
+              </Button>
+            </div>
+          ) : (
+            <Select value={selectedModel} onValueChange={setSelectedModel}>
+              <SelectTrigger className="w-56" aria-label={t("chat_select_model")}>
+                <SelectValue placeholder={t("chat_select_model")} />
+              </SelectTrigger>
+              <SelectContent className="max-h-96">
+                {selectableChatModels.map((model) => (
+                  <SelectItem
+                    key={model.id}
+                    value={model.id}
+                    disabled={model.is_available === false}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      {isImageOutputModel(model) ? (
+                        <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                      ) : null}
+                      <span>
+                        {model.display_name} ({model.provider}){" "}
+                        {model.is_available === false ? `(${t("common_disabled")})` : ""}
+                      </span>
                     </span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <MessageList
           messages={visibleMessages}
@@ -2008,7 +2106,7 @@ export const ChatPage = () => {
         />
         <ChatComposer
           message={message}
-          placeholder={t("chat_message_placeholder")}
+          placeholder={isAgentMode ? "Ask this agent..." : t("chat_message_placeholder")}
           loading={currentChatLoading || isUploadingAttachments}
           readOnly={isSharedView}
           isDragActive={isDragActive}

@@ -2,7 +2,10 @@ FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     UV_SYSTEM_PYTHON=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/opt/hf-cache \
+    TRANSFORMERS_CACHE=/opt/hf-cache \
+    SENTENCE_TRANSFORMERS_HOME=/opt/hf-cache
 
 WORKDIR /app
 
@@ -10,6 +13,8 @@ RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen
+ARG AGENT_EMBEDDING_MODEL=BAAI/bge-m3
+RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${AGENT_EMBEDDING_MODEL}', device='cpu')"
 
 COPY app ./app
 COPY executor ./executor

@@ -25,6 +25,8 @@ from app.core.config import settings
 from app.core.security import decode_access_token_claims
 from app.db.session import engine
 from app.models import (
+    Agent,
+    AgentAccess,
     Chat,
     ChatGenerationEvent,
     ChatGenerationTask,
@@ -1317,6 +1319,18 @@ async def _run_agentic_loop(
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
+    from app.services.langchain_runtime import run_agentic_loop_langchain
+
+    return await run_agentic_loop_langchain(
+        provider=provider,
+        model_name=model.model_name,
+        messages=messages,
+        tool_registry=tool_registry,
+        max_steps=MAX_TOOL_STEPS,
+        activity_sender=activity_sender,
+        tool_event_sender=tool_event_sender,
+    )
+
     tool_specs = tool_registry.list_specs()
     attachments: list[dict] = []
     sources: list[dict] = []
@@ -1789,12 +1803,14 @@ class ChatCreateRequest(BaseModel):
     org_id: str
     model_id: str | None = None
     title: str | None = None
+    agent_id: str | None = None
 
 
 class ChatRead(BaseModel):
     id: str
     title: str | None
     model_id: str | None
+    agent_id: str | None
     is_shared: bool = False
     created_at: datetime
     last_activity_at: datetime
@@ -2359,11 +2375,38 @@ def create_chat(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model id"
             ) from exc
+    agent_id = None
+    if payload.agent_id:
+        try:
+            agent_id = UUID(payload.agent_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid agent id"
+            ) from exc
+        agent = session.exec(
+            select(Agent).where(Agent.id == agent_id, Agent.org_id == org_id)
+        ).first()
+        if not agent:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
+            )
+        access = session.exec(
+            select(AgentAccess).where(
+                AgentAccess.agent_id == agent.id,
+                AgentAccess.user_id == current_user.id,
+            )
+        ).first()
+        if not access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Agent access required",
+            )
 
     chat = Chat(
         org_id=org_id,
         user_id=current_user.id,
         model_id=model_id,
+        agent_id=agent_id,
         title=payload.title,
     )
     session.add(chat)
@@ -2373,6 +2416,7 @@ def create_chat(
         id=str(chat.id),
         title=chat.title,
         model_id=str(chat.model_id) if chat.model_id else None,
+        agent_id=str(chat.agent_id) if chat.agent_id else None,
         is_shared=bool(chat.share_token),
         created_at=chat.created_at,
         last_activity_at=chat.created_at,
@@ -2418,6 +2462,7 @@ def list_chats(
             id=str(chat.id),
             title=chat.title,
             model_id=str(chat.model_id) if chat.model_id else None,
+            agent_id=str(chat.agent_id) if chat.agent_id else None,
             is_shared=bool(chat.share_token),
             created_at=chat.created_at,
             last_activity_at=last_activity_at or chat.created_at,
@@ -2514,6 +2559,7 @@ def search_chats(
             id=str(chat.id),
             title=chat.title,
             model_id=str(chat.model_id) if chat.model_id else None,
+            agent_id=str(chat.agent_id) if chat.agent_id else None,
             is_shared=bool(chat.share_token),
             created_at=chat.created_at,
             last_activity_at=last_activity_at or chat.created_at,

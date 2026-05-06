@@ -135,6 +135,15 @@ class Settings(BaseSettings):
     scrape_parallel_max: int = Field(
         default=5, validation_alias="SCRAPE_PARALLEL_MAX"
     )
+    agent_embedding_model: str = Field(
+        default="BAAI/bge-m3", validation_alias="AGENT_EMBEDDING_MODEL"
+    )
+    agent_embedding_batch_size: int = Field(
+        default=16, validation_alias="AGENT_EMBEDDING_BATCH_SIZE"
+    )
+    agent_embedding_device: str = Field(
+        default="cpu", validation_alias="AGENT_EMBEDDING_DEVICE"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

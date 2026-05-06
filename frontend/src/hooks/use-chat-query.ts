@@ -72,7 +72,7 @@ export const useModels = (orgId: string | null) =>
 export const useCreateChat = (orgId: string | null) => {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (payload: { model_id?: string; title?: string }) => {
+    mutationFn: (payload: { model_id?: string; title?: string; agent_id?: string }) => {
       if (!orgId) {
         throw new Error("Missing org id")
       }

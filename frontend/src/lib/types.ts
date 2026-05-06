@@ -84,6 +84,7 @@ export type Chat = {
   id: string
   title?: string | null
   model_id?: string | null
+  agent_id?: string | null
   is_shared?: boolean
   created_at: string
   last_activity_at: string
@@ -174,6 +175,7 @@ export type ToolCallToolEvent = {
     status?: "ok" | "error" | string
     result_preview?: string | null
     error?: string | null
+    raw_output?: unknown
   } | null
 }
 
@@ -285,4 +287,44 @@ export type UserMemory = {
   id: string
   content: string
   created_at: string
+}
+
+export type AgentRole = "owner" | "editor" | "viewer"
+export type AgentVisibility = "private" | "shared"
+export type AgentSourceStatus = "queued" | "indexing" | "ready" | "failed"
+export type AgentSourceKind = "text" | "file" | "url"
+
+export type Agent = {
+  id: string
+  name: string
+  description?: string | null
+  preferred_model_id?: string | null
+  master_prompt: string
+  visibility: AgentVisibility
+  is_owner: boolean
+  role: AgentRole
+  created_at: string
+  updated_at: string
+}
+
+export type AgentSource = {
+  id: string
+  kind: AgentSourceKind
+  title: string
+  summary?: string | null
+  url?: string | null
+  file_name?: string | null
+  content_type?: string | null
+  status: AgentSourceStatus
+  error_message?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AgentShare = {
+  user_id: string
+  email: string
+  role: AgentRole
+  created_at: string
+  updated_at: string
 }

@@ -20,6 +20,9 @@ import type {
   UsageSlice,
   ApiKey,
   UserMemory,
+  Agent,
+  AgentShare,
+  AgentSource,
 } from "@/lib/types"
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api"
@@ -453,7 +456,7 @@ export const chatApi = {
     })
     return apiFetch<Chat[]>(`/chats/search?${params.toString()}`)
   },
-  create: (payload: { org_id: string; model_id?: string; title?: string }) =>
+  create: (payload: { org_id: string; model_id?: string; title?: string; agent_id?: string }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
   uploadAttachment: (
     chatId: string,
@@ -603,5 +606,71 @@ export const chatApi = {
     apiFetch(`/chats/${chatId}/messages/${messageId}/branch`, {
       method: "DELETE",
     }),
+}
+
+export const agentApi = {
+  list: () => apiFetch<Agent[]>("/agents"),
+  create: (payload: {
+    name: string
+    description?: string | null
+    preferred_model_id?: string | null
+    master_prompt?: string | null
+  }) => apiFetch<Agent>("/agents", { method: "POST", body: JSON.stringify(payload) }),
+  update: (
+    agentId: string,
+    payload: Partial<{
+      name: string
+      description: string | null
+      preferred_model_id: string | null
+      master_prompt: string | null
+      visibility: "private" | "shared"
+    }>
+  ) => apiFetch<Agent>(`/agents/${agentId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  remove: (agentId: string) => apiFetch(`/agents/${agentId}`, { method: "DELETE" }),
+  listSources: (agentId: string) => apiFetch<AgentSource[]>(`/agents/${agentId}/sources`),
+  createSource: (
+    agentId: string,
+    payload: {
+      kind: "text" | "file" | "url"
+      title?: string | null
+      url?: string | null
+      file_name?: string | null
+      content_type?: string | null
+      data_base64?: string | null
+      content_text?: string | null
+    }
+  ) => apiFetch<AgentSource>(`/agents/${agentId}/sources`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+  updateSource: (
+    agentId: string,
+    sourceId: string,
+    payload: Partial<{
+      title: string
+      url: string | null
+      file_name: string | null
+      content_type: string | null
+      data_base64: string | null
+      content_text: string | null
+    }>
+  ) => apiFetch<AgentSource>(`/agents/${agentId}/sources/${sourceId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }),
+  removeSource: (agentId: string, sourceId: string) =>
+    apiFetch(`/agents/${agentId}/sources/${sourceId}`, { method: "DELETE" }),
+  reindexSource: (agentId: string, sourceId: string) =>
+    apiFetch<AgentSource>(`/agents/${agentId}/sources/${sourceId}/reindex`, {
+      method: "POST",
+    }),
+  listShares: (agentId: string) => apiFetch<AgentShare[]>(`/agents/${agentId}/shares`),
+  share: (agentId: string, payload: { email: string; role: "owner" | "editor" | "viewer" }) =>
+    apiFetch<AgentShare>(`/agents/${agentId}/shares`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  unshare: (agentId: string, userId: string) =>
+    apiFetch(`/agents/${agentId}/shares/${userId}`, { method: "DELETE" }),
 }
 
