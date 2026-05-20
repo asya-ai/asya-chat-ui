@@ -3,7 +3,9 @@ FROM node:22-bookworm
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml* ./
+COPY pnpm-workspace.yaml ./
 ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
+ENV CI=true
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-liberation \

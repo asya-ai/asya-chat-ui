@@ -270,8 +270,6 @@ def _is_image_output_model(model: ChatModel) -> bool:
 def _grounding_enabled(org: Org, provider: str) -> bool:
     if provider == "openai":
         return org.web_grounding_openai
-    if provider == "gemini":
-        return org.web_grounding_gemini
     return False
 
 

@@ -60,7 +60,6 @@ class OrgWebSettingsRead(BaseModel):
     web_search_enabled: bool
     web_scrape_enabled: bool
     web_grounding_openai: bool
-    web_grounding_gemini: bool
     exec_network_enabled: bool
     exec_policy: str
 
@@ -70,7 +69,6 @@ class OrgWebSettingsUpdate(BaseModel):
     web_search_enabled: bool | None = None
     web_scrape_enabled: bool | None = None
     web_grounding_openai: bool | None = None
-    web_grounding_gemini: bool | None = None
     exec_network_enabled: bool | None = None
     exec_policy: str | None = None
 
@@ -314,7 +312,6 @@ def get_web_settings(
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         web_grounding_openai=org.web_grounding_openai,
-        web_grounding_gemini=org.web_grounding_gemini,
         exec_network_enabled=org.exec_network_enabled,
         exec_policy=org.exec_policy,
     )
@@ -355,7 +352,6 @@ def update_web_settings(
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         web_grounding_openai=org.web_grounding_openai,
-        web_grounding_gemini=org.web_grounding_gemini,
         exec_network_enabled=org.exec_network_enabled,
         exec_policy=org.exec_policy,
     )

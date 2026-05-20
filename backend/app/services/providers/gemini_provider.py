@@ -137,31 +137,74 @@ class GeminiProvider:
         return suffix, types.GenerateContentConfig(cached_content=cached_name)
 
     def _extract_thought_signature(self, part: object, function_call: object) -> str | None:
-        value = getattr(function_call, "thought_signature", None) or getattr(
-            part, "thought_signature", None
-        )
-        if value:
-            if isinstance(value, bytes):
-                return base64.b64encode(value).decode("ascii")
-            if isinstance(value, str):
-                return value
+        def _normalize_signature(raw: object) -> str | None:
+            if raw is None:
+                return None
+            if isinstance(raw, bytes):
+                return base64.b64encode(raw).decode("ascii")
+            if isinstance(raw, str):
+                return raw
             try:
-                return str(value)
+                return str(raw)
             except Exception:
                 return None
-        for attr in ("model_dump", "dict"):
-            fn = getattr(function_call, attr, None)
-            if callable(fn):
+
+        def _extract_from_mapping(data: dict) -> str | None:
+            direct = _normalize_signature(
+                data.get("thought_signature") or data.get("thoughtSignature")
+            )
+            if direct:
+                return direct
+            nested = data.get("function_call") or data.get("functionCall")
+            if isinstance(nested, dict):
+                nested_value = _normalize_signature(
+                    nested.get("thought_signature") or nested.get("thoughtSignature")
+                )
+                if nested_value:
+                    return nested_value
+            return None
+
+        for obj in (function_call, part):
+            value = _normalize_signature(
+                getattr(obj, "thought_signature", None)
+                or getattr(obj, "thoughtSignature", None)
+            )
+            if value:
+                return value
+            if isinstance(obj, dict):
+                mapped = _extract_from_mapping(obj)
+                if mapped:
+                    return mapped
+            for attr in ("model_dump", "dict"):
+                fn = getattr(obj, attr, None)
+                if not callable(fn):
+                    continue
                 data = fn()
                 if isinstance(data, dict):
-                    raw = data.get("thought_signature") or data.get("thoughtSignature")
-                    if isinstance(raw, bytes):
-                        return base64.b64encode(raw).decode("ascii")
-                    if isinstance(raw, str):
-                        return raw
-                    if raw is not None:
-                        return str(raw)
+                    mapped = _extract_from_mapping(data)
+                    if mapped:
+                        return mapped
         return None
+
+    @staticmethod
+    def _build_function_call_part(call: dict) -> dict:
+        thought_signature = call.get("thought_signature") or call.get("thoughtSignature")
+        arguments = call.get("arguments", {})
+        if isinstance(arguments, dict) and "thought_signature" in arguments:
+            arguments = {
+                key: value for key, value in arguments.items() if key != "thought_signature"
+            }
+        part = {
+            "function_call": {
+                "name": call.get("name"),
+                "args": arguments,
+                "id": call.get("id"),
+            }
+        }
+        if thought_signature:
+            # Must be on the Part, not nested under function_call.
+            part["thought_signature"] = thought_signature
+        return part
 
     @staticmethod
     def _extract_system_instruction(messages: list[dict]) -> str | None:
@@ -314,25 +357,7 @@ class GeminiProvider:
                 if tool_calls:
                     parts = []
                     for call in tool_calls:
-                        thought_signature = call.get("thought_signature") or call.get(
-                            "thoughtSignature"
-                        )
-                        arguments = call.get("arguments", {})
-                        if isinstance(arguments, dict) and "thought_signature" in arguments:
-                            arguments = {
-                                key: value
-                                for key, value in arguments.items()
-                                if key != "thought_signature"
-                            }
-                        part = {
-                            "function_call": {
-                                "name": call.get("name"),
-                                "args": arguments,
-                            }
-                        }
-                        if thought_signature:
-                            part["thought_signature"] = thought_signature
-                        parts.append(part)
+                        parts.append(self._build_function_call_part(call))
                     contents.append({"role": "model", "parts": parts})
                     continue
                 if role == "tool":
@@ -446,7 +471,10 @@ class GeminiProvider:
                             )
                         tool_calls.append(
                             ChatToolCall(
-                                id=function_call.name,
+                                id=(
+                                    getattr(function_call, "id", None)
+                                    or getattr(function_call, "name", "")
+                                ),
                                 name=function_call.name,
                                 arguments=function_call.args or {},
                                 thought_signature=thought_signature,

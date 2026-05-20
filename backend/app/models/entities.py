@@ -41,7 +41,6 @@ class Org(SQLModel, table=True):
     web_search_enabled: bool = Field(default=True)
     web_scrape_enabled: bool = Field(default=True)
     web_grounding_openai: bool = Field(default=False)
-    web_grounding_gemini: bool = Field(default=False)
     exec_network_enabled: bool = Field(default=False)
     exec_policy: str = Field(default="always")
     oidc_enabled: bool = Field(default=False)

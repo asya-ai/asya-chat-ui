@@ -2,8 +2,9 @@ FROM node:22-alpine AS frontend-build
 
 WORKDIR /app
 RUN corepack enable
+ENV CI=true
 
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./

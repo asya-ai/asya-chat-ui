@@ -65,7 +65,12 @@ async def run_agentic_loop_langchain(
                 "role": "assistant",
                 "content": response.content or "",
                 "tool_calls": [
-                    {"id": call.id, "name": call.name, "arguments": call.arguments}
+                    {
+                        "id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "thought_signature": call.thought_signature,
+                    }
                     for call in tool_calls
                 ],
             }

@@ -158,6 +158,7 @@ docker compose --profile exec build executor
 - Frontend package manager: `pnpm`
 - Backend package manager/runtime tooling: `uv`
 - Database migrations: Alembic (`uv run alembic upgrade head`)
+- Run backend tests: `make test` (or `cd backend && uv run pytest`)
 - Backend health endpoint: `GET /healthz`
 - Scraper health endpoint: `GET /healthz` on scraper service
 
