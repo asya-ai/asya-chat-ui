@@ -34,6 +34,32 @@ class _FakeProvider:
         return ChatResponse(content="final answer", usage=_usage(), tool_calls=[])
 
 
+@dataclass
+class _ThoughtSignatureProvider:
+    calls: int = 0
+    seen_messages: list[list[dict]] | None = None
+
+    async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+        if self.seen_messages is None:
+            self.seen_messages = []
+        self.seen_messages.append(messages.copy())
+        self.calls += 1
+        if self.calls == 1:
+            return ChatResponse(
+                content="",
+                usage=_usage(),
+                tool_calls=[
+                    ChatToolCall(
+                        id="call-1",
+                        name="echo_tool",
+                        arguments={"text": "hello"},
+                        thought_signature="sig-abc123",
+                    )
+                ],
+            )
+        return ChatResponse(content="done", usage=_usage(), tool_calls=[])
+
+
 @pytest.mark.asyncio
 async def test_langchain_tool_executor_executes_registry_tool():
     registry = ToolRegistry()
@@ -90,3 +116,41 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
     assert isinstance(sources, list)
     assert image_usages == []
     assert usage is not None
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_preserves_thought_signature_in_tool_roundtrip():
+    registry = ToolRegistry()
+
+    async def _echo(args: dict) -> ToolResult:
+        return ToolResult(name="echo_tool", output={"echo": args.get("text")})
+
+    registry.register(
+        ToolSpec(
+            name="echo_tool",
+            description="Echo text",
+            parameters={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        ),
+        _echo,
+    )
+    provider = _ThoughtSignatureProvider()
+    content, *_ = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "say hello"}],
+        tool_registry=registry,
+        max_steps=3,
+    )
+
+    assert content == "done"
+    assert provider.seen_messages is not None
+    assert len(provider.seen_messages) >= 2
+    second_call_messages = provider.seen_messages[1]
+    assistant_tool_message = next(
+        msg for msg in second_call_messages if msg.get("role") == "assistant" and msg.get("tool_calls")
+    )
+    assert assistant_tool_message["tool_calls"][0]["thought_signature"] == "sig-abc123"
