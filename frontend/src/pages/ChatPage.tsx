@@ -1413,6 +1413,36 @@ export const ChatPage = () => {
     return `\`\`\`\n${trimmed}\n\`\`\``
   }
 
+  const isInsideMarkdownCodeFence = (text: string, cursorIndex: number) => {
+    const beforeCursor = text.slice(0, cursorIndex)
+    const lines = beforeCursor.split("\n")
+    let inFence = false
+    let activeFenceChar: "`" | "~" | null = null
+    let activeFenceLength = 0
+
+    for (const line of lines) {
+      const trimmedStart = line.trimStart()
+      const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmedStart)
+      if (!fenceMatch) continue
+      const marker = fenceMatch[1]
+      const markerChar = marker[0] as "`" | "~"
+      const markerLength = marker.length
+      if (!inFence) {
+        inFence = true
+        activeFenceChar = markerChar
+        activeFenceLength = markerLength
+        continue
+      }
+      if (activeFenceChar === markerChar && markerLength >= activeFenceLength) {
+        inFence = false
+        activeFenceChar = null
+        activeFenceLength = 0
+      }
+    }
+
+    return inFence
+  }
+
   const insertAtCursor = (
     current: string,
     insert: string,
@@ -1474,9 +1504,13 @@ export const ChatPage = () => {
     const text = event.clipboardData.getData("text")
     if (!text || !isLikelyCode(text)) return
 
-    event.preventDefault()
     const input = composerInputRef.current
     const start = input?.selectionStart ?? message.length
+    if (isInsideMarkdownCodeFence(message, start)) {
+      return
+    }
+
+    event.preventDefault()
     const end = input?.selectionEnd ?? message.length
     const wrapped = wrapInCodeFence(text)
     const nextValue = insertAtCursor(message, wrapped, start, end)
@@ -1578,8 +1612,12 @@ export const ChatPage = () => {
 
     if (!text || !isLikelyCode(text)) return
 
-    event.preventDefault()
     const start = textarea.selectionStart ?? editingContent.length
+    if (isInsideMarkdownCodeFence(editingContent, start)) {
+      return
+    }
+
+    event.preventDefault()
     const end = textarea.selectionEnd ?? editingContent.length
     const wrapped = wrapInCodeFence(text)
     const nextValue = insertAtCursor(editingContent, wrapped, start, end)

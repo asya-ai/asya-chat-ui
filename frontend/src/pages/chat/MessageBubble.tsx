@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
 import { useNavigate } from "react-router-dom"
 import ReactMarkdown from "react-markdown"
@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
+import mermaid from "mermaid"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
@@ -40,6 +41,97 @@ type MessageBubbleProps = {
   onEditFilesSelected: (files: File[]) => void
   onRemoveEditingAttachment: (index: number) => void
   onPreviewAttachment: (attachment: ChatMessageAttachmentInput) => void
+}
+
+let mermaidInitialized = false
+let mermaidRenderId = 0
+
+const nextMermaidRenderId = () => {
+  mermaidRenderId += 1
+  return `chatui-mermaid-${mermaidRenderId}`
+}
+
+const ensureMermaidInitialized = () => {
+  if (mermaidInitialized) return
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+  })
+  mermaidInitialized = true
+}
+
+const MERMAID_START_PATTERN =
+  /^(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|sankey-beta|block-beta|xychart-beta|C4Context)\b/i
+
+const toMermaidChart = (content: string, language?: string | null): string | null => {
+  if (language?.toLowerCase() === "mermaid") {
+    return content.trim()
+  }
+
+  const trimmed = content.trim()
+  if (!trimmed) return null
+
+  if (/^mermaid\s*[\r\n]+/i.test(trimmed)) {
+    const chart = trimmed.replace(/^mermaid\s*[\r\n]+/i, "").trim()
+    return chart || null
+  }
+
+  if (MERMAID_START_PATTERN.test(trimmed)) {
+    return trimmed
+  }
+
+  return null
+}
+
+const isBlockCode = (content: string, className?: string) =>
+  Boolean(/language-\w+/.exec(className || "")) || content.includes("\n")
+
+const MermaidDiagram = ({ chart }: { chart: string }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [renderError, setRenderError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const renderDiagram = async () => {
+      const container = containerRef.current
+      if (!container) return
+      container.innerHTML = ""
+      setRenderError(null)
+      try {
+        ensureMermaidInitialized()
+        const { svg, bindFunctions } = await mermaid.render(nextMermaidRenderId(), chart)
+        if (cancelled || !containerRef.current) return
+        containerRef.current.innerHTML = svg
+        bindFunctions?.(containerRef.current)
+      } catch (error) {
+        if (cancelled) return
+        setRenderError(
+          error instanceof Error
+            ? error.message
+            : "Failed to render Mermaid diagram."
+        )
+      }
+    }
+    void renderDiagram()
+    return () => {
+      cancelled = true
+    }
+  }, [chart])
+
+  if (renderError) {
+    return (
+      <pre className="bg-destructive/10 my-3 p-2 rounded text-destructive text-xs whitespace-pre-wrap">
+        {renderError}
+      </pre>
+    )
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="my-3 overflow-x-auto [&_svg]:w-full [&_svg]:min-w-max [&_svg]:h-auto"
+    />
+  )
 }
 
 const MessageBubbleComponent = ({
@@ -85,26 +177,6 @@ const MessageBubbleComponent = ({
       (_, body) => `\n$$\n${body}\n$$\n`
     )
   }, [msg.content])
-  const userLinkifiedContent = useMemo(() => {
-    const urlRegex = /(https?:\/\/[^\s<>"')\]]+)/g
-    const parts = msg.content.split(urlRegex)
-    return parts.map((part, index) => {
-      if (/^https?:\/\//.test(part)) {
-        return (
-          <a
-            key={`user-link-${index}`}
-            href={part}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 break-all"
-          >
-            {part}
-          </a>
-        )
-      }
-      return <span key={`user-text-${index}`}>{part}</span>
-    })
-  }, [msg.content])
   const attachmentSrc = (attachment: {
     content_type: string
     data_base64?: string
@@ -139,9 +211,7 @@ const MessageBubbleComponent = ({
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className="group max-w-[85%]">
         <div
-          className={`bg-muted px-4 py-2 rounded-lg overflow-hidden text-foreground text-sm break-words leading-relaxed ${
-            isUser ? "whitespace-pre-wrap" : "whitespace-normal"
-          }`}
+          className="bg-muted px-4 py-2 rounded-lg overflow-hidden text-foreground text-sm break-words leading-relaxed whitespace-normal"
         >
           <div className="flex justify-between items-center gap-2">
             <p
@@ -451,198 +521,197 @@ const MessageBubbleComponent = ({
                   </div>
                 </div>
               ) : (
-                isUser ? (
-                  <div className="leading-6 whitespace-pre-wrap break-words">
-                    {userLinkifiedContent}
-                  </div>
-                ) : (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                    components={{
-                      p({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <p className="my-2.5 leading-6" {...rest}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
+                  components={{
+                    p({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <p className="my-2.5 leading-6" {...rest}>
+                          {children}
+                        </p>
+                      )
+                    },
+                    ul({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <ul className="space-y-2 my-2.5 pl-6 list-disc" {...rest}>
+                          {children}
+                        </ul>
+                      )
+                    },
+                    ol({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <ol className="space-y-2 my-2.5 pl-6 list-decimal" {...rest}>
+                          {children}
+                        </ol>
+                      )
+                    },
+                    li({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <li className="leading-6" {...rest}>
+                          {children}
+                        </li>
+                      )
+                    },
+                    a({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <a
+                          {...rest}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline underline-offset-2 break-all"
+                        >
+                          {children}
+                        </a>
+                      )
+                    },
+                    hr({ node, ...rest }) {
+                      void node
+                      return <hr className="my-3 border-muted-foreground/30" {...rest} />
+                    },
+                    h1({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <h1 className="mt-4 mb-2 font-semibold text-xl" {...rest}>
+                          {children}
+                        </h1>
+                      )
+                    },
+                    h2({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <h2 className="mt-3 mb-2 font-semibold text-lg" {...rest}>
+                          {children}
+                        </h2>
+                      )
+                    },
+                    h3({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <h3 className="mt-3 mb-2 font-semibold text-base" {...rest}>
+                          {children}
+                        </h3>
+                      )
+                    },
+                    h4({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <h4 className="mt-3 mb-2 font-semibold text-base" {...rest}>
+                          {children}
+                        </h4>
+                      )
+                    },
+                    h5({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <h5 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
+                          {children}
+                        </h5>
+                      )
+                    },
+                    h6({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <h6 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
+                          {children}
+                        </h6>
+                      )
+                    },
+                    table({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <div className="overflow-x-auto my-3">
+                          <table className="w-full border border-muted-foreground/30 text-sm" {...rest}>
                             {children}
-                          </p>
-                        )
-                      },
-                      ul({ children, node, ...rest }) {
-                        void node
+                          </table>
+                        </div>
+                      )
+                    },
+                    thead({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <thead className="bg-muted/40 text-foreground" {...rest}>
+                          {children}
+                        </thead>
+                      )
+                    },
+                    tbody({ children, node, ...rest }) {
+                      void node
+                      return <tbody {...rest}>{children}</tbody>
+                    },
+                    tr({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <tr className="border-t border-muted-foreground/30" {...rest}>
+                          {children}
+                        </tr>
+                      )
+                    },
+                    th({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <th className="px-3 py-2 text-left font-semibold" {...rest}>
+                          {children}
+                        </th>
+                      )
+                    },
+                    td({ children, node, ...rest }) {
+                      void node
+                      return (
+                        <td className="px-3 py-2 align-top" {...rest}>
+                          {children}
+                        </td>
+                      )
+                    },
+                    code(props) {
+                      const { className, children, ref: refProp, ...rest } = props
+                      void refProp
+                      const match = /language-(\w+)/.exec(className || "")
+                      const content = String(children).replace(/\n$/, "")
+                      const mermaidChart = isBlockCode(content, className)
+                        ? toMermaidChart(content, match?.[1] ?? null)
+                        : null
+                      if (mermaidChart) {
+                        return <MermaidDiagram chart={mermaidChart} />
+                      }
+                      if (isBlockCode(content, className) && match) {
                         return (
-                          <ul className="space-y-2 my-2.5 pl-6 list-disc" {...rest}>
-                            {children}
-                          </ul>
-                        )
-                      },
-                      ol({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <ol className="space-y-2 my-2.5 pl-6 list-decimal" {...rest}>
-                            {children}
-                          </ol>
-                        )
-                      },
-                      li({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <li className="leading-6" {...rest}>
-                            {children}
-                          </li>
-                        )
-                      },
-                      a({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <a
-                            {...rest}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="underline underline-offset-2 break-all"
-                          >
-                            {children}
-                          </a>
-                        )
-                      },
-                      hr({ node, ...rest }) {
-                        void node
-                        return <hr className="my-3 border-muted-foreground/30" {...rest} />
-                      },
-                      h1({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <h1 className="mt-4 mb-2 font-semibold text-xl" {...rest}>
-                            {children}
-                          </h1>
-                        )
-                      },
-                      h2({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <h2 className="mt-3 mb-2 font-semibold text-lg" {...rest}>
-                            {children}
-                          </h2>
-                        )
-                      },
-                      h3({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <h3 className="mt-3 mb-2 font-semibold text-base" {...rest}>
-                            {children}
-                          </h3>
-                        )
-                      },
-                      h4({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <h4 className="mt-3 mb-2 font-semibold text-base" {...rest}>
-                            {children}
-                          </h4>
-                        )
-                      },
-                      h5({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <h5 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
-                            {children}
-                          </h5>
-                        )
-                      },
-                      h6({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <h6 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
-                            {children}
-                          </h6>
-                        )
-                      },
-                      table({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <div className="overflow-x-auto my-3">
-                            <table className="w-full border border-muted-foreground/30 text-sm" {...rest}>
-                              {children}
-                            </table>
+                          <div className="relative">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="top-2 right-2 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+                              onClick={() => navigator.clipboard.writeText(content)}
+                            >
+                              {t("common_copy")}
+                            </Button>
+                            <SyntaxHighlighter
+                              {...rest}
+                              style={codeTheme}
+                              language={match[1]}
+                              PreTag="div"
+                            >
+                              {content}
+                            </SyntaxHighlighter>
                           </div>
                         )
-                      },
-                      thead({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <thead className="bg-muted/40 text-foreground" {...rest}>
-                            {children}
-                          </thead>
-                        )
-                      },
-                      tbody({ children, node, ...rest }) {
-                        void node
-                        return <tbody {...rest}>{children}</tbody>
-                      },
-                      tr({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <tr className="border-t border-muted-foreground/30" {...rest}>
-                            {children}
-                          </tr>
-                        )
-                      },
-                      th({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <th className="px-3 py-2 text-left font-semibold" {...rest}>
-                            {children}
-                          </th>
-                        )
-                      },
-                      td({ children, node, ...rest }) {
-                        void node
-                        return (
-                          <td className="px-3 py-2 align-top" {...rest}>
-                            {children}
-                          </td>
-                        )
-                      },
-                      code(props) {
-                        const { className, children, ref: refProp, ...rest } = props
-                        const inline = (props as { inline?: boolean }).inline
-                        void refProp
-                        const match = /language-(\w+)/.exec(className || "")
-                        const content = String(children).replace(/\n$/, "")
-                        if (!inline && match) {
-                          return (
-                            <div className="relative">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="top-2 right-2 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
-                                onClick={() => navigator.clipboard.writeText(content)}
-                              >
-                                {t("common_copy")}
-                              </Button>
-                              <SyntaxHighlighter
-                                {...rest}
-                                style={codeTheme}
-                                language={match[1]}
-                                PreTag="div"
-                              >
-                                {content}
-                              </SyntaxHighlighter>
-                            </div>
-                          )
-                        }
-                        return (
-                          <code className={className} {...rest}>
-                            {children}
-                          </code>
-                        )
-                      },
-                    }}
-                  >
-                    {content}
-                  </ReactMarkdown>
-                )
+                      }
+                      return (
+                        <code className={className} {...rest}>
+                          {children}
+                        </code>
+                      )
+                    },
+                  }}
+                >
+                  {content}
+                </ReactMarkdown>
               )}
               {msg.attachments && msg.attachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2 mt-3">
