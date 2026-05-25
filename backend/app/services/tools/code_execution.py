@@ -23,6 +23,8 @@ ALLOWED_LANGUAGES = {"python"}
 DEFAULT_ALLOWLIST = {
     "numpy",
     "pandas",
+    "geopandas",
+    "shapefile",
     "matplotlib",
     "seaborn",
     "scipy",

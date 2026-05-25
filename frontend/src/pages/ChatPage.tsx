@@ -20,12 +20,11 @@ import type {
   ChatMessageAttachmentInput,
   GenerationStatus,
 } from "@/lib/types"
-import { getTheme } from "@/lib/theme"
 import { useI18n } from "@/lib/i18n-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism"
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Image as ImageIcon, Menu } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -79,7 +78,6 @@ export const ChatPage = () => {
     modelStore.get() ?? undefined
   )
   const [loadingByChat, setLoadingByChat] = useState<Record<string, boolean>>({})
-  const theme = getTheme()
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState("")
   const [editingAttachments, setEditingAttachments] = useState<
@@ -128,9 +126,7 @@ export const ChatPage = () => {
     if (shareTokenParam) return shareTokenParam
     return new URLSearchParams(location.search).get("share")
   }, [location.search, shareTokenParam])
-  const codeTheme = useMemo<Record<string, CSSProperties>>(() => {
-    return theme === "dark" ? oneDark : oneLight
-  }, [theme])
+  const codeTheme = useMemo<Record<string, CSSProperties>>(() => oneDark, [])
 
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
   const { data: models = [] } = useModels(orgId)

@@ -8,7 +8,7 @@ import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import mermaid from "mermaid"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
+import { Copy, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ChatMessage, ChatMessageAttachmentInput } from "@/lib/types"
@@ -86,7 +86,61 @@ const toMermaidChart = (content: string, language?: string | null): string | nul
 const isBlockCode = (content: string, className?: string) =>
   Boolean(/language-\w+/.exec(className || "")) || content.includes("\n")
 
-const MermaidDiagram = ({ chart }: { chart: string }) => {
+const codeBlockClassName =
+  "relative my-3 overflow-hidden rounded-lg border border-muted-foreground/20 bg-zinc-950 text-zinc-100 shadow-sm"
+
+const copyToClipboard = async (text: string) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement("textarea")
+  textarea.value = text
+  textarea.setAttribute("readonly", "")
+  textarea.style.position = "fixed"
+  textarea.style.top = "-9999px"
+  textarea.style.left = "-9999px"
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand("copy")
+  document.body.removeChild(textarea)
+}
+
+const CopyTextButton = ({
+  text,
+  label,
+  className = "",
+  iconOnly = false,
+}: {
+  text: string
+  label: string
+  className?: string
+  iconOnly?: boolean
+}) => (
+  <Button
+    type="button"
+    variant="ghost"
+    size={iconOnly ? "icon" : "sm"}
+    className={className}
+    onClick={() => void copyToClipboard(text)}
+    aria-label={label}
+  >
+    {iconOnly ? (
+      <Copy aria-hidden="true" className="w-3.5 h-3.5" />
+    ) : (
+      label
+    )}
+  </Button>
+)
+
+const MermaidDiagram = ({
+  chart,
+  copyLabel,
+}: {
+  chart: string
+  copyLabel: string
+}) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [renderError, setRenderError] = useState<string | null>(null)
 
@@ -120,17 +174,31 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
 
   if (renderError) {
     return (
-      <pre className="bg-destructive/10 my-3 p-2 rounded text-destructive text-xs whitespace-pre-wrap">
-        {renderError}
-      </pre>
+      <div className="relative my-3">
+        <CopyTextButton
+          text={chart}
+          label={copyLabel}
+          className="top-2 right-2 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+        />
+        <pre className="bg-destructive/10 p-2 rounded text-destructive text-xs whitespace-pre-wrap">
+          {renderError}
+        </pre>
+      </div>
     )
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="my-3 overflow-x-auto [&_svg]:w-full [&_svg]:min-w-max [&_svg]:h-auto"
-    />
+    <div className="relative my-3">
+      <CopyTextButton
+        text={chart}
+        label={copyLabel}
+        className="top-2 right-2 z-10 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+      />
+      <div
+        ref={containerRef}
+        className="overflow-x-auto [&_svg]:w-full [&_svg]:min-w-max [&_svg]:h-auto"
+      />
+    </div>
   )
 }
 
@@ -170,6 +238,7 @@ const MessageBubbleComponent = ({
     msg.tool_event?.type === "url_attachments" ? msg.tool_event : null
   const contextSummaryEvent =
     msg.tool_event?.type === "context_summary" ? msg.tool_event : null
+  const canCopyMessage = Boolean(msg.content.trim())
   const content = useMemo(() => {
     // Normalize bracketed math blocks into KaTeX-friendly $$...$$
     return msg.content.replace(
@@ -677,28 +746,46 @@ const MessageBubbleComponent = ({
                         ? toMermaidChart(content, match?.[1] ?? null)
                         : null
                       if (mermaidChart) {
-                        return <MermaidDiagram chart={mermaidChart} />
-                      }
-                      if (isBlockCode(content, className) && match) {
                         return (
-                          <div className="relative">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="top-2 right-2 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
-                              onClick={() => navigator.clipboard.writeText(content)}
-                            >
-                              {t("common_copy")}
-                            </Button>
-                            <SyntaxHighlighter
-                              {...rest}
-                              style={codeTheme}
-                              language={match[1]}
-                              PreTag="div"
-                            >
-                              {content}
-                            </SyntaxHighlighter>
+                          <MermaidDiagram
+                            chart={mermaidChart}
+                            copyLabel={t("chat_copy_mermaid")}
+                          />
+                        )
+                      }
+                      if (isBlockCode(content, className)) {
+                        return (
+                          <div className={codeBlockClassName}>
+                            <CopyTextButton
+                              text={content}
+                              label={t("chat_copy_code")}
+                              className="top-2 right-2 z-10 absolute bg-zinc-900/90 border border-white/15 text-[10px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50 uppercase tracking-wide"
+                            />
+                            {match ? (
+                              <SyntaxHighlighter
+                                {...rest}
+                                style={codeTheme}
+                                language={match[1]}
+                                PreTag="div"
+                                customStyle={{
+                                  margin: 0,
+                                  padding: "1rem",
+                                  paddingTop: "2.5rem",
+                                  background: "transparent",
+                                }}
+                                codeTagProps={{
+                                  className: "font-mono text-[13px]",
+                                }}
+                              >
+                                {content}
+                              </SyntaxHighlighter>
+                            ) : (
+                              <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
+                                <code className={className} {...rest}>
+                                  {content}
+                                </code>
+                              </pre>
+                            )}
                           </div>
                         )
                       }
@@ -790,42 +877,58 @@ const MessageBubbleComponent = ({
             </>
           )}
         </div>
-        {!isUser && !isEditing && actionsEnabled && msg.generation_status === "failed" ? (
-          <div className="flex justify-start gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 mt-2 transition">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => onRetryMessage(msg)}
-            >
-              <RotateCcw aria-hidden="true" className="w-3.5 h-3.5 mr-1" />
-              {t("chat_retry")}
-            </Button>
-          </div>
-        ) : null}
-        {isUser && !isEditing && actionsEnabled ? (
-          <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 mt-2 transition">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="opacity-70 hover:opacity-100"
-              onClick={() => onStartEdit(msg)}
-              aria-label={t("chat_edit_message")}
-            >
-              <Pencil aria-hidden="true" className="w-3.5 h-3.5" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="opacity-70 hover:opacity-100"
-              onClick={() => onDeleteFromMessage(msg)}
-              aria-label={t("chat_delete")}
-            >
-              <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
-            </Button>
+        {!isEditing &&
+        (canCopyMessage ||
+          (actionsEnabled && (isUser || msg.generation_status === "failed"))) ? (
+          <div
+            className={`flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 mt-2 transition ${
+              isUser ? "justify-end" : "justify-start"
+            }`}
+          >
+            {canCopyMessage ? (
+              <CopyTextButton
+                text={msg.content}
+                label={t("chat_copy_message")}
+                iconOnly
+                className="opacity-70 hover:opacity-100"
+              />
+            ) : null}
+            {!isUser && actionsEnabled && msg.generation_status === "failed" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => onRetryMessage(msg)}
+              >
+                <RotateCcw aria-hidden="true" className="w-3.5 h-3.5 mr-1" />
+                {t("chat_retry")}
+              </Button>
+            ) : null}
+            {isUser && actionsEnabled ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100"
+                  onClick={() => onStartEdit(msg)}
+                  aria-label={t("chat_edit_message")}
+                >
+                  <Pencil aria-hidden="true" className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100"
+                  onClick={() => onDeleteFromMessage(msg)}
+                  aria-label={t("chat_delete")}
+                >
+                  <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
+                </Button>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>

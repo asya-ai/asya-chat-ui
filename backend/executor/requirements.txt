@@ -1,5 +1,7 @@
 numpy>=2.4.4
 pandas>=3.0.2
+geopandas
+pyshp
 matplotlib>=3.10.8
 seaborn>=0.13.2
 scipy>=1.17.1
