@@ -1,3 +1,8 @@
 allowBuilds:
   esbuild: true
   msw: true
+
+# Frozen installs (Docker/CI) use the committed lockfile as-is. Without this,
+# pnpm 11 re-validates every lockfile entry against minimumReleaseAge (24h) and
+# fails builds right after dependency bumps.
+trustLockfile: true
