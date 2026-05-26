@@ -23,6 +23,7 @@ from app.api.chats import (
     _maybe_update_chat_title,
     _normalize_sources,
     _prepend_tool_guidance,
+    _effective_web_tool_enabled,
     _resolve_exec_policy,
     _run_agentic_loop,
     _truncate_messages,
@@ -556,20 +557,27 @@ async def _run_generation(task_id: UUID) -> None:
         session.commit()
 
         chat_user = session.get(User, chat.user_id)
+        requested_web_enabled = (
+            task.metadata_json.get("web_search_enabled")
+            if isinstance(task.metadata_json, dict)
+            else None
+        )
+        effective_web_search_enabled = _effective_web_tool_enabled(
+            org.web_search_enabled,
+            requested_web_enabled,
+        )
+        effective_web_scrape_enabled = _effective_web_tool_enabled(
+            org.web_scrape_enabled,
+            requested_web_enabled,
+        )
         tool_registry = _build_tool_registry(
             session,
             chat.org_id,
             chat_id=chat.id,
             preferred_provider=model.provider,
             web_tools_enabled=not _grounding_enabled(org, model.provider),
-            web_search_enabled=(
-                org.web_search_enabled
-                if not task.metadata_json
-                or task.metadata_json.get("web_search_enabled") is None
-                else org.web_search_enabled
-                and bool(task.metadata_json.get("web_search_enabled"))
-            ),
-            web_scrape_enabled=org.web_scrape_enabled,
+            web_search_enabled=effective_web_search_enabled,
+            web_scrape_enabled=effective_web_scrape_enabled,
             exec_policy=(
                 _resolve_exec_policy(
                     org.exec_policy,

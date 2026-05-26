@@ -199,6 +199,13 @@ def _resolve_exec_policy(org_exec_policy: str, code_execution_enabled: object) -
     return org_exec_policy
 
 
+def _effective_web_tool_enabled(org_tool_enabled: bool, request_enabled: object) -> bool:
+    enabled = _coerce_optional_bool(request_enabled)
+    if enabled is False:
+        return False
+    return org_tool_enabled
+
+
 def _truncate_messages(messages: list[dict], *, token_limit: int | None) -> list[dict]:
     if token_limit is None:
         return messages
@@ -3390,10 +3397,13 @@ async def create_message(
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
-    effective_web_search_enabled = (
-        org.web_search_enabled
-        if payload.web_search_enabled is None
-        else org.web_search_enabled and payload.web_search_enabled
+    effective_web_search_enabled = _effective_web_tool_enabled(
+        org.web_search_enabled,
+        payload.web_search_enabled,
+    )
+    effective_web_scrape_enabled = _effective_web_tool_enabled(
+        org.web_scrape_enabled,
+        payload.web_search_enabled,
     )
     effective_exec_policy = _resolve_exec_policy(
         org.exec_policy, payload.code_execution_enabled
@@ -3405,7 +3415,7 @@ async def create_message(
         preferred_provider=model.provider,
         web_tools_enabled=not grounding_enabled,
         web_search_enabled=effective_web_search_enabled,
-        web_scrape_enabled=org.web_scrape_enabled,
+        web_scrape_enabled=effective_web_scrape_enabled,
         exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
@@ -4290,10 +4300,13 @@ async def edit_message(
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
-    effective_web_search_enabled = (
-        org.web_search_enabled
-        if payload.web_search_enabled is None
-        else org.web_search_enabled and payload.web_search_enabled
+    effective_web_search_enabled = _effective_web_tool_enabled(
+        org.web_search_enabled,
+        payload.web_search_enabled,
+    )
+    effective_web_scrape_enabled = _effective_web_tool_enabled(
+        org.web_scrape_enabled,
+        payload.web_search_enabled,
     )
     effective_exec_policy = _resolve_exec_policy(
         org.exec_policy, payload.code_execution_enabled
@@ -4305,7 +4318,7 @@ async def edit_message(
         preferred_provider=model.provider,
         web_tools_enabled=not grounding_enabled,
         web_search_enabled=effective_web_search_enabled,
-        web_scrape_enabled=org.web_scrape_enabled,
+        web_scrape_enabled=effective_web_scrape_enabled,
         exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,

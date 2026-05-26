@@ -15,6 +15,24 @@ from app.services.providers.base import (
 DEFAULT_MAX_TOKENS = 16384
 
 
+def _usage_from_anthropic(usage: Any) -> ChatUsage:
+    input_tokens = getattr(usage, "input_tokens", 0) or 0
+    output_tokens = getattr(usage, "output_tokens", 0) or 0
+    cache_read_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+    cache_creation_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    billable_input_tokens = input_tokens + cache_creation_tokens
+    prompt_tokens = billable_input_tokens + cache_read_tokens
+    return ChatUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=output_tokens,
+        total_tokens=prompt_tokens + output_tokens,
+        input_tokens=billable_input_tokens,
+        output_tokens=output_tokens,
+        cached_tokens=cache_read_tokens,
+        thinking_tokens=0,
+    )
+
+
 def _extract_system(messages: list[dict]) -> str | None:
     parts: list[str] = []
     for message in messages:
@@ -44,6 +62,20 @@ def _text_blocks_from_content(content: Any) -> list[dict]:
                 raise ValueError("Images are not supported for Anthropic provider.")
         return blocks
     return []
+
+
+def _tool_payload(tools: list[ChatToolSpec]) -> list[dict]:
+    payload = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.parameters,
+        }
+        for tool in tools
+    ]
+    if payload:
+        payload[-1]["cache_control"] = {"type": "ephemeral"}
+    return payload
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
@@ -122,20 +154,9 @@ class AnthropicProvider:
             if getattr(block, "type", None) == "text":
                 text_parts.append(getattr(block, "text", ""))
         content = "".join(text_parts)
-        usage = result.usage
-        input_tokens = getattr(usage, "input_tokens", 0) or 0
-        output_tokens = getattr(usage, "output_tokens", 0) or 0
         return ChatResponse(
             content=content,
-            usage=ChatUsage(
-                prompt_tokens=input_tokens,
-                completion_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cached_tokens=0,
-                thinking_tokens=0,
-            ),
+            usage=_usage_from_anthropic(result.usage),
         )
 
     async def chat_with_tools(
@@ -150,14 +171,7 @@ class AnthropicProvider:
             "model": model,
             "messages": _to_anthropic_messages(messages),
             "max_tokens": DEFAULT_MAX_TOKENS,
-            "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.parameters,
-                }
-                for tool in tools
-            ],
+            "tools": _tool_payload(tools),
         }
         if system:
             payload["system"] = system
@@ -177,20 +191,9 @@ class AnthropicProvider:
                         arguments=getattr(block, "input", {}) or {},
                     )
                 )
-        usage = result.usage
-        input_tokens = getattr(usage, "input_tokens", 0) or 0
-        output_tokens = getattr(usage, "output_tokens", 0) or 0
         return ChatResponse(
             content="".join(text_parts),
-            usage=ChatUsage(
-                prompt_tokens=input_tokens,
-                completion_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cached_tokens=0,
-                thinking_tokens=0,
-            ),
+            usage=_usage_from_anthropic(result.usage),
             tool_calls=tool_calls or None,
             finish_reason=getattr(result, "stop_reason", None),
         )
@@ -209,17 +212,6 @@ class AnthropicProvider:
                 if text:
                     yield ChatStreamChunk(content=text)
             final = await stream.get_final_message()
-        usage = getattr(final, "usage", None)
-        input_tokens = getattr(usage, "input_tokens", 0) or 0
-        output_tokens = getattr(usage, "output_tokens", 0) or 0
         yield ChatStreamChunk(
-            usage=ChatUsage(
-                prompt_tokens=input_tokens,
-                completion_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cached_tokens=0,
-                thinking_tokens=0,
-            )
+            usage=_usage_from_anthropic(getattr(final, "usage", None))
         )

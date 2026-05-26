@@ -85,7 +85,24 @@ def _is_timeout_error(exc: Exception) -> bool:
 
 def _is_unsupported_reasoning_effort_error(exc: Exception) -> bool:
     message = str(exc).lower()
-    return "reasoning.effort" in message and "unsupported value" in message
+    return (
+        "unsupported value" in message
+        and (
+            "reasoning_effort" in message
+            or "reasoning.effort" in message
+            or "reasoning effort" in message
+        )
+    )
+
+
+def _is_prompt_cache_param_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "prompt_cache_key" in message
+        or "prompt_cache_retention" in message
+        or "prompt cache" in message
+        or "prompt_cache" in message
+    )
 
 
 def _responses_input_text_size(items: list[dict]) -> int:
@@ -289,21 +306,23 @@ class OpenAIProvider:
                     "chat.completions context limit exceeded, retrying with aggressively trimmed history"
                 )
                 retry = True
-            if payload.get("reasoning_effort"):
+            elif _is_unsupported_reasoning_effort_error(exc) and payload.get(
+                "reasoning_effort"
+            ):
                 payload.pop("reasoning_effort", None)
-                self.logger.error(
-                    "chat.completions rejected reasoning_effort, retrying without it: %s",
+                self.logger.warning(
+                    "chat.completions rejected reasoning_effort for model=%s; retrying without reasoning override: %s",
+                    payload.get("model"),
                     exc,
-                    exc_info=True,
                 )
                 retry = True
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "chat.completions rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                retry = True
+            elif _is_prompt_cache_param_error(exc):
+                if self._strip_prompt_cache(payload):
+                    self.logger.warning(
+                        "chat.completions rejected prompt_cache params, retrying without them: %s",
+                        exc,
+                    )
+                    retry = True
             if retry:
                 return await self.client.with_options(
                     timeout=self.chat_timeout_seconds,
@@ -339,13 +358,13 @@ class OpenAIProvider:
                         payload.get("model"),
                     )
                     retry = True
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "responses rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                retry = True
+            elif _is_prompt_cache_param_error(exc):
+                if self._strip_prompt_cache(payload):
+                    self.logger.warning(
+                        "responses rejected prompt_cache params, retrying without them: %s",
+                        exc,
+                    )
+                    retry = True
             if retry:
                 return await self.client.with_options(
                     timeout=self.responses_timeout_seconds,

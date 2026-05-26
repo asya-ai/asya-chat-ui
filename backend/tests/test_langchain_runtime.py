@@ -60,6 +60,41 @@ class _ThoughtSignatureProvider:
         return ChatResponse(content="done", usage=_usage(), tool_calls=[])
 
 
+@dataclass
+class _WebScrapeAnswerProvider:
+    calls: int = 0
+    seen_messages: list[list[dict]] | None = None
+
+    async def chat(self, model: str, messages: list[dict]):
+        return ChatResponse(
+            content='{"answer":"Use mean 0.5","insufficient_information":false,"quotes":["mean 0.5"]}',
+            usage=_usage(),
+        )
+
+    async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+        if self.seen_messages is None:
+            self.seen_messages = []
+        self.seen_messages.append(messages.copy())
+        self.calls += 1
+        if self.calls == 1:
+            return ChatResponse(
+                content="",
+                usage=_usage(),
+                tool_calls=[
+                    ChatToolCall(
+                        id="scrape-1",
+                        name="web_scrape",
+                        arguments={
+                            "url": "https://example.com",
+                            "output": "answer",
+                            "question": "What mean does it use?",
+                        },
+                    )
+                ],
+            )
+        return ChatResponse(content="final answer", usage=_usage(), tool_calls=[])
+
+
 @pytest.mark.asyncio
 async def test_langchain_tool_executor_executes_registry_tool():
     registry = ToolRegistry()
@@ -154,3 +189,62 @@ async def test_agentic_loop_preserves_thought_signature_in_tool_roundtrip():
         msg for msg in second_call_messages if msg.get("role") == "assistant" and msg.get("tool_calls")
     )
     assert assistant_tool_message["tool_calls"][0]["thought_signature"] == "sig-abc123"
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_normalizes_web_scrape_answer_before_roundtrip():
+    registry = ToolRegistry()
+    huge_screenshot = "a" * 1_000_000
+
+    async def _web_scrape(args: dict) -> ToolResult:
+        return ToolResult(
+            name="web_scrape",
+            output={
+                "results": [
+                    {
+                        "url": args.get("url"),
+                        "title": "Example",
+                        "output": "answer",
+                        "question": args.get("question"),
+                        "analysis_input": {
+                            "markdown": "The mean is 0.5.",
+                            "screenshot_base64": huge_screenshot,
+                            "screenshot_content_type": "image/png",
+                        },
+                    }
+                ]
+            },
+        )
+
+    registry.register(
+        ToolSpec(
+            name="web_scrape",
+            description="Scrape a page",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "output": {"type": "string"},
+                    "question": {"type": "string"},
+                },
+                "required": ["url"],
+            },
+        ),
+        _web_scrape,
+    )
+    provider = _WebScrapeAnswerProvider()
+    content, *_ = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "read the page"}],
+        tool_registry=registry,
+        max_steps=3,
+    )
+
+    assert content == "final answer"
+    assert provider.seen_messages is not None
+    second_call_messages = provider.seen_messages[1]
+    tool_message = next(msg for msg in second_call_messages if msg.get("role") == "tool")
+    assert "analysis_input" not in tool_message["content"]
+    assert huge_screenshot not in tool_message["content"]
+    assert "Use mean 0.5" in tool_message["content"]

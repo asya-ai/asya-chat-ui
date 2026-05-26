@@ -9,6 +9,8 @@ from app.services.providers.base import ChatUsage
 from app.services.tools.registry import ToolResult, ToolRegistry
 from app.services.langchain_runtime.tool_adapters import LangChainToolExecutor
 
+WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
+
 
 def _merge_chat_usage(base: ChatUsage | None, extra: ChatUsage | None) -> ChatUsage | None:
     if base is None:
@@ -24,6 +26,118 @@ def _merge_chat_usage(base: ChatUsage | None, extra: ChatUsage | None) -> ChatUs
         cached_tokens=base.cached_tokens + extra.cached_tokens,
         thinking_tokens=base.thinking_tokens + extra.thinking_tokens,
     )
+
+
+def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return content.strip(), [], False
+    if not isinstance(data, dict):
+        return content.strip(), [], False
+    answer = str(data.get("answer") or "").strip()
+    quotes_raw = data.get("quotes")
+    quotes = [str(item).strip() for item in quotes_raw if str(item).strip()] if isinstance(quotes_raw, list) else []
+    insufficient = bool(data.get("insufficient_information"))
+    return answer, quotes, insufficient
+
+
+async def _generate_web_scrape_answer(
+    *,
+    provider: Any,
+    model_name: str,
+    result_item: dict[str, Any],
+) -> tuple[dict[str, Any], ChatUsage | None]:
+    analysis_input = result_item.get("analysis_input")
+    if not isinstance(analysis_input, dict):
+        return result_item, None
+
+    normalized: dict[str, Any] = {
+        key: value for key, value in result_item.items() if key != "analysis_input"
+    }
+    question = str(result_item.get("question") or "").strip()
+    if not question:
+        normalized["error"] = "Question missing for output=answer"
+        return normalized, None
+
+    markdown = str(analysis_input.get("markdown") or "").strip()
+    if not markdown:
+        normalized["error"] = "No markdown extracted for answering"
+        return normalized, None
+    if len(markdown) > WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT:
+        markdown = markdown[:WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT]
+
+    instructions = (
+        "Analyze the provided website content and answer the question.\n"
+        f'Question: "{question}"\n\n'
+        "Rules:\n"
+        "1) Use only the provided source material.\n"
+        "2) If the source material is insufficient, say so clearly.\n"
+        "3) Do not use prior/personal knowledge.\n"
+        "4) Return strict JSON with keys: answer (string), insufficient_information (boolean), quotes (array of strings).\n"
+        "5) quotes must contain direct quotes from the source, or be [] when insufficient."
+    )
+    prompt_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a strict evidence-grounded website analyzer. "
+                "Never rely on outside knowledge."
+            ),
+        },
+        {
+            "role": "user",
+            "content": instructions + "\n\nSource markdown:\n" + markdown,
+        },
+    ]
+    response = await provider.chat(model_name, prompt_messages)
+    answer, quotes, insufficient = _parse_web_answer_payload(response.content or "")
+    normalized["answer"] = answer
+    normalized["quotes"] = quotes
+    normalized["insufficient_information"] = insufficient
+    if analysis_input.get("screenshot_error") and not analysis_input.get("screenshot_base64"):
+        normalized["note"] = "Screenshot could not be used; answer is based on markdown only."
+    return normalized, response.usage
+
+
+async def _normalize_web_scrape_answer_result(
+    *,
+    provider: Any,
+    model_name: str,
+    result: ToolResult,
+) -> tuple[ToolResult, ChatUsage | None]:
+    scrape_results = result.output.get("results")
+    if not isinstance(scrape_results, list):
+        return result, None
+
+    normalized_results: list[dict[str, Any]] = []
+    additional_usage: ChatUsage | None = None
+    for item in scrape_results:
+        if not isinstance(item, dict):
+            continue
+        if item.get("error"):
+            normalized_results.append(
+                {key: value for key, value in item.items() if key != "analysis_input"}
+            )
+            continue
+        try:
+            answered_item, answer_usage = await _generate_web_scrape_answer(
+                provider=provider,
+                model_name=model_name,
+                result_item=item,
+            )
+            normalized_results.append(answered_item)
+            additional_usage = _merge_chat_usage(additional_usage, answer_usage)
+        except Exception as exc:
+            normalized_results.append(
+                {
+                    **{key: value for key, value in item.items() if key != "analysis_input"},
+                    "error": f"Answer generation failed: {exc}",
+                }
+            )
+
+    result.output["results"] = normalized_results
+    return result, additional_usage
 
 
 async def run_agentic_loop_langchain(
@@ -108,6 +222,16 @@ async def run_agentic_loop_langchain(
                 }
             )
             result: ToolResult = await executor.execute(call.name, call.arguments)
+            if (
+                call.name == "web_scrape"
+                and str((call.arguments or {}).get("output") or "").strip().lower() == "answer"
+            ):
+                result, answer_usage = await _normalize_web_scrape_answer_result(
+                    provider=provider,
+                    model_name=model_name,
+                    result=result,
+                )
+                usage = _merge_chat_usage(usage, answer_usage)
             if result.attachments:
                 attachments.extend(result.attachments)
             if call.name in {"web_search", "web_scrape"}:
