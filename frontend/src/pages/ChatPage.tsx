@@ -83,6 +83,8 @@ export const ChatPage = () => {
   const [editingAttachments, setEditingAttachments] = useState<
     ChatMessageAttachmentInput[]
   >([])
+  const [editingAttachmentError, setEditingAttachmentError] = useState<string | null>(null)
+  const [isEditDragActive, setIsEditDragActive] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement | null>(null)
   const lastScrolledIdRef = useRef<string | null>(null)
@@ -1524,11 +1526,46 @@ export const ChatPage = () => {
     setPendingAttachments((prev) => prev.filter((_, idx) => idx !== index))
   }
 
-  const handleEditFilesSelected = useCallback(async (files: File[]) => {
+  const addEditingFiles = useCallback(async (files: File[]) => {
+    if (editingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
+      setEditingAttachmentError(
+        t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+      )
+      return
+    }
+    for (const file of files) {
+      if (file.size > ATTACHMENTS_MAX_FILE_BYTES) {
+        setEditingAttachmentError(
+          t("chat_attachment_limit_file_size", {
+            file: file.name || t("chat_attachment_fallback_name"),
+            max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
+          })
+        )
+        return
+      }
+    }
+    const currentTotal = editingAttachments.reduce(
+      (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+      0
+    )
+    const incomingTotal = files.reduce((sum, file) => sum + file.size, 0)
+    if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
+      setEditingAttachmentError(
+        t("chat_attachment_limit_total_size", {
+          max_mb: String(Math.round(ATTACHMENTS_MAX_TOTAL_BYTES / 1_000_000)),
+        })
+      )
+      return
+    }
     const next = await readFilesAsAttachments(files)
     if (next.length === 0) return
+    setEditingAttachmentError(null)
     setEditingAttachments((prev) => [...prev, ...next])
-  }, [])
+  }, [editingAttachments, t])
+
+  const handleEditFilesSelected = useCallback((files: File[]) => {
+    void addEditingFiles(files)
+  }, [addEditingFiles])
 
   const handleComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
     if (!event.dataTransfer.types.includes("Files")) return
@@ -1602,6 +1639,41 @@ export const ChatPage = () => {
     const next = await readClipboardImagesAsAttachments(items)
     if (next.length > 0) {
       event.preventDefault()
+      if (editingAttachments.length + next.length > ATTACHMENTS_MAX_FILES) {
+        setEditingAttachmentError(
+          t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+        )
+        return
+      }
+      for (const attachment of next) {
+        const size = estimateBase64Bytes(attachment.data_base64 || "")
+        if (size > ATTACHMENTS_MAX_FILE_BYTES) {
+          setEditingAttachmentError(
+            t("chat_attachment_limit_file_size", {
+              file: attachment.file_name || t("chat_attachment_fallback_name"),
+              max_mb: String(Math.round(ATTACHMENTS_MAX_FILE_BYTES / 1_000_000)),
+            })
+          )
+          return
+        }
+      }
+      const currentTotal = editingAttachments.reduce(
+        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        0
+      )
+      const incomingTotal = next.reduce(
+        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        0
+      )
+      if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
+        setEditingAttachmentError(
+          t("chat_attachment_limit_total_size", {
+            max_mb: String(Math.round(ATTACHMENTS_MAX_TOTAL_BYTES / 1_000_000)),
+          })
+        )
+        return
+      }
+      setEditingAttachmentError(null)
       setEditingAttachments((prev) => [...prev, ...next])
       return
     }
@@ -1623,15 +1695,45 @@ export const ChatPage = () => {
       textarea.selectionStart = start + wrapped.length
       textarea.selectionEnd = start + wrapped.length
     })
-  }, [editingContent])
+  }, [editingAttachments, editingContent, t])
+
+  const handleEditDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    setIsEditDragActive(true)
+  }, [])
+
+  const handleEditDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+    setIsEditDragActive(true)
+  }, [])
+
+  const handleEditDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node)) return
+    setIsEditDragActive(false)
+  }, [])
+
+  const handleEditDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    setIsEditDragActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    void addEditingFiles(files)
+  }, [addEditingFiles])
 
   const removeEditingAttachment = useCallback((index: number) => {
+    setEditingAttachmentError(null)
     setEditingAttachments((prev) => prev.filter((_, idx) => idx !== index))
   }, [])
 
   const startEditMessage = useCallback((msg: ChatMessage) => {
     setEditingMessageId(msg.id)
     setEditingContent(msg.content)
+    setEditingAttachmentError(null)
+    setIsEditDragActive(false)
     setEditingAttachments(
       (msg.attachments ?? []).map((attachment) => ({
         upload_id:
@@ -1649,6 +1751,8 @@ export const ChatPage = () => {
     setEditingMessageId(null)
     setEditingContent("")
     setEditingAttachments([])
+    setEditingAttachmentError(null)
+    setIsEditDragActive(false)
   }, [])
 
   const saveEditedMessage = useCallback(async (msg: ChatMessage) => {
@@ -1934,8 +2038,10 @@ export const ChatPage = () => {
           currentToolLabel={currentToolLabel}
           actionsEnabled={!isSharedView}
           isEditing={isEditing}
+          isEditDragActive={isEditing && isEditDragActive}
           editingContent={isEditing ? editingContent : ""}
           editingAttachments={isEditing ? editingAttachments : []}
+          editAttachmentError={isEditing ? editingAttachmentError : null}
           codeTheme={codeTheme}
           t={t}
           getSourceLabel={getSourceLabel}
@@ -1947,6 +2053,10 @@ export const ChatPage = () => {
           onEditContentChange={setEditingContent}
           onEditPasteAttachments={handleEditPasteAttachments}
           onEditFilesSelected={handleEditFilesSelected}
+          onEditDragEnter={handleEditDragEnter}
+          onEditDragOver={handleEditDragOver}
+          onEditDragLeave={handleEditDragLeave}
+          onEditDrop={handleEditDrop}
           onRemoveEditingAttachment={removeEditingAttachment}
           onPreviewAttachment={setPreviewAttachment}
         />
@@ -1960,6 +2070,8 @@ export const ChatPage = () => {
       editingMessageId,
       editingContent,
       editingAttachments,
+      editingAttachmentError,
+      isEditDragActive,
       startEditMessage,
       deleteFromMessage,
       retryFailedMessage,
@@ -1967,6 +2079,10 @@ export const ChatPage = () => {
       cancelEditMessage,
       handleEditPasteAttachments,
       handleEditFilesSelected,
+      handleEditDragEnter,
+      handleEditDragOver,
+      handleEditDragLeave,
+      handleEditDrop,
       removeEditingAttachment,
       isSharedView,
     ]

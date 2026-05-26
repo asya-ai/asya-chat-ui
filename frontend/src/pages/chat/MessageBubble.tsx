@@ -26,8 +26,10 @@ type MessageBubbleProps = {
   currentToolLabel: string | null
   actionsEnabled: boolean
   isEditing: boolean
+  isEditDragActive: boolean
   editingContent: string
   editingAttachments: ChatMessageAttachmentInput[]
+  editAttachmentError?: string | null
   codeTheme: Record<string, CSSProperties>
   t: I18nContextValue["t"]
   getSourceLabel: (source: { url: string; title?: string | null; host?: string | null }) => string
@@ -39,6 +41,10 @@ type MessageBubbleProps = {
   onEditContentChange: (value: string) => void
   onEditPasteAttachments: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void
   onEditFilesSelected: (files: File[]) => void
+  onEditDragEnter: (event: React.DragEvent<HTMLDivElement>) => void
+  onEditDragOver: (event: React.DragEvent<HTMLDivElement>) => void
+  onEditDragLeave: (event: React.DragEvent<HTMLDivElement>) => void
+  onEditDrop: (event: React.DragEvent<HTMLDivElement>) => void
   onRemoveEditingAttachment: (index: number) => void
   onPreviewAttachment: (attachment: ChatMessageAttachmentInput) => void
 }
@@ -212,8 +218,10 @@ const MessageBubbleComponent = ({
   currentToolLabel,
   actionsEnabled,
   isEditing,
+  isEditDragActive,
   editingContent,
   editingAttachments,
+  editAttachmentError,
   codeTheme,
   t,
   getSourceLabel,
@@ -225,6 +233,10 @@ const MessageBubbleComponent = ({
   onEditContentChange,
   onEditPasteAttachments,
   onEditFilesSelected,
+  onEditDragEnter,
+  onEditDragOver,
+  onEditDragLeave,
+  onEditDrop,
   onRemoveEditingAttachment,
   onPreviewAttachment,
 }: MessageBubbleProps) => {
@@ -278,7 +290,7 @@ const MessageBubbleComponent = ({
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className="group max-w-[85%]">
+      <div className={`group ${isEditing ? "w-full max-w-3xl" : "max-w-[85%]"}`}>
         <div
           className="bg-muted px-4 py-2 rounded-lg overflow-hidden text-foreground text-sm break-words leading-relaxed whitespace-normal"
         >
@@ -469,7 +481,17 @@ const MessageBubbleComponent = ({
               </div>
             </details>
           ) : isEditing ? (
-            <div className="space-y-2">
+            <div
+              className={`space-y-2 rounded-md ${
+                isEditDragActive
+                  ? "ring-2 ring-primary/40 ring-offset-2 ring-offset-background"
+                  : ""
+              }`}
+              onDragEnter={onEditDragEnter}
+              onDragOver={onEditDragOver}
+              onDragLeave={onEditDragLeave}
+              onDrop={onEditDrop}
+            >
               <Textarea
                 value={editingContent}
                 onChange={(event) => onEditContentChange(event.target.value)}
@@ -482,8 +504,13 @@ const MessageBubbleComponent = ({
                   }
                 }}
                 rows={3}
-                className="bg-muted text-foreground"
+                className="min-h-32 max-h-[60vh] overflow-y-auto bg-muted text-foreground"
               />
+              {editAttachmentError ? (
+                <p className="text-destructive text-sm" role="alert">
+                  {editAttachmentError}
+                </p>
+              ) : null}
               {editingAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {editingAttachments.map((attachment, index) => {
@@ -956,8 +983,10 @@ export const MessageBubble = memo(
     }
     // Editing-only props should trigger rerender only for edited message bubble.
     if (next.isEditing) {
+      if (prev.isEditDragActive !== next.isEditDragActive) return false
       if (prev.editingContent !== next.editingContent) return false
       if (prev.editingAttachments !== next.editingAttachments) return false
+      if (prev.editAttachmentError !== next.editAttachmentError) return false
     }
     return true
   }
