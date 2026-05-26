@@ -4,7 +4,7 @@ import base64
 from uuid import UUID, uuid4
 
 from app.models import ChatMessageAttachment
-from app.services.tools.code_execution import _validate_imports, _write_inputs
+from app.services.tools.code_execution import _collect_outputs, _validate_imports, _write_inputs
 
 
 def _attachment(*, attachment_id: str, file_name: str, payload: bytes) -> ChatMessageAttachment:
@@ -45,3 +45,30 @@ def test_write_inputs_stages_raw_attachments_without_preprocessing(tmp_path) -> 
     ]
     assert (tmp_path / f"{shp_id}_roads.shp").read_bytes() == b"shp-bytes"
     assert (tmp_path / f"{zip_id}_bundle.zip").read_bytes() == b"zip-bytes"
+
+
+def test_collect_outputs_keeps_large_files_as_attachments(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "app.services.tools.code_execution.settings.exec_max_output_file_bytes",
+        3,
+    )
+    monkeypatch.setattr(
+        "app.services.tools.code_execution.settings.attachments_max_file_bytes",
+        20,
+    )
+    monkeypatch.setattr(
+        "app.services.tools.code_execution.settings.attachments_max_total_bytes",
+        20,
+    )
+    (tmp_path / "image.png").write_bytes(b"larger-than-inline")
+
+    attachments, output_items = _collect_outputs(tmp_path)
+
+    assert attachments == [
+        {
+            "file_name": "image.png",
+            "content_type": "image/png",
+            "data_base64": base64.b64encode(b"larger-than-inline").decode("ascii"),
+        }
+    ]
+    assert output_items == []

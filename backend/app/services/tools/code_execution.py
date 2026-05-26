@@ -202,10 +202,12 @@ def _prepare_run_dirs(chat_id: str) -> tuple[Path, Path, Path, Path, Path, Path]
 
 
 def _collect_outputs(
-    outputs_dir: Path, max_files: int = 10
+    outputs_dir: Path, max_files: int | None = None
 ) -> tuple[list[dict], list[dict]]:
     attachments: list[dict] = []
     output_items: list[dict] = []
+    max_files = max_files or settings.attachments_max_files
+    total_attachment_bytes = 0
     if not outputs_dir.exists():
         return attachments, output_items
     for path in sorted(outputs_dir.iterdir()):
@@ -218,9 +220,16 @@ def _collect_outputs(
         except Exception as exc:
             logger.warning("Failed to read output file %s: %s", path.name, exc)
             continue
-        if len(data) > settings.exec_max_output_file_bytes:
+        if len(data) > settings.attachments_max_file_bytes:
             logger.warning(
                 "Output file too large %s (%s bytes)", path.name, len(data)
+            )
+            continue
+        if total_attachment_bytes + len(data) > settings.attachments_max_total_bytes:
+            logger.warning(
+                "Output files exceed total attachment limit at %s (%s bytes)",
+                path.name,
+                total_attachment_bytes + len(data),
             )
             continue
         content_type, _ = mimetypes.guess_type(path.name)
@@ -232,13 +241,15 @@ def _collect_outputs(
                 "data_base64": encoded,
             }
         )
-        output_items.append(
-            {
-                "file_name": path.name,
-                "content_type": content_type or "application/octet-stream",
-                "data_base64": encoded,
-            }
-        )
+        total_attachment_bytes += len(data)
+        if len(data) <= settings.exec_max_output_file_bytes:
+            output_items.append(
+                {
+                    "file_name": path.name,
+                    "content_type": content_type or "application/octet-stream",
+                    "data_base64": encoded,
+                }
+            )
     return attachments, output_items
 
 
