@@ -10,6 +10,10 @@ from sqlalchemy import func
 
 from app.api.deps import get_current_user, get_db
 from app.models import ChatModel, Org, OrgModel, OrgMembership, OrgProviderConfig, User
+from app.services.model_capabilities import (
+    ensure_models_capabilities,
+    resolve_capabilities_for_storage,
+)
 from app.services.model_suggestions import get_model_suggestions
 from app.services.org_service import require_provider_enabled, require_super_admin
 from app.services.providers.registry import get_provider
@@ -197,15 +201,33 @@ def create_model(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Org not found"
             )
         _validate_vertex_model_invokable(session, org_uuid, normalized_model_name)
+    resolved_input, resolved_output, resolved_context = resolve_capabilities_for_storage(
+        payload.provider, normalized_model_name
+    )
+    supports_image_input_value = (
+        payload.supports_image_input
+        if payload.supports_image_input is not None
+        else resolved_input
+    )
+    supports_image_output_value = (
+        payload.supports_image_output
+        if payload.supports_image_output is not None
+        else resolved_output
+    )
+    context_length = (
+        payload.context_length
+        if payload.context_length is not None
+        else resolved_context
+    )
     model = ChatModel(
         provider=payload.provider,
         model_name=normalized_model_name,
         display_name=payload.display_name,
         is_active=payload.is_active,
         display_order=max_order + 1,
-        context_length=payload.context_length,
-        supports_image_input=payload.supports_image_input,
-        supports_image_output=payload.supports_image_output,
+        context_length=context_length,
+        supports_image_input=supports_image_input_value,
+        supports_image_output=supports_image_output_value,
         reasoning_effort=_normalize_reasoning_effort(payload.reasoning_effort),
     )
     session.add(model)
@@ -244,6 +266,7 @@ def list_models(
             .where(ChatModel.is_active.is_(True))
             .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
         ).all()
+        ensure_models_capabilities(session, models)
         return [
             ModelRead(
                 id=str(model.id),
@@ -287,6 +310,7 @@ def list_models(
         .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
     )
     models = session.exec(models_query).all()
+    ensure_models_capabilities(session, models)
     return [
         ModelRead(
             id=str(model.id),

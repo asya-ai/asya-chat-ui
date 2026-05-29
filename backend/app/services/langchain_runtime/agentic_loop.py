@@ -10,6 +10,7 @@ from app.services.tools.registry import ToolResult, ToolRegistry
 from app.services.langchain_runtime.tool_adapters import LangChainToolExecutor
 
 WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
+WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
 
 
 def _merge_chat_usage(base: ChatUsage | None, extra: ChatUsage | None) -> ChatUsage | None:
@@ -42,6 +43,19 @@ def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
     return answer, quotes, insufficient
 
 
+def _build_markdown_context(markdown: str) -> str:
+    if len(markdown) <= WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT:
+        return markdown
+    head_len = int(WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT * WEB_SCRAPE_ANSWER_HEAD_RATIO)
+    head_len = max(head_len, 1)
+    tail_len = max(WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT - head_len, 1)
+    return (
+        markdown[:head_len].rstrip()
+        + "\n\n[... source content omitted for length ...]\n\n"
+        + markdown[-tail_len:].lstrip()
+    )
+
+
 async def _generate_web_scrape_answer(
     *,
     provider: Any,
@@ -64,8 +78,7 @@ async def _generate_web_scrape_answer(
     if not markdown:
         normalized["error"] = "No markdown extracted for answering"
         return normalized, None
-    if len(markdown) > WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT:
-        markdown = markdown[:WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT]
+    markdown = _build_markdown_context(markdown)
 
     instructions = (
         "Analyze the provided website content and answer the question.\n"

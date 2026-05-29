@@ -165,6 +165,7 @@ const translations = {
     chat_attachment_limit_total_size:
       "Combined attachments are too large. Maximum total size is {max_mb} MB.",
     chat_attachment_upload_failed: "Attachment upload failed.",
+    chat_attachment_image_not_supported: "Images are not supported for the selected model.",
     chat_reasoning_effort: "Reasoning effort",
     chat_reasoning_default: "Default",
     chat_reasoning_low: "Low",
@@ -486,6 +487,7 @@ const translations = {
     chat_attachment_limit_total_size:
       "Kopējais pielikumu izmērs ir pārāk liels. Maksimālais kopējais izmērs ir {max_mb} MB.",
     chat_attachment_upload_failed: "Pielikuma augšupielāde neizdevās.",
+    chat_attachment_image_not_supported: "Atlasītajam modelim attēli netiek atbalstīti.",
     chat_reasoning_effort: "Spriešanas līmenis",
     chat_reasoning_default: "Noklusējums",
     chat_reasoning_low: "Zems",

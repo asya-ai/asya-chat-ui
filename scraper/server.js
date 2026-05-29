@@ -156,6 +156,29 @@ const compactMarkdown = (markdown) => {
   return normalized;
 };
 
+const markdownWordCount = (markdown) =>
+  String(markdown || "")
+    .split(/\s+/g)
+    .filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+
+const looksBoilerplateMarkdown = (markdown) => {
+  const text = String(markdown || "").toLowerCase();
+  if (!text) return true;
+  const boilerplateHits = [
+    "cookie",
+    "consent",
+    "privacy",
+    "terms",
+    "policy",
+    "gdpr",
+    "sīkdat",
+    "privāt",
+    "noteikumi",
+  ].filter((token) => text.includes(token)).length;
+  // A short, legal/consent-heavy extract usually means Readability selected the wrong block.
+  return boilerplateHits >= 2 && markdownWordCount(text) < 220;
+};
+
 const cleanupDocument = (document) => {
   const config = loadBlockedSelectorsConfig();
 
@@ -319,16 +342,52 @@ const captureScreenshotSafe = async (page) => {
   }
 };
 
+const htmlFragmentToMarkdown = (html, url) => {
+  const fragmentDom = new JSDOM(html || "", { url });
+  cleanupDocument(fragmentDom.window.document);
+  const turndown = new TurndownService({ headingStyle: "atx" });
+  return compactMarkdown(
+    turndown.turndown(fragmentDom.window.document.body.innerHTML || ""),
+  );
+};
+
+const shouldUseBodyFallback = (articleMarkdown, bodyMarkdown) => {
+  if (!bodyMarkdown) return false;
+  if (!articleMarkdown) return true;
+
+  const articleWords = markdownWordCount(articleMarkdown);
+  const bodyWords = markdownWordCount(bodyMarkdown);
+
+  if (articleWords < 50 && bodyWords > articleWords * 2.2) return true;
+  if (
+    articleMarkdown.length < 450 &&
+    bodyMarkdown.length > articleMarkdown.length * 2.2
+  ) {
+    return true;
+  }
+  if (
+    looksBoilerplateMarkdown(articleMarkdown) &&
+    bodyWords > Math.max(articleWords * 1.2, 80)
+  ) {
+    return true;
+  }
+  return false;
+};
+
 const toMarkdown = (html, url) => {
   const dom = new JSDOM(html, { url });
   cleanupDocument(dom.window.document);
   const reader = new Readability(dom.window.document);
   const article = reader.parse();
-  const content = article?.content || dom.window.document.body.innerHTML || "";
-  const contentDom = new JSDOM(content, { url });
-  cleanupDocument(contentDom.window.document);
-  const turndown = new TurndownService({ headingStyle: "atx" });
-  return compactMarkdown(turndown.turndown(contentDom.window.document.body.innerHTML || ""));
+  const bodyHtml = dom.window.document.body?.innerHTML || "";
+  const bodyMarkdown = htmlFragmentToMarkdown(bodyHtml, url);
+  const articleMarkdown = article?.content
+    ? htmlFragmentToMarkdown(article.content, url)
+    : "";
+  if (shouldUseBodyFallback(articleMarkdown, bodyMarkdown)) {
+    return bodyMarkdown;
+  }
+  return articleMarkdown || bodyMarkdown;
 };
 
 app.post("/scrape", async (req, res) => {

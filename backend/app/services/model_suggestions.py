@@ -14,6 +14,7 @@ from groq import Groq
 from openai import OpenAI
 
 from app.core.config import settings
+from app.services.model_capabilities import infer_capabilities_for_model
 
 
 _VERTEX_KNOWN_GEMINI_MODELS = (
@@ -48,7 +49,11 @@ def _detect_modalities(value: object) -> set[str]:
     return set()
 
 
-def _infer_image_support(model_name: str) -> tuple[bool | None, bool | None]:
+def _infer_image_support(
+    model_name: str, *, provider: str | None = None
+) -> tuple[bool | None, bool | None]:
+    if provider:
+        return infer_capabilities_for_model(provider, model_name)
     lowered = model_name.lower()
     if "image" in lowered or "vision" in lowered:
         return True, "image" in lowered
@@ -157,7 +162,7 @@ def _openai_models() -> tuple[list[dict[str, object]], str | None]:
             supports_image_output = (
                 "image" in output_modalities if output_modalities else None
             )
-            inferred_input, inferred_output = _infer_image_support(model.id)
+            inferred_input, inferred_output = _infer_image_support(model.id, provider="openai")
             if supports_image_input is None:
                 supports_image_input = inferred_input
             if supports_image_output is None:
@@ -184,7 +189,7 @@ def _groq_models() -> tuple[list[dict[str, object]], str | None]:
         models = client.models.list()
         items = []
         for model in models.data:
-            inferred_input, inferred_output = _infer_image_support(model.id)
+            inferred_input, inferred_output = _infer_image_support(model.id, provider="groq")
             items.append(
                 {
                     "model_name": model.id,
@@ -223,7 +228,7 @@ def _gemini_models() -> tuple[list[dict[str, object]], str | None]:
             supports_image_output = (
                 "image" in output_modalities if output_modalities else None
             )
-            inferred_input, inferred_output = _infer_image_support(name)
+            inferred_input, inferred_output = _infer_image_support(name, provider="gemini")
             if supports_image_input is None:
                 supports_image_input = inferred_input
             if supports_image_output is None:
@@ -256,7 +261,9 @@ def _anthropic_models() -> tuple[list[dict[str, object]], str | None]:
             if not model_id:
                 continue
             display = getattr(model, "name", None) or model_id
-            inferred_input, inferred_output = _infer_image_support(str(model_id))
+            inferred_input, inferred_output = _infer_image_support(
+                str(model_id), provider="anthropic"
+            )
             items.append(
                 {
                     "model_name": model_id,
@@ -323,7 +330,7 @@ def _azure_models() -> tuple[list[dict[str, object]], str | None]:
             if not isinstance(name, str) or not name.strip():
                 continue
             deployment = name.strip()
-            inferred_input, inferred_output = _infer_image_support(deployment)
+            inferred_input, inferred_output = _infer_image_support(deployment, provider="azure")
             items.append(
                 {
                     "model_name": deployment,
@@ -355,7 +362,9 @@ def _openrouter_models() -> tuple[list[dict[str, object]], str | None]:
         models = client.models.list()
         items = []
         for model in models.data:
-            inferred_input, inferred_output = _infer_image_support(model.id)
+            inferred_input, inferred_output = _infer_image_support(
+                model.id, provider="openrouter"
+            )
             items.append(
                 {
                     "model_name": model.id,
@@ -435,7 +444,7 @@ def _vertex_models() -> tuple[list[dict[str, object]], str | None]:
             supports_image_output = (
                 "image" in output_modalities if output_modalities else None
             )
-            inferred_input, inferred_output = _infer_image_support(name)
+            inferred_input, inferred_output = _infer_image_support(name, provider="vertex")
             if supports_image_input is None:
                 supports_image_input = inferred_input
             if supports_image_output is None:
@@ -455,7 +464,9 @@ def _vertex_models() -> tuple[list[dict[str, object]], str | None]:
         for model_name in _VERTEX_KNOWN_GEMINI_MODELS:
             if model_name in existing_names:
                 continue
-            inferred_input, inferred_output = _infer_image_support(model_name)
+            inferred_input, inferred_output = _infer_image_support(
+                model_name, provider="vertex"
+            )
             items.append(
                 {
                     "model_name": model_name,

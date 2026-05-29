@@ -448,14 +448,18 @@ export const OrgPage = () => {
 
   const createModel = async () => {
     if (!selectedOrg) return
+    const trimmedName = modelName.trim()
+    const matchedSuggestion = currentProviderSuggestions.find(
+      (item) => item.model_name === trimmedName
+    )
     const model = await modelApi.create({
       org_id: selectedOrg,
       provider: modelProvider,
-      model_name: modelName,
-      display_name: modelDisplayName || modelName,
-      context_length: null,
-      supports_image_input: null,
-      supports_image_output: null,
+      model_name: trimmedName,
+      display_name: modelDisplayName || trimmedName,
+      context_length: matchedSuggestion?.context_length ?? null,
+      supports_image_input: matchedSuggestion?.supports_image_input ?? null,
+      supports_image_output: matchedSuggestion?.supports_image_output ?? null,
       reasoning_effort: modelReasoningEffort,
       is_active: true,
     })

@@ -5,7 +5,7 @@ import logging
 import re
 import secrets
 from io import BytesIO
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -43,6 +43,11 @@ from app.models import (
     UserMemory,
 )
 from app.services.org_service import require_org_member, require_provider_enabled
+from app.services.model_capabilities import (
+    ensure_model_capabilities,
+    supports_image_input,
+    supports_image_output,
+)
 from app.services.providers.base import ChatResponse, ChatUsage
 from app.services.providers.registry import get_provider
 from app.services.system_prompts import build_system_prompt_messages
@@ -82,6 +87,8 @@ TAIL_CONTEXT_MESSAGES = 12
 MAX_TOOL_STEPS = 25
 MAX_WEB_SEARCH_CALLS = 3
 MAX_WEB_SCRAPE_CALLS = 10
+WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
+WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
 CHAT_NOT_SHARED_DETAIL = "CHAT_NOT_SHARED"
 
 
@@ -265,13 +272,22 @@ def _prepend_tool_guidance(
 
 
 def _is_image_output_model(model: ChatModel) -> bool:
-    if "image" in model.model_name.lower():
-        return True
-    if model.supports_image_output is True:
-        return True
-    if model.supports_image_output is False:
-        return False
-    return False
+    return supports_image_output(model)
+
+
+def _ensure_model_supports_image_attachments(
+    model: ChatModel,
+    attachments: Iterable[Any],
+) -> None:
+    has_image_attachments = any(
+        (getattr(attachment, "content_type", "") or "").startswith("image/")
+        for attachment in attachments
+    )
+    if has_image_attachments and not supports_image_input(model):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Images are not supported for this model",
+        )
 
 
 def _grounding_enabled(org: Org, provider: str) -> bool:
@@ -946,6 +962,19 @@ def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
     return answer, quotes, insufficient
 
 
+def _build_web_answer_markdown_context(markdown: str) -> str:
+    if len(markdown) <= WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT:
+        return markdown
+    head_len = int(WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT * WEB_SCRAPE_ANSWER_HEAD_RATIO)
+    head_len = max(head_len, 1)
+    tail_len = max(WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT - head_len, 1)
+    return (
+        markdown[:head_len].rstrip()
+        + "\n\n[... source content omitted for length ...]\n\n"
+        + markdown[-tail_len:].lstrip()
+    )
+
+
 def _merge_chat_usage(
     first: ChatUsage | None,
     second: ChatUsage | None,
@@ -1008,9 +1037,7 @@ async def _generate_web_scrape_answer(
         "4) Return strict JSON with keys: answer (string), insufficient_information (boolean), quotes (array of strings).\n"
         "5) quotes must contain direct quotes from the source, or be [] when insufficient."
     )
-    markdown_block = markdown
-    if len(markdown_block) > 12000:
-        markdown_block = markdown_block[:12000]
+    markdown_block = _build_web_answer_markdown_context(markdown)
 
     user_content: list[dict[str, Any]] = [
         {
@@ -1023,7 +1050,7 @@ async def _generate_web_scrape_answer(
         str(analysis_input.get("screenshot_content_type") or "image/png").strip()
         or "image/png"
     )
-    include_image = screenshot_base64 and model.supports_image_input is True
+    include_image = screenshot_base64 and supports_image_input(model)
     if include_image:
         user_content.append(
             {
@@ -2086,6 +2113,7 @@ async def _stream_message_ws(
     if not model:
         await _ws_send_event(websocket, {"error": "Model not found"})
         return
+    model = ensure_model_capabilities(session, model)
     enabled = session.exec(
         select(OrgModel).where(
             OrgModel.org_id == chat.org_id,
@@ -2118,6 +2146,11 @@ async def _stream_message_ws(
                 current_user=current_user,
                 items=payload.attachments,
             )
+        except HTTPException as exc:
+            await _ws_send_event(websocket, {"error": str(exc.detail)})
+            return
+        try:
+            _ensure_model_supports_image_attachments(model, resolved_attachments)
         except HTTPException as exc:
             await _ws_send_event(websocket, {"error": str(exc.detail)})
             return
@@ -2228,6 +2261,7 @@ async def _stream_edit_ws(
     if not model:
         await _ws_send_event(websocket, {"error": "Model not found"})
         return
+    model = ensure_model_capabilities(session, model)
     enabled = session.exec(
         select(OrgModel).where(
             OrgModel.org_id == chat.org_id,
@@ -2271,6 +2305,11 @@ async def _stream_edit_ws(
                 ChatMessageAttachment.message_id == message.id
             )
         ).all()
+        try:
+            _ensure_model_supports_image_attachments(model, prev_attachments)
+        except HTTPException as exc:
+            await _ws_send_event(websocket, {"error": str(exc.detail)})
+            return
         if prev_attachments:
             session.add_all(
                 [
@@ -2293,6 +2332,11 @@ async def _stream_edit_ws(
                     current_user=current_user,
                     items=payload.attachments,
                 )
+            except HTTPException as exc:
+                await _ws_send_event(websocket, {"error": str(exc.detail)})
+                return
+            try:
+                _ensure_model_supports_image_attachments(model, resolved_attachments)
             except HTTPException as exc:
                 await _ws_send_event(websocket, {"error": str(exc.detail)})
                 return
@@ -3165,6 +3209,7 @@ async def create_message(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Model not found"
         )
+    model = ensure_model_capabilities(session, model)
     enabled = session.exec(
         select(OrgModel).where(
             OrgModel.org_id == chat.org_id,
@@ -3196,6 +3241,7 @@ async def create_message(
             current_user=current_user,
             items=payload.attachments,
         )
+        _ensure_model_supports_image_attachments(model, resolved_attachments)
         for item in resolved_attachments:
             attachments.append(
                 ChatMessageAttachment(
@@ -3335,13 +3381,8 @@ async def create_message(
                 ]
             else:
                 image_attachments = []
-            if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Images are not supported for this model provider",
-                )
             attachment_lines = _attachment_lines(msg_attachments)
-            if not image_attachments:
+            if not image_attachments or not supports_image_input(model):
                 text = msg.content or ""
                 if attachment_lines:
                     text += (
@@ -4034,6 +4075,7 @@ async def edit_message(
     model = session.exec(select(ChatModel).where(ChatModel.id == model_id)).first()
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    model = ensure_model_capabilities(session, model)
     enabled = session.exec(
         select(OrgModel).where(
             OrgModel.org_id == chat.org_id,
@@ -4078,6 +4120,7 @@ async def edit_message(
                 ChatMessageAttachment.message_id == message.id
             )
         ).all()
+        _ensure_model_supports_image_attachments(model, prev_attachments)
         if prev_attachments:
             session.add_all(
                 [
@@ -4099,6 +4142,7 @@ async def edit_message(
                 current_user=current_user,
                 items=payload.attachments,
             )
+            _ensure_model_supports_image_attachments(model, resolved_attachments)
             session.add_all(
                 [
                     ChatMessageAttachment(
@@ -4238,13 +4282,8 @@ async def edit_message(
                 ]
             else:
                 image_attachments = []
-            if image_attachments and model.provider not in {"openai", "azure", "gemini"}:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Images are not supported for this model provider",
-                )
             attachment_lines = _attachment_lines(msg_attachments)
-            if not image_attachments:
+            if not image_attachments or not supports_image_input(model):
                 text = msg.content or ""
                 if attachment_lines:
                     text += (

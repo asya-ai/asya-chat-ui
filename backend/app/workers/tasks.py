@@ -28,6 +28,7 @@ from app.api.chats import (
     _run_agentic_loop,
     _truncate_messages,
 )
+from app.services.model_capabilities import ensure_model_capabilities, supports_image_input
 from app.core.config import settings
 from app.db.session import engine
 from app.models.entities import (
@@ -180,7 +181,7 @@ def _build_provider_messages(
         else:
             image_attachments = []
         attachment_lines = _attachment_lines(msg_attachments)
-        if not image_attachments:
+        if not image_attachments or not supports_image_input(model):
             text = msg.content or ""
             if attachment_lines:
                 text += (
@@ -189,8 +190,6 @@ def _build_provider_messages(
                 )
             items.append({"role": msg.role, "content": text})
             continue
-        if model.provider not in {"openai", "azure", "gemini"}:
-            raise ValueError("Images are not supported for this model provider")
         content_parts: list[dict[str, Any]] = []
         if msg.content:
             content_parts.append({"type": "text", "text": msg.content})
@@ -449,6 +448,7 @@ async def _run_generation(task_id: UUID) -> None:
             task.error = "Model not found"
             session.commit()
             return
+        model = ensure_model_capabilities(session, model)
 
         org = session.get(Org, chat.org_id)
         if not org:
@@ -598,103 +598,103 @@ async def _run_generation(task_id: UUID) -> None:
             ).all()
             if mem_rows:
                 user_memories = [{"id": str(m.id), "content": m.content} for m in mem_rows]
-        messages = _build_provider_messages(
-            history=history,
-            attachments_by_message=attachments_by_message,
-            model=model,
-            locale=task.metadata_json.get("locale") if task.metadata_json else None,
-            timezone=task.metadata_json.get("timezone") if task.metadata_json else None,
-            enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
-            memories=user_memories,
-        )
-        agent_sources: list[dict[str, Any]] = []
-        if chat.agent_id:
-            latest_user_message = next(
-                (
-                    item
-                    for item in reversed(history)
-                    if item.role == "user" and item.content and item.content.strip()
-                ),
-                None,
-            )
-            if latest_user_message:
-                retrieval_event_id = str(uuid4())
-                _append_event(
-                    session,
-                    task.id,
-                    sequence_ref,
-                    "tool_event",
-                    {
-                        "type": "tool_call",
-                        "id": retrieval_event_id,
-                        "tool_name": "agent_source_retrieval",
-                        "state": "start",
-                        "input_preview": (latest_user_message.content or "")[:160],
-                    },
-                )
-                chunks = retrieve_agent_chunks(
-                    session,
-                    agent_id=chat.agent_id,
-                    query=latest_user_message.content,
-                    limit=6,
-                )
-                context_blocks: list[str] = []
-                for idx, (chunk, source, _score) in enumerate(chunks, start=1):
-                    agent_sources.append(
-                        {
-                            "source_id": str(source.id),
-                            "title": source.title,
-                            "url": source.url,
-                            "snippet": chunk.content[:300],
-                        }
-                    )
-                    context_blocks.append(f"[Source {idx}] {source.title}\n{chunk.content}")
-                _append_event(
-                    session,
-                    task.id,
-                    sequence_ref,
-                    "tool_event",
-                    {
-                        "type": "tool_call",
-                        "id": retrieval_event_id,
-                        "tool_name": "agent_source_retrieval",
-                        "state": "end",
-                        "output": {
-                            "status": "ok",
-                            "result_preview": (
-                                f"Retrieved {len(chunks)} source chunks"
-                                if chunks
-                                else "No matching source chunks found"
-                            ),
-                        },
-                    },
-                )
-                if context_blocks:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                "Use the provided agent source context when relevant. "
-                                "If context is insufficient, say so clearly.\n\n"
-                                f"Agent source context:\n{'\n\n'.join(context_blocks)}"
-                            ),
-                        }
-                    )
-        messages = await _summarize_context_if_needed(
-            session=session,
-            task_id=task.id,
-            sequence_ref=sequence_ref,
-            provider=provider,
-            model=model,
-            messages=messages,
-        )
-
-        usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
-        tool_attachments: list[dict] | None = None
-        tool_sources: list[dict] | None = None
-        image_usages: list[dict] = []
-
         try:
+            messages = _build_provider_messages(
+                history=history,
+                attachments_by_message=attachments_by_message,
+                model=model,
+                locale=task.metadata_json.get("locale") if task.metadata_json else None,
+                timezone=task.metadata_json.get("timezone") if task.metadata_json else None,
+                enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
+                memories=user_memories,
+            )
+            agent_sources: list[dict[str, Any]] = []
+            if chat.agent_id:
+                latest_user_message = next(
+                    (
+                        item
+                        for item in reversed(history)
+                        if item.role == "user" and item.content and item.content.strip()
+                    ),
+                    None,
+                )
+                if latest_user_message:
+                    retrieval_event_id = str(uuid4())
+                    _append_event(
+                        session,
+                        task.id,
+                        sequence_ref,
+                        "tool_event",
+                        {
+                            "type": "tool_call",
+                            "id": retrieval_event_id,
+                            "tool_name": "agent_source_retrieval",
+                            "state": "start",
+                            "input_preview": (latest_user_message.content or "")[:160],
+                        },
+                    )
+                    chunks = retrieve_agent_chunks(
+                        session,
+                        agent_id=chat.agent_id,
+                        query=latest_user_message.content,
+                        limit=6,
+                    )
+                    context_blocks: list[str] = []
+                    for idx, (chunk, source, _score) in enumerate(chunks, start=1):
+                        agent_sources.append(
+                            {
+                                "source_id": str(source.id),
+                                "title": source.title,
+                                "url": source.url,
+                                "snippet": chunk.content[:300],
+                            }
+                        )
+                        context_blocks.append(f"[Source {idx}] {source.title}\n{chunk.content}")
+                    _append_event(
+                        session,
+                        task.id,
+                        sequence_ref,
+                        "tool_event",
+                        {
+                            "type": "tool_call",
+                            "id": retrieval_event_id,
+                            "tool_name": "agent_source_retrieval",
+                            "state": "end",
+                            "output": {
+                                "status": "ok",
+                                "result_preview": (
+                                    f"Retrieved {len(chunks)} source chunks"
+                                    if chunks
+                                    else "No matching source chunks found"
+                                ),
+                            },
+                        },
+                    )
+                    if context_blocks:
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Use the provided agent source context when relevant. "
+                                    "If context is insufficient, say so clearly.\n\n"
+                                    f"Agent source context:\n{'\n\n'.join(context_blocks)}"
+                                ),
+                            }
+                        )
+            messages = await _summarize_context_if_needed(
+                session=session,
+                task_id=task.id,
+                sequence_ref=sequence_ref,
+                provider=provider,
+                model=model,
+                messages=messages,
+            )
+
+            usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
+            tool_attachments: list[dict] | None = None
+            tool_sources: list[dict] | None = None
+            image_usages: list[dict] = []
+
             _ensure_task_not_cancelled(session, task.id)
             if _is_image_output_model(model):
                 latest_user_message = next(

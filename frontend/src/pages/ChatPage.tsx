@@ -21,6 +21,7 @@ import type {
   GenerationStatus,
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
+import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -306,17 +307,10 @@ export const ChatPage = () => {
   const modelNameById = useMemo(() => {
     return Object.fromEntries(models.map((model) => [model.id, model.display_name]))
   }, [models])
-  const isImageOutputModel = useCallback((model: ChatModel) => {
-    if (model.supports_image_output === true) return true
-    if (model.supports_image_output === false) return false
-    const name = `${model.display_name} ${model.model_name}`.toLowerCase()
-    return (
-      name.includes("image") ||
-      name.includes("dall-e") ||
-      name.includes("gpt-image") ||
-      name.includes("imagen")
-    )
-  }, [])
+  const isImageOutputModel = useCallback(
+    (model: ChatModel) => supportsImageOutput(model),
+    []
+  )
   const isEmbeddingModel = useCallback((model: ChatModel) => {
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
     return /(^|[\s/_-])(embedding|embeddings|text-embedding|embed)([\s/_-]|$)/.test(
@@ -326,6 +320,26 @@ export const ChatPage = () => {
   const selectableChatModels = useMemo(
     () => models.filter((model) => !isEmbeddingModel(model)),
     [models, isEmbeddingModel]
+  )
+  const selectedChatModel = useMemo(
+    () => selectableChatModels.find((model) => model.id === selectedModel) ?? null,
+    [selectableChatModels, selectedModel]
+  )
+  const rejectUnsupportedImageAttachments = useCallback(
+    (
+      items: Array<{ content_type?: string | null }>,
+      setError: (value: string | null) => void
+    ) => {
+      const hasImages = items.some((item) =>
+        (item.content_type ?? "").startsWith("image/")
+      )
+      if (hasImages && !supportsImageInput(selectedChatModel)) {
+        setError(t("chat_attachment_image_not_supported"))
+        return true
+      }
+      return false
+    },
+    [selectedChatModel, t]
   )
 
   const parseChatDate = useCallback((value: string) => {
@@ -1332,6 +1346,14 @@ export const ChatPage = () => {
   }
 
   const handleFilesSelected = async (files: File[]) => {
+    if (
+      rejectUnsupportedImageAttachments(
+        files.map((file) => ({ content_type: file.type })),
+        setAttachmentError
+      )
+    ) {
+      return
+    }
     if (pendingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
       setAttachmentError(
         t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
@@ -1456,6 +1478,10 @@ export const ChatPage = () => {
     const items = event.clipboardData.items
     const next = await readClipboardImagesAsAttachments(items)
     if (next.length > 0) {
+      if (rejectUnsupportedImageAttachments(next, setAttachmentError)) {
+        event.preventDefault()
+        return
+      }
       if (pendingAttachments.length + next.length > ATTACHMENTS_MAX_FILES) {
         event.preventDefault()
         setAttachmentError(
@@ -1527,6 +1553,14 @@ export const ChatPage = () => {
   }
 
   const addEditingFiles = useCallback(async (files: File[]) => {
+    if (
+      rejectUnsupportedImageAttachments(
+        files.map((file) => ({ content_type: file.type })),
+        setEditingAttachmentError
+      )
+    ) {
+      return
+    }
     if (editingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
       setEditingAttachmentError(
         t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
@@ -1561,7 +1595,7 @@ export const ChatPage = () => {
     if (next.length === 0) return
     setEditingAttachmentError(null)
     setEditingAttachments((prev) => [...prev, ...next])
-  }, [editingAttachments, t])
+  }, [editingAttachments, rejectUnsupportedImageAttachments, t])
 
   const handleEditFilesSelected = useCallback((files: File[]) => {
     void addEditingFiles(files)
@@ -1593,6 +1627,14 @@ export const ChatPage = () => {
     setIsDragActive(false)
     const files = Array.from(event.dataTransfer.files ?? [])
     if (files.length === 0) return
+    if (
+      rejectUnsupportedImageAttachments(
+        files.map((file) => ({ content_type: file.type })),
+        setAttachmentError
+      )
+    ) {
+      return
+    }
     if (pendingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
       setAttachmentError(
         t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
