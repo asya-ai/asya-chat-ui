@@ -4,7 +4,7 @@ import base64
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pypdf import PdfReader
 from sqlmodel import Session, select
@@ -20,6 +20,7 @@ DEFAULT_PREVIEW_PAGES = 5
 class PdfToolContext:
     session: Session
     chat_id: str
+    pending_attachments: list[dict[str, Any]] | None = None
 
 
 def _chat_attachments(session: Session, chat_id: str) -> list[ChatMessageAttachment]:
@@ -34,6 +35,42 @@ def _chat_attachments(session: Session, chat_id: str) -> list[ChatMessageAttachm
             ChatMessageAttachment.message_id.in_(message_ids)
         )
     ).all()
+
+
+def _pending_chat_attachments(
+    pending_attachments: list[dict[str, Any]] | None,
+) -> list[ChatMessageAttachment]:
+    if not pending_attachments:
+        return []
+    items: list[ChatMessageAttachment] = []
+    for raw in pending_attachments:
+        if not isinstance(raw, dict):
+            continue
+        file_name = str(raw.get("file_name") or "").strip()
+        content_type = str(raw.get("content_type") or "").strip()
+        data_base64 = str(raw.get("data_base64") or "").strip()
+        if not (file_name and content_type and data_base64):
+            continue
+        attachment_id = str(raw.get("attachment_id") or "").strip()
+        if not attachment_id:
+            attachment_id = str(uuid4())
+            raw["attachment_id"] = attachment_id
+        try:
+            parsed_id = UUID(attachment_id)
+        except Exception:
+            attachment_id = str(uuid4())
+            raw["attachment_id"] = attachment_id
+            parsed_id = UUID(attachment_id)
+        items.append(
+            ChatMessageAttachment(
+                id=parsed_id,
+                message_id=UUID(int=0),
+                file_name=file_name,
+                content_type=content_type,
+                data_base64=data_base64,
+            )
+        )
+    return items
 
 
 def _is_pdf_attachment(attachment: ChatMessageAttachment) -> bool:
@@ -111,6 +148,7 @@ async def extract_pdf(
     page_to: int | None = None,
 ) -> ToolResult:
     attachments = _chat_attachments(context.session, context.chat_id)
+    attachments.extend(_pending_chat_attachments(context.pending_attachments))
     attachment = _pick_pdf_attachment(
         attachments,
         attachment_id=attachment_id,

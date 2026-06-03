@@ -183,23 +183,23 @@ def create_model(
     current_user: User = Depends(get_current_user),
 ) -> ModelRead:
     require_super_admin(current_user)
+    try:
+        org_uuid = UUID(payload.org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    org = session.exec(select(Org).where(Org.id == org_uuid)).first()
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Org not found"
+        )
 
     max_order = session.exec(select(func.max(ChatModel.display_order))).first() or 0
     normalized_model_name = _normalize_provider_model_name(
         payload.provider, payload.model_name
     )
     if payload.provider == "vertex":
-        try:
-            org_uuid = UUID(payload.org_id)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
-            ) from exc
-        org = session.exec(select(Org).where(Org.id == org_uuid)).first()
-        if not org:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Org not found"
-            )
         _validate_vertex_model_invokable(session, org_uuid, normalized_model_name)
     resolved_input, resolved_output, resolved_context = resolve_capabilities_for_storage(
         payload.provider, normalized_model_name
@@ -233,6 +233,21 @@ def create_model(
     session.add(model)
     session.commit()
     session.refresh(model)
+
+    link = session.exec(
+        select(OrgModel).where(
+            OrgModel.org_id == org_uuid,
+            OrgModel.model_id == model.id,
+        )
+    ).first()
+    if link:
+        if not link.is_enabled:
+            link.is_enabled = True
+            session.add(link)
+    else:
+        session.add(OrgModel(org_id=org_uuid, model_id=model.id, is_enabled=True))
+    session.commit()
+
     return ModelRead(
         id=str(model.id),
         provider=model.provider,

@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { loginOrgStore, modelStore, orgStore } from "@/lib/storage"
+import { loginOrgStore } from "@/lib/storage"
 
 export const LoginPage = () => {
   const navigate = useNavigate()
@@ -81,8 +81,6 @@ export const LoginPage = () => {
       }
       const data = await authApi.login(identifier, password, orgValue || null)
       setToken(data.access_token)
-      orgStore.clear()
-      modelStore.clear()
       navigate("/chat")
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_login_failed"))

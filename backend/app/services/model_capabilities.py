@@ -116,10 +116,27 @@ def lookup_suggested_capabilities(
     return None, None, None
 
 
-def resolve_capabilities_for_storage(
+def _resolve_without_suggestions(
     provider: str,
     model_name: str,
 ) -> tuple[bool, bool, int | None]:
+    inferred_input, inferred_output = infer_capabilities_for_model(provider, model_name)
+
+    final_input = inferred_input if inferred_input is not None else False
+    final_output = inferred_output if inferred_output is not None else False
+
+    return final_input, final_output, None
+
+
+def resolve_capabilities_for_storage(
+    provider: str,
+    model_name: str,
+    *,
+    use_suggestions: bool = False,
+) -> tuple[bool, bool, int | None]:
+    if not use_suggestions:
+        return _resolve_without_suggestions(provider, model_name)
+
     suggested_input, suggested_output, suggested_context = lookup_suggested_capabilities(
         provider, model_name
     )
@@ -138,7 +155,9 @@ def resolve_capabilities_for_storage(
 
 def _apply_missing_capabilities(model: ChatModel) -> bool:
     resolved_input, resolved_output, resolved_context = resolve_capabilities_for_storage(
-        model.provider, model.model_name
+        model.provider,
+        model.model_name,
+        use_suggestions=False,
     )
     changed = False
     if model.supports_image_input is None or (

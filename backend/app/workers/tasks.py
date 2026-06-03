@@ -570,6 +570,7 @@ async def _run_generation(task_id: UUID) -> None:
             org.web_scrape_enabled,
             requested_web_enabled,
         )
+        pending_tool_attachments: list[dict[str, Any]] = []
         tool_registry = _build_tool_registry(
             session,
             chat.org_id,
@@ -588,6 +589,7 @@ async def _run_generation(task_id: UUID) -> None:
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
             memory_enabled=chat_user.memory_enabled if chat_user else False,
             user_id=chat.user_id,
+            pending_attachments=pending_tool_attachments,
         )
         user_memories = None
         if chat_user and chat_user.memory_enabled:
@@ -840,6 +842,7 @@ async def _run_generation(task_id: UUID) -> None:
                         model=model,
                         messages=messages,
                         tool_registry=tool_registry,
+                        pending_attachments=pending_tool_attachments,
                         activity_sender=activity_sender,
                         tool_event_sender=tool_event_sender,
                     )

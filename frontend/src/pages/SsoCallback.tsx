@@ -2,7 +2,6 @@ import { useEffect } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { useAuth } from "@/lib/auth-context"
-import { modelStore, orgStore } from "@/lib/storage"
 
 export const SsoCallbackPage = () => {
   const [searchParams] = useSearchParams()
@@ -16,8 +15,6 @@ export const SsoCallbackPage = () => {
       return
     }
     setToken(token)
-    orgStore.clear()
-    modelStore.clear()
     navigate("/chat", { replace: true })
   }, [navigate, searchParams, setToken])
 

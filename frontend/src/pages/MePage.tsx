@@ -22,7 +22,7 @@ import { Switch } from "@/components/ui/switch"
 import { getTheme, toggleTheme } from "@/lib/theme"
 import type { ApiKey, UserMemory } from "@/lib/types"
 import { Pencil, Trash2, X, Check } from "lucide-react"
-import { modelStore, orgStore, toolCallLogsVisibleStore } from "@/lib/storage"
+import { orgStore, toolCallLogsVisibleStore } from "@/lib/storage"
 
 export const MePage = () => {
   const navigate = useNavigate()
@@ -93,8 +93,6 @@ export const MePage = () => {
       .catch(() => null)
       .finally(() => {
         clearToken()
-        orgStore.clear()
-        modelStore.clear()
         navigate("/login", { replace: true })
       })
   }

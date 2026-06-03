@@ -310,6 +310,7 @@ def _build_tool_registry(
     locale: str | None = None,
     memory_enabled: bool = False,
     user_id: UUID | None = None,
+    pending_attachments: list[dict[str, Any]] | None = None,
 ) -> ToolRegistry:
     image_model = get_image_model(
         session, str(org_id), preferred_provider=preferred_provider
@@ -388,7 +389,11 @@ def _build_tool_registry(
                 output={"error": "No active chat context for PDF extraction."},
             )
         return await extract_pdf(
-            PdfToolContext(session=session, chat_id=str(chat_id)),
+            PdfToolContext(
+                session=session,
+                chat_id=str(chat_id),
+                pending_attachments=pending_attachments,
+            ),
             attachment_id=args.get("attachment_id"),
             file_name=args.get("file_name"),
             page=args.get("page"),
@@ -1348,6 +1353,7 @@ async def _run_agentic_loop(
     model: ChatModel,
     messages: list[dict],
     tool_registry: ToolRegistry,
+    pending_attachments: list[dict[str, Any]] | None = None,
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
@@ -1364,7 +1370,7 @@ async def _run_agentic_loop(
     )
 
     tool_specs = tool_registry.list_specs()
-    attachments: list[dict] = []
+    attachments: list[dict] = pending_attachments if pending_attachments is not None else []
     sources: list[dict] = []
     image_usages: list[dict] = []
     last_usage: ChatUsage | None = None
@@ -3449,6 +3455,7 @@ async def create_message(
     effective_exec_policy = _resolve_exec_policy(
         org.exec_policy, payload.code_execution_enabled
     )
+    pending_tool_attachments: list[dict[str, Any]] = []
     tool_registry = _build_tool_registry(
         session,
         chat.org_id,
@@ -3460,6 +3467,7 @@ async def create_message(
         exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
+        pending_attachments=pending_tool_attachments,
     )
     tool_attachments: list[dict] | None = None
 
@@ -3661,6 +3669,7 @@ async def create_message(
                         model=model,
                         messages=messages,
                         tool_registry=tool_registry,
+                        pending_attachments=pending_tool_attachments,
                     )
                 )
                 assistant_message = ChatMessage(
@@ -3793,6 +3802,7 @@ async def create_message(
                 model=model,
                 messages=messages,
                 tool_registry=tool_registry,
+                pending_attachments=pending_tool_attachments,
             )
         )
         response = ChatResponse(
@@ -4350,6 +4360,7 @@ async def edit_message(
     effective_exec_policy = _resolve_exec_policy(
         org.exec_policy, payload.code_execution_enabled
     )
+    pending_tool_attachments: list[dict[str, Any]] = []
     tool_registry = _build_tool_registry(
         session,
         chat.org_id,
@@ -4361,6 +4372,7 @@ async def edit_message(
         exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
+        pending_attachments=pending_tool_attachments,
     )
 
     if model.supports_image_output:
@@ -4449,6 +4461,7 @@ async def edit_message(
                 model=model,
                 messages=messages,
                 tool_registry=tool_registry,
+                pending_attachments=pending_tool_attachments,
             )
         )
         response = ChatResponse(

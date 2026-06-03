@@ -463,6 +463,7 @@ export const OrgPage = () => {
       reasoning_effort: modelReasoningEffort,
       is_active: true,
     })
+    await modelApi.setOrgModels(selectedOrg, [{ model_id: model.id, is_enabled: true }])
     setModels((prev) => [...prev, model])
     if (selectedOrg) {
       setAccessByOrgId((prev) => ({

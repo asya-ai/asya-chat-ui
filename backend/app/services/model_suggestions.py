@@ -4,9 +4,11 @@ import json
 import importlib
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Iterable
+import copy
 
 from anthropic import Anthropic
 from google import genai
@@ -29,6 +31,8 @@ _VERTEX_KNOWN_GEMINI_MODELS = (
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite-001",
 )
+_MODEL_SUGGESTIONS_CACHE_TTL_SECONDS = 300
+_MODEL_SUGGESTIONS_CACHE: tuple[float, list[dict[str, object]]] | None = None
 
 
 def _normalize_gemini_name(name: str) -> str:
@@ -493,7 +497,14 @@ def _dedupe(items: Iterable[dict[str, object]]) -> list[dict[str, object]]:
     return results
 
 
-def get_model_suggestions() -> list[dict[str, object]]:
+def get_model_suggestions(*, use_cache: bool = True) -> list[dict[str, object]]:
+    global _MODEL_SUGGESTIONS_CACHE
+    now = time.time()
+    if use_cache and _MODEL_SUGGESTIONS_CACHE:
+        expires_at, cached = _MODEL_SUGGESTIONS_CACHE
+        if expires_at > now:
+            return copy.deepcopy(cached)
+
     providers = [
         ("openai", _openai_models),
         ("azure", _azure_models),
@@ -513,4 +524,6 @@ def get_model_suggestions() -> list[dict[str, object]]:
                 "error": error,
             }
         )
-    return results
+    if use_cache:
+        _MODEL_SUGGESTIONS_CACHE = (now + _MODEL_SUGGESTIONS_CACHE_TTL_SECONDS, results)
+    return copy.deepcopy(results)

@@ -1,4 +1,4 @@
-import { orgStore, tokenStore } from "@/lib/storage"
+import { tokenStore } from "@/lib/storage"
 import type {
   Chat,
   ChatMessage,
@@ -115,7 +115,6 @@ const apiWebSocket = (
     socket.onclose = (event) => {
       if (event.code === 4401 || event.code === 4403) {
         tokenStore.clear()
-        orgStore.clear()
         window.location.href = "/login"
         return
       }
@@ -162,7 +161,6 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
   if (!response.ok) {
     if (response.status === 401 && !options.skipAuth) {
       tokenStore.clear()
-      orgStore.clear()
       window.location.href = "/login"
     }
     const contentType = response.headers.get("content-type") || ""

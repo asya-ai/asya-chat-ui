@@ -11,7 +11,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { modelStore, orgStore } from "@/lib/storage"
 
 export const RegisterPage = () => {
   const navigate = useNavigate()
@@ -46,8 +45,6 @@ export const RegisterPage = () => {
     try {
       const data = await authApi.register(email, password)
       setToken(data.access_token)
-      orgStore.clear()
-      modelStore.clear()
       navigate("/chat")
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_register_failed"))
