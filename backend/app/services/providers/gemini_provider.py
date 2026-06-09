@@ -242,6 +242,27 @@ class GeminiProvider:
             config.tools = tools
         return config
 
+    @staticmethod
+    def _usage_from_metadata(usage: object | None) -> ChatUsage:
+        prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+        completion_tokens = (
+            getattr(usage, "candidates_token_count", 0) if usage else 0
+        )
+        total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+        cached_tokens = (
+            getattr(usage, "cached_content_token_count", 0) if usage else 0
+        )
+        thinking_tokens = getattr(usage, "thoughts_token_count", 0) if usage else 0
+        return ChatUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            input_tokens=max(prompt_tokens - cached_tokens, 0),
+            output_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+            thinking_tokens=thinking_tokens,
+        )
+
     async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
         def _run() -> ChatResponse:
             system_instruction = self._extract_system_instruction(messages)
@@ -312,22 +333,9 @@ class GeminiProvider:
                     raise
             text = getattr(response, "text", "") or ""
             usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-            completion_tokens = (
-                getattr(usage, "candidates_token_count", 0) if usage else 0
-            )
-            total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
             return ChatResponse(
                 content=text,
-                usage=ChatUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    input_tokens=prompt_tokens,
-                    output_tokens=completion_tokens,
-                    cached_tokens=0,
-                    thinking_tokens=0,
-                ),
+                usage=self._usage_from_metadata(usage),
             )
 
         return await anyio.to_thread.run_sync(_run)
@@ -481,22 +489,9 @@ class GeminiProvider:
                             )
                         )
             usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-            completion_tokens = (
-                getattr(usage, "candidates_token_count", 0) if usage else 0
-            )
-            total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
             return ChatResponse(
                 content=text,
-                usage=ChatUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    input_tokens=prompt_tokens,
-                    output_tokens=completion_tokens,
-                    cached_tokens=0,
-                    thinking_tokens=0,
-                ),
+                usage=self._usage_from_metadata(usage),
                 tool_calls=tool_calls or None,
                 finish_reason=None,
             )
@@ -577,22 +572,9 @@ class GeminiProvider:
             text = getattr(response, "text", "") or ""
             sources = _extract_gemini_sources(response)
             usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-            completion_tokens = (
-                getattr(usage, "candidates_token_count", 0) if usage else 0
-            )
-            total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
             return ChatResponse(
                 content=text,
-                usage=ChatUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    input_tokens=prompt_tokens,
-                    output_tokens=completion_tokens,
-                    cached_tokens=0,
-                    thinking_tokens=0,
-                ),
+                usage=self._usage_from_metadata(usage),
                 sources=sources or None,
             )
 

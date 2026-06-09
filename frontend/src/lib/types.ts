@@ -244,6 +244,8 @@ export type UsageSlice = {
   output_tokens: number
   cached_tokens: number
   thinking_tokens: number
+  cost_usd?: number | null
+  breakdown?: UsageSlice[]
 }
 
 export type OrgMember = {

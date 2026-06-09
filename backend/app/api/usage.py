@@ -3,12 +3,13 @@ from uuid import UUID
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
 from app.models import ChatModel, Org, OrgModel, OrgMembership, UsageEvent, User
+from app.services.model_pricing import estimate_token_cost_usd
 from app.services.org_service import require_org_admin
 
 router = APIRouter(prefix="/usage", tags=["usage"])
@@ -23,6 +24,14 @@ class UsageSlice(BaseModel):
     output_tokens: int
     cached_tokens: int
     thinking_tokens: int
+    cost_usd: float | None = None
+    breakdown: list["UsageSlice"] = Field(default_factory=list)
+
+
+class ModelUsageMeta(BaseModel):
+    display_name: str
+    provider: str | None = None
+    model_name: str | None = None
 
 
 def _parse_month_bounds(month: str) -> tuple[datetime, datetime]:
@@ -50,6 +59,98 @@ def _apply_month_filter(stmt, month: str | None):
         return stmt
     start, end = _parse_month_bounds(month)
     return stmt.where(UsageEvent.created_at >= start, UsageEvent.created_at < end)
+
+
+def _empty_slice(key: str) -> UsageSlice:
+    return UsageSlice(
+        key=key,
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        input_tokens=0,
+        output_tokens=0,
+        cached_tokens=0,
+        thinking_tokens=0,
+    )
+
+
+def _slice_from_row(
+    key: str,
+    row,
+    start_index: int,
+    cost_usd: float | None = None,
+) -> UsageSlice:
+    return UsageSlice(
+        key=key,
+        prompt_tokens=int(row[start_index] or 0),
+        completion_tokens=int(row[start_index + 1] or 0),
+        total_tokens=int(row[start_index + 2] or 0),
+        input_tokens=int(row[start_index + 3] or 0),
+        output_tokens=int(row[start_index + 4] or 0),
+        cached_tokens=int(row[start_index + 5] or 0),
+        thinking_tokens=int(row[start_index + 6] or 0),
+        cost_usd=cost_usd,
+    )
+
+
+def _add_slice_totals(target: UsageSlice, source: UsageSlice) -> None:
+    target.prompt_tokens += source.prompt_tokens
+    target.completion_tokens += source.completion_tokens
+    target.total_tokens += source.total_tokens
+    target.input_tokens += source.input_tokens
+    target.output_tokens += source.output_tokens
+    target.cached_tokens += source.cached_tokens
+    target.thinking_tokens += source.thinking_tokens
+
+
+def _model_usage_map(session: Session) -> dict:
+    return {
+        model.id: ModelUsageMeta(
+            display_name=model.display_name,
+            provider=model.provider,
+            model_name=model.model_name,
+        )
+        for model in session.exec(select(ChatModel)).all()
+    }
+
+
+def _cost_for_model_row(row, start_index: int, meta: ModelUsageMeta | None) -> float | None:
+    cost_usd = estimate_token_cost_usd(
+        meta.provider if meta else None,
+        meta.model_name if meta else None,
+        int(row[start_index + 3] or 0),
+        int(row[start_index + 4] or 0),
+        int(row[start_index + 5] or 0),
+        int(row[start_index + 6] or 0),
+    )
+    if cost_usd is not None or not meta:
+        return cost_usd
+    return estimate_token_cost_usd(
+        meta.provider,
+        meta.display_name,
+        int(row[start_index + 3] or 0),
+        int(row[start_index + 4] or 0),
+        int(row[start_index + 5] or 0),
+        int(row[start_index + 6] or 0),
+    )
+
+
+def _apply_org_filter(stmt, org_uuid: UUID | None):
+    if not org_uuid:
+        return stmt
+    return stmt.where(UsageEvent.org_id == org_uuid)
+
+
+def _finalize_group_costs(
+    rows: list[UsageSlice], missing_cost_keys: set[str]
+) -> list[UsageSlice]:
+    for row in rows:
+        if row.key in missing_cost_keys:
+            row.cost_usd = None
+            continue
+        known_costs = [child.cost_usd for child in row.breakdown if child.cost_usd is not None]
+        row.cost_usd = sum(known_costs) if known_costs else row.cost_usd
+    return rows
 
 
 @router.get("", response_model=list[UsageSlice])
@@ -124,6 +225,7 @@ def usage_summary(
         stmt = (
             select(
                 UsageEvent.user_id,
+                UsageEvent.model_id,
                 func.sum(UsageEvent.prompt_tokens),
                 func.sum(UsageEvent.completion_tokens),
                 func.sum(UsageEvent.total_tokens),
@@ -132,26 +234,27 @@ def usage_summary(
                 func.sum(UsageEvent.cached_tokens),
                 func.sum(UsageEvent.thinking_tokens),
             )
-            .group_by(UsageEvent.user_id)
+            .group_by(UsageEvent.user_id, UsageEvent.model_id)
         )
-        if org_uuid:
-            stmt = stmt.where(UsageEvent.org_id == org_uuid)
+        stmt = _apply_org_filter(stmt, org_uuid)
         stmt = _apply_month_filter(stmt, month)
         results = session.exec(stmt).all()
         user_map = {user.id: user.email for user in session.exec(select(User)).all()}
-        return [
-            UsageSlice(
-                key=user_map.get(row[0], str(row[0])),
-                prompt_tokens=int(row[1] or 0),
-                completion_tokens=int(row[2] or 0),
-                total_tokens=int(row[3] or 0),
-                input_tokens=int(row[4] or 0),
-                output_tokens=int(row[5] or 0),
-                cached_tokens=int(row[6] or 0),
-                thinking_tokens=int(row[7] or 0),
-            )
-            for row in results
-        ]
+        model_map = _model_usage_map(session)
+        rows_by_user: dict[str, UsageSlice] = {}
+        missing_cost_users: set[str] = set()
+        for row in results:
+            user_key = user_map.get(row[0], str(row[0]))
+            meta = model_map.get(row[1])
+            model_key = meta.display_name if meta else str(row[1] or "Unknown model")
+            cost_usd = _cost_for_model_row(row, 2, meta)
+            child = _slice_from_row(model_key, row, 2, cost_usd)
+            parent = rows_by_user.setdefault(user_key, _empty_slice(user_key))
+            _add_slice_totals(parent, child)
+            parent.breakdown.append(child)
+            if child.cost_usd is None and child.total_tokens:
+                missing_cost_users.add(user_key)
+        return _finalize_group_costs(list(rows_by_user.values()), missing_cost_users)
 
     if group_by == "month":
         month_expr = func.date_trunc("month", UsageEvent.created_at)
@@ -266,6 +369,7 @@ def usage_summary(
     stmt = (
         select(
             UsageEvent.model_id,
+            UsageEvent.user_id,
             func.sum(UsageEvent.prompt_tokens),
             func.sum(UsageEvent.completion_tokens),
             func.sum(UsageEvent.total_tokens),
@@ -274,7 +378,7 @@ def usage_summary(
             func.sum(UsageEvent.cached_tokens),
             func.sum(UsageEvent.thinking_tokens),
         )
-        .group_by(UsageEvent.model_id)
+        .group_by(UsageEvent.model_id, UsageEvent.user_id)
     )
     if org_uuid:
         stmt = (
@@ -285,23 +389,22 @@ def usage_summary(
     stmt = _apply_month_filter(stmt, month)
     results = session.exec(stmt).all()
 
-    model_map = {
-        model.id: model.display_name
-        for model in session.exec(select(ChatModel)).all()
-    }
-    return [
-        UsageSlice(
-            key=model_map.get(row[0], str(row[0])),
-            prompt_tokens=int(row[1] or 0),
-            completion_tokens=int(row[2] or 0),
-            total_tokens=int(row[3] or 0),
-            input_tokens=int(row[4] or 0),
-            output_tokens=int(row[5] or 0),
-            cached_tokens=int(row[6] or 0),
-            thinking_tokens=int(row[7] or 0),
-        )
-        for row in results
-    ]
+    model_map = _model_usage_map(session)
+    user_map = {user.id: user.email for user in session.exec(select(User)).all()}
+    rows_by_model: dict[str, UsageSlice] = {}
+    missing_cost_models: set[str] = set()
+    for row in results:
+        meta = model_map.get(row[0])
+        model_key = meta.display_name if meta else str(row[0] or "Unknown model")
+        user_key = user_map.get(row[1], str(row[1]))
+        cost_usd = _cost_for_model_row(row, 2, meta)
+        child = _slice_from_row(user_key, row, 2, cost_usd)
+        parent = rows_by_model.setdefault(model_key, _empty_slice(model_key))
+        _add_slice_totals(parent, child)
+        parent.breakdown.append(child)
+        if child.cost_usd is None and child.total_tokens:
+            missing_cost_models.add(model_key)
+    return _finalize_group_costs(list(rows_by_model.values()), missing_cost_models)
 
 
 @router.get("/months", response_model=list[str])
