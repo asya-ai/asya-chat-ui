@@ -70,6 +70,12 @@ from app.services.tools.memory_tools import (
     store_memory,
     remove_memory,
 )
+from app.services.tools.agent_tools import (
+    AgentToolContext,
+    list_project_sources,
+    read_project_source,
+    search_project_sources,
+)
 from app.services.tools.web_tools import (
     WebToolContext,
     download_attachments,
@@ -310,6 +316,7 @@ def _build_tool_registry(
     locale: str | None = None,
     memory_enabled: bool = False,
     user_id: UUID | None = None,
+    agent_id: UUID | None = None,
     pending_attachments: list[dict[str, Any]] | None = None,
 ) -> ToolRegistry:
     image_model = get_image_model(
@@ -678,6 +685,95 @@ def _build_tool_registry(
                 },
             ),
             _search_past_chats_handler,
+        )
+
+    if agent_id:
+        agent_ctx = AgentToolContext(session=session, agent_id=agent_id)
+
+        async def _list_project_sources_handler(args: dict) -> object:
+            return await list_project_sources(agent_ctx)
+
+        registry.register(
+            ToolSpec(
+                name="list_project_sources",
+                description=(
+                    "List every document/source attached to this project, with its numeric "
+                    "id, title, a short summary, and length. Call this first to see what "
+                    "material is available. Refer to sources by their small numeric id."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            _list_project_sources_handler,
+        )
+
+        async def _search_project_sources_handler(args: dict) -> object:
+            return await search_project_sources(
+                agent_ctx, query=args.get("query", ""), limit=args.get("limit", 8)
+            )
+
+        registry.register(
+            ToolSpec(
+                name="search_project_sources",
+                description=(
+                    "Semantic search across this project's documents. Returns the most "
+                    "relevant passages with their numeric source id, title, and a snippet. "
+                    "Use this to locate where a topic is discussed, then call "
+                    "read_project_source with that numeric id to read the document in full. "
+                    "Run several searches with different wording to be thorough."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "What to look for"},
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max passages to return (default 8, max 20)",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            ),
+            _search_project_sources_handler,
+        )
+
+        async def _read_project_source_handler(args: dict) -> object:
+            return await read_project_source(
+                agent_ctx,
+                source_id=args.get("source_id", ""),
+                offset=args.get("offset", 0),
+                max_chars=args.get("max_chars", 8000),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="read_project_source",
+                description=(
+                    "Read the full text of a project document by its numeric id. Returns a "
+                    "chunk of characters starting at offset along with total_length_chars and "
+                    "next_offset. If has_more is true, call again with next_offset to keep "
+                    "reading. Use this to actually review a document rather than relying on "
+                    "search snippets alone."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "source_id": {
+                            "type": "integer",
+                            "description": "The numeric source id from list/search results",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Character offset to start reading from (default 0)",
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Max characters to return (default/max 8000)",
+                        },
+                    },
+                    "required": ["source_id"],
+                },
+            ),
+            _read_project_source_handler,
         )
 
     logger.info("Registered tools: %s", [tool.name for tool in registry.list_specs()])
@@ -2456,6 +2552,11 @@ def create_chat(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Agent access required",
             )
+        if model_id is None and agent.preferred_model_id:
+            try:
+                model_id = UUID(str(agent.preferred_model_id))
+            except ValueError:
+                model_id = None
 
     chat = Chat(
         org_id=org_id,
@@ -3467,6 +3568,7 @@ async def create_message(
         exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
+        agent_id=chat.agent_id,
         pending_attachments=pending_tool_attachments,
     )
     tool_attachments: list[dict] | None = None
@@ -4372,6 +4474,7 @@ async def edit_message(
         exec_policy=effective_exec_policy,
         exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
+        agent_id=chat.agent_id,
         pending_attachments=pending_tool_attachments,
     )
 

@@ -234,6 +234,26 @@ def _filename_from_response(url: str, headers: httpx.Headers, content_type: str 
     return _sanitize_filename(f"{path_name or 'download'}{guessed_ext}")
 
 
+def _looks_like_blocked_page(title: str | None, markdown: str | None) -> str | None:
+    title_text = (title or "").strip().lower()
+    markdown_text = (markdown or "").strip().lower()
+    compact = " ".join(markdown_text.split())
+    if title_text in {"access denied", "forbidden", "not authorized", "robot check"}:
+        return title or "Access denied"
+    blocked_phrases = (
+        "access denied",
+        "you don't have permission to access",
+        "request blocked",
+        "enable javascript and cookies",
+        "verify you are human",
+        "are you a robot",
+        "captcha",
+    )
+    if any(phrase in compact for phrase in blocked_phrases) and len(compact) < 2000:
+        return "Page appears to be blocked or access denied"
+    return None
+
+
 async def web_scrape(
     context: WebToolContext,
     *,
@@ -314,6 +334,15 @@ async def web_scrape(
                 markdown = markdown_data.get("markdown", "") or ""
                 if len(markdown) > text_limit:
                     markdown = markdown[:text_limit]
+                blocked_reason = _looks_like_blocked_page(
+                    markdown_data.get("title"), markdown
+                )
+                if blocked_reason:
+                    return {
+                        **base_output,
+                        "error": blocked_reason,
+                        "blocked": True,
+                    }
                 screenshot_base64 = ""
                 screenshot_available = False
                 if screenshot_data and not screenshot_error:
@@ -359,6 +388,14 @@ async def web_scrape(
             markdown = data.get("markdown", "") or ""
             if len(markdown) > text_limit:
                 markdown = markdown[:text_limit]
+            blocked_reason = _looks_like_blocked_page(data.get("title"), markdown)
+            if blocked_reason:
+                return {
+                    **base_output,
+                    "error": blocked_reason,
+                    "blocked": True,
+                    "output": "markdown",
+                }
             return {**base_output, "markdown": markdown, "output": "markdown"}
         except Exception as exc:
             logger.warning("web_scrape error url=%s err=%s", item, exc)

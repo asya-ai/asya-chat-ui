@@ -244,15 +244,20 @@ class GeminiProvider:
 
     @staticmethod
     def _usage_from_metadata(usage: object | None) -> ChatUsage:
-        prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-        completion_tokens = (
-            getattr(usage, "candidates_token_count", 0) if usage else 0
-        )
-        total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
-        cached_tokens = (
-            getattr(usage, "cached_content_token_count", 0) if usage else 0
-        )
-        thinking_tokens = getattr(usage, "thoughts_token_count", 0) if usage else 0
+        def _token_count(name: str) -> int:
+            value = getattr(usage, name, 0) if usage else 0
+            if value is None:
+                return 0
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        prompt_tokens = _token_count("prompt_token_count")
+        completion_tokens = _token_count("candidates_token_count")
+        total_tokens = _token_count("total_token_count")
+        cached_tokens = _token_count("cached_content_token_count")
+        thinking_tokens = _token_count("thoughts_token_count")
         return ChatUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

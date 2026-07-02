@@ -69,6 +69,49 @@ const ensureMermaidInitialized = () => {
 const MERMAID_START_PATTERN =
   /^(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|sankey-beta|block-beta|xychart-beta|C4Context)\b/i
 
+const normalizeMathContent = (content: string) => {
+  const lines = content.split(/\r?\n/)
+  const output: string[] = []
+  let mathLines: string[] | null = null
+  let isInCodeFence = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith("```")) {
+      if (mathLines) {
+        output.push("[", ...mathLines)
+        mathLines = null
+      }
+      isInCodeFence = !isInCodeFence
+      output.push(line)
+      continue
+    }
+
+    if (!isInCodeFence && trimmed === "[" && !mathLines) {
+      mathLines = []
+      continue
+    }
+
+    if (!isInCodeFence && trimmed === "]" && mathLines) {
+      output.push("$$", mathLines.join("\n").trim(), "$$")
+      mathLines = null
+      continue
+    }
+
+    if (mathLines) {
+      mathLines.push(line)
+    } else {
+      output.push(line)
+    }
+  }
+
+  if (mathLines) {
+    output.push("[", ...mathLines)
+  }
+
+  return output.join("\n").replace(/\\text\{([→\-–—]+)\}/g, (_, value) => value)
+}
+
 const toMermaidChart = (content: string, language?: string | null): string | null => {
   if (language?.toLowerCase() === "mermaid") {
     return content.trim()
@@ -251,13 +294,7 @@ const MessageBubbleComponent = ({
   const contextSummaryEvent =
     msg.tool_event?.type === "context_summary" ? msg.tool_event : null
   const canCopyMessage = Boolean(msg.content.trim())
-  const content = useMemo(() => {
-    // Normalize bracketed math blocks into KaTeX-friendly $$...$$
-    return msg.content.replace(
-      /\n\[\n([\s\S]*?)\n\]\n/g,
-      (_, body) => `\n$$\n${body}\n$$\n`
-    )
-  }, [msg.content])
+  const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
   const attachmentSrc = (attachment: {
     content_type: string
     data_base64?: string

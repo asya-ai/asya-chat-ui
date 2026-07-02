@@ -2145,13 +2145,10 @@ export const ChatPage = () => {
     [navigate]
   )
 
-  const handleSelectAgent = useCallback(
-    (agent: Agent, onSelect?: () => void) => {
-      navigate(`/chat?agent=${encodeURIComponent(agent.id)}`)
+  const handleSelectProject = useCallback(
+    (project: Agent, onSelect?: () => void) => {
+      navigate(`/projects/${encodeURIComponent(project.id)}`)
       onSelect?.()
-      window.setTimeout(() => {
-        composerInputRef.current?.focus()
-      }, 0)
     },
     [navigate]
   )
@@ -2178,7 +2175,7 @@ export const ChatPage = () => {
           title={t("chat_title")}
           labels={{
             newChat: t("chat_new"),
-            agents: "Agents",
+            projects: "Projects",
             untitled: t("chat_untitled"),
             settings: t("common_settings"),
             delete: t("chat_delete"),
@@ -2188,14 +2185,15 @@ export const ChatPage = () => {
             noResults: t("chat_search_no_results"),
           }}
           groups={groupedChats}
-          agents={agents}
+          projects={agents}
           searchQuery={chatSearchQuery}
           activeChatId={chatId ?? null}
-          activeAgentId={activeAgentId}
+          activeProjectId={activeAgentId}
           onSearchChange={setChatSearchQuery}
           onNewChat={startNewChat}
           onSelectChat={(chat: Chat) => handleSelectChat(chat)}
-          onSelectAgent={(agent: Agent) => handleSelectAgent(agent)}
+          onOpenProjects={() => navigate("/projects")}
+          onSelectProject={(project: Agent) => handleSelectProject(project)}
           onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
           onToggleShareChat={toggleShareChat}
           onOpenSettings={() => navigate("/settings/me")}
@@ -2218,7 +2216,7 @@ export const ChatPage = () => {
                   title={t("chat_title")}
                   labels={{
                     newChat: t("chat_new"),
-                    agents: "Agents",
+                    projects: "Projects",
                     untitled: t("chat_untitled"),
                     settings: t("common_settings"),
                     delete: t("chat_delete"),
@@ -2228,14 +2226,20 @@ export const ChatPage = () => {
                     noResults: t("chat_search_no_results"),
                   }}
                   groups={groupedChats}
-                  agents={agents}
+                  projects={agents}
                   searchQuery={chatSearchQuery}
                   activeChatId={chatId ?? null}
-                  activeAgentId={activeAgentId}
+                  activeProjectId={activeAgentId}
                   onSearchChange={setChatSearchQuery}
                   onNewChat={startNewChat}
                   onSelectChat={(chat: Chat) => handleSelectChat(chat, () => setSidebarOpen(false))}
-                  onSelectAgent={(agent: Agent) => handleSelectAgent(agent, () => setSidebarOpen(false))}
+                  onOpenProjects={() => {
+                    setSidebarOpen(false)
+                    navigate("/projects")
+                  }}
+                  onSelectProject={(project: Agent) =>
+                    handleSelectProject(project, () => setSidebarOpen(false))
+                  }
                   onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
                   onToggleShareChat={toggleShareChat}
                   onOpenSettings={() => {
@@ -2248,45 +2252,55 @@ export const ChatPage = () => {
               </div>
             </SheetContent>
           </Sheet>
+          <Select value={selectedModel} onValueChange={setSelectedModel}>
+            <SelectTrigger className="w-56" aria-label={t("chat_select_model")}>
+              <SelectValue placeholder={t("chat_select_model")} />
+            </SelectTrigger>
+            <SelectContent className="max-h-96">
+              {selectableChatModels.map((model) => (
+                <SelectItem
+                  key={model.id}
+                  value={model.id}
+                  disabled={model.is_available === false}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {isImageOutputModel(model) ? (
+                      <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                    ) : null}
+                    <span>
+                      {model.display_name} ({model.provider}){" "}
+                      {model.is_available === false ? `(${t("common_disabled")})` : ""}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {isAgentMode ? (
             <div className="flex items-center gap-3 text-muted-foreground text-sm">
               <span>
-                Talking to agent: <span className="font-medium text-foreground">{activeAgent?.name ?? "Unknown agent"}</span>
+                Project:{" "}
+                {activeAgentId ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/projects/${encodeURIComponent(activeAgentId)}`)}
+                    className="font-medium text-foreground hover:underline"
+                  >
+                    {activeAgent?.name ?? "Unknown project"}
+                  </button>
+                ) : (
+                  <span className="font-medium text-foreground">Unknown project</span>
+                )}
               </span>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => navigate("/chat")}
               >
-                Chat without agent
+                Leave project
               </Button>
             </div>
-          ) : (
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
-              <SelectTrigger className="w-56" aria-label={t("chat_select_model")}>
-                <SelectValue placeholder={t("chat_select_model")} />
-              </SelectTrigger>
-              <SelectContent className="max-h-96">
-                {selectableChatModels.map((model) => (
-                  <SelectItem
-                    key={model.id}
-                    value={model.id}
-                    disabled={model.is_available === false}
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      {isImageOutputModel(model) ? (
-                        <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
-                      ) : null}
-                      <span>
-                        {model.display_name} ({model.provider}){" "}
-                        {model.is_available === false ? `(${t("common_disabled")})` : ""}
-                      </span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          ) : null}
         </div>
         <MessageList
           messages={visibleMessages}
@@ -2298,7 +2312,7 @@ export const ChatPage = () => {
         />
         <ChatComposer
           message={message}
-          placeholder={isAgentMode ? "Ask this agent..." : t("chat_message_placeholder")}
+          placeholder={isAgentMode ? "Ask anything in this project..." : t("chat_message_placeholder")}
           loading={currentChatLoading || isUploadingAttachments}
           readOnly={isSharedView}
           isDragActive={isDragActive}

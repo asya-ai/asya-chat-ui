@@ -32,7 +32,9 @@ from app.services.model_capabilities import ensure_model_capabilities, supports_
 from app.core.config import settings
 from app.db.session import engine
 from app.models.entities import (
+    Agent,
     AgentSource,
+    AgentSourceStatus,
     Chat,
     ChatGenerationEvent,
     ChatGenerationTask,
@@ -589,6 +591,7 @@ async def _run_generation(task_id: UUID) -> None:
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
             memory_enabled=chat_user.memory_enabled if chat_user else False,
             user_id=chat.user_id,
+            agent_id=chat.agent_id,
             pending_attachments=pending_tool_attachments,
         )
         user_memories = None
@@ -612,6 +615,18 @@ async def _run_generation(task_id: UUID) -> None:
             )
             agent_sources: list[dict[str, Any]] = []
             if chat.agent_id:
+                agent = session.get(Agent, chat.agent_id)
+                if agent and agent.master_prompt and agent.master_prompt.strip():
+                    messages.insert(
+                        0,
+                        {
+                            "role": "system",
+                            "content": (
+                                "Project instructions (always follow these):\n"
+                                f"{agent.master_prompt.strip()}"
+                            ),
+                        },
+                    )
                 latest_user_message = next(
                     (
                         item
@@ -672,17 +687,51 @@ async def _run_generation(task_id: UUID) -> None:
                             },
                         },
                     )
-                    if context_blocks:
-                        messages.append(
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Use the provided agent source context when relevant. "
-                                    "If context is insufficient, say so clearly.\n\n"
-                                    f"Agent source context:\n{'\n\n'.join(context_blocks)}"
-                                ),
-                            }
+                    all_sources = session.scalars(
+                        select(AgentSource)
+                        .where(AgentSource.agent_id == chat.agent_id)
+                        .order_by(AgentSource.created_at)
+                    ).all()
+                    catalog_lines = []
+                    for idx, source in enumerate(all_sources, start=1):
+                        if source.status == AgentSourceStatus.ready:
+                            catalog_lines.append(f"- [{idx}] \"{source.title}\"")
+                        else:
+                            status = (
+                                source.status.value
+                                if hasattr(source.status, "value")
+                                else str(source.status)
+                            )
+                            catalog_lines.append(
+                                f"- [{idx}] \"{source.title}\" (not ready: {status})"
+                            )
+                    guidance = (
+                        "You are answering inside a project that has attached documents "
+                        "(\"sources\"). Work like a careful research assistant grounded in "
+                        "these sources:\n"
+                        "- Each source has a small numeric id (shown below). Refer to sources "
+                        "by that number - never invent ids.\n"
+                        "- Use `search_project_sources` to find relevant passages, and "
+                        "`read_project_source` (passing the numeric id) to read the full "
+                        "document when a passage matters. Prefer reading the actual document "
+                        "over relying on a single snippet.\n"
+                        "- Run multiple searches and read more than one source when the "
+                        "question is broad or comparative. Do not stop after one search.\n"
+                        "- Base your answer on the sources and cite them by title. If the "
+                        "sources do not cover something, say so instead of guessing.\n"
+                    )
+                    if catalog_lines:
+                        guidance += (
+                            "\nAvailable sources in this project:\n"
+                            + "\n".join(catalog_lines)
                         )
+                    if context_blocks:
+                        guidance += (
+                            "\n\nRelevant passages for the latest question (starting point - "
+                            "read the full sources if needed):\n"
+                            + "\n\n".join(context_blocks)
+                        )
+                    messages.append({"role": "system", "content": guidance})
             messages = await _summarize_context_if_needed(
                 session=session,
                 task_id=task.id,

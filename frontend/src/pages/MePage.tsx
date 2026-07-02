@@ -216,12 +216,6 @@ export const MePage = () => {
       active: location.pathname.startsWith("/settings/models"),
     },
     {
-      label: "Agents",
-      href: "/settings/agents",
-      visible: true,
-      active: location.pathname.startsWith("/settings/agents"),
-    },
-    {
       label: t("usage_title"),
       href: "/usage",
       visible: isAdmin,

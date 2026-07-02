@@ -108,6 +108,8 @@ async def _generate_web_scrape_answer(
     normalized["answer"] = answer
     normalized["quotes"] = quotes
     normalized["insufficient_information"] = insufficient
+    if insufficient:
+        normalized["error"] = answer or "Source material was insufficient"
     if analysis_input.get("screenshot_error") and not analysis_input.get("screenshot_base64"):
         normalized["note"] = "Screenshot could not be used; answer is based on markdown only."
     return normalized, response.usage

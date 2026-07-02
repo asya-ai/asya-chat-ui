@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { ChevronDown, ChevronRight, MoreHorizontal } from "lucide-react"
+import { ChevronDown, ChevronRight, FolderOpen, MoreHorizontal } from "lucide-react"
 
 type ChatGroup = { label: string; items: Chat[] }
 
@@ -20,7 +20,7 @@ type ChatSidebarProps = {
   title: string
   labels: {
     newChat: string
-    agents: string
+    projects: string
     untitled: string
     settings: string
     delete: string
@@ -30,14 +30,15 @@ type ChatSidebarProps = {
     noResults: string
   }
   groups: ChatGroup[]
-  agents: Agent[]
+  projects: Agent[]
   searchQuery: string
   activeChatId?: string | null
-  activeAgentId?: string | null
+  activeProjectId?: string | null
   onSearchChange: (value: string) => void
   onNewChat: () => void
   onSelectChat: (chat: Chat) => void
-  onSelectAgent: (agent: Agent) => void
+  onOpenProjects: () => void
+  onSelectProject: (project: Agent) => void
   onDeleteChat: (chat: Chat) => void
   onToggleShareChat: (chat: Chat) => void
   onOpenSettings: () => void
@@ -50,14 +51,15 @@ export const ChatSidebar = ({
   title,
   labels,
   groups,
-  agents,
+  projects,
   searchQuery,
   activeChatId,
-  activeAgentId,
+  activeProjectId,
   onSearchChange,
   onNewChat,
   onSelectChat,
-  onSelectAgent,
+  onOpenProjects,
+  onSelectProject,
   onDeleteChat,
   onToggleShareChat,
   onOpenSettings,
@@ -65,8 +67,8 @@ export const ChatSidebar = ({
   getChatActivityDate,
   footer,
 }: ChatSidebarProps) => {
-  const [agentsCollapsed, setAgentsCollapsed] = useState(false)
-  const showAgentPanel = agents.length > 0 && !agentsCollapsed
+  const [projectsCollapsed, setProjectsCollapsed] = useState(false)
+  const showProjectPanel = projects.length > 0 && !projectsCollapsed
 
   return (
     <nav aria-label={title} className="flex flex-col gap-4 h-full min-h-0">
@@ -81,8 +83,8 @@ export const ChatSidebar = ({
         onChange={(event) => onSearchChange(event.target.value)}
         placeholder={labels.searchPlaceholder}
       />
-      <div className={showAgentPanel ? "grid grid-rows-2 gap-3 flex-1 min-h-0" : "flex flex-col flex-1 min-h-0"}>
-        <div className={showAgentPanel ? "min-h-0" : "min-h-0 flex-1"}>
+      <div className={showProjectPanel ? "grid grid-rows-2 gap-3 flex-1 min-h-0" : "flex flex-col flex-1 min-h-0"}>
+        <div className={showProjectPanel ? "min-h-0" : "min-h-0 flex-1"}>
           <ScrollArea className="h-full min-h-0">
             <div className="space-y-3 pr-3">
               {groups.length === 0 ? (
@@ -158,52 +160,54 @@ export const ChatSidebar = ({
             </div>
           </ScrollArea>
         </div>
-        {agents.length > 0 ? (
+        {projects.length > 0 ? (
           <div className="space-y-2 pt-2 border-t min-h-0">
             <div className="flex items-center justify-between">
-              <p className="text-muted-foreground text-xs uppercase tracking-wide">
-                {labels.agents}
-              </p>
+              <button
+                type="button"
+                onClick={onOpenProjects}
+                className="text-muted-foreground hover:text-foreground text-xs uppercase tracking-wide transition-colors"
+              >
+                {labels.projects}
+              </button>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="w-6 h-6"
-                aria-label={agentsCollapsed ? "Expand agents" : "Collapse agents"}
-                onClick={() => setAgentsCollapsed((value) => !value)}
+                aria-label={projectsCollapsed ? "Expand projects" : "Collapse projects"}
+                onClick={() => setProjectsCollapsed((value) => !value)}
               >
-                {agentsCollapsed ? (
+                {projectsCollapsed ? (
                   <ChevronRight className="w-4 h-4" />
                 ) : (
                   <ChevronDown className="w-4 h-4" />
                 )}
               </Button>
             </div>
-            {!agentsCollapsed ? (
+            {!projectsCollapsed ? (
               <ScrollArea className="h-full min-h-0">
                 <div className="space-y-2 pr-3">
-                  {agents.map((agent) => (
+                  {projects.map((project) => (
                     <Card
-                      key={agent.id}
+                      key={project.id}
                       className={`cursor-pointer px-3 py-2 ${
-                        activeAgentId === agent.id ? "border-primary" : ""
+                        activeProjectId === project.id ? "border-primary" : ""
                       }`}
-                      onClick={() => onSelectAgent(agent)}
+                      onClick={() => onSelectProject(project)}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault()
-                          onSelectAgent(agent)
+                          onSelectProject(project)
                         }
                       }}
                     >
-                      <p className="font-medium truncate">{agent.name}</p>
-                      {agent.description ? (
-                        <p className="text-muted-foreground text-xs line-clamp-2">
-                          {agent.description}
-                        </p>
-                      ) : null}
+                      <div className="flex items-center gap-2">
+                        <FolderOpen className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
+                        <p className="font-medium truncate">{project.name}</p>
+                      </div>
                     </Card>
                   ))}
                 </div>
@@ -214,6 +218,10 @@ export const ChatSidebar = ({
       </div>
       <div className="pt-3 border-t">
         <div className="flex flex-col gap-2">
+          <Button variant="outline" onClick={onOpenProjects}>
+            <FolderOpen className="w-4 h-4" aria-hidden="true" />
+            {labels.projects}
+          </Button>
           <Button variant="outline" onClick={onOpenSettings}>
             {labels.settings}
           </Button>

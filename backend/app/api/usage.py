@@ -186,6 +186,7 @@ def usage_summary(
         stmt = (
             select(
                 UsageEvent.org_id,
+                UsageEvent.model_id,
                 func.sum(UsageEvent.prompt_tokens),
                 func.sum(UsageEvent.completion_tokens),
                 func.sum(UsageEvent.total_tokens),
@@ -194,7 +195,7 @@ def usage_summary(
                 func.sum(UsageEvent.cached_tokens),
                 func.sum(UsageEvent.thinking_tokens),
             )
-            .group_by(UsageEvent.org_id)
+            .group_by(UsageEvent.org_id, UsageEvent.model_id)
         )
         if org_uuid:
             stmt = (
@@ -207,19 +208,21 @@ def usage_summary(
         org_map = {
             org.id: org.name for org in session.exec(select(Org)).all()
         }
-        return [
-            UsageSlice(
-                key=org_map.get(row[0], str(row[0])),
-                prompt_tokens=int(row[1] or 0),
-                completion_tokens=int(row[2] or 0),
-                total_tokens=int(row[3] or 0),
-                input_tokens=int(row[4] or 0),
-                output_tokens=int(row[5] or 0),
-                cached_tokens=int(row[6] or 0),
-                thinking_tokens=int(row[7] or 0),
-            )
-            for row in results
-        ]
+        model_map = _model_usage_map(session)
+        rows_by_org: dict[str, UsageSlice] = {}
+        missing_cost_orgs: set[str] = set()
+        for row in results:
+            org_key = org_map.get(row[0], str(row[0]))
+            meta = model_map.get(row[1])
+            model_key = meta.display_name if meta else str(row[1] or "Unknown model")
+            cost_usd = _cost_for_model_row(row, 2, meta)
+            child = _slice_from_row(model_key, row, 2, cost_usd)
+            parent = rows_by_org.setdefault(org_key, _empty_slice(org_key))
+            _add_slice_totals(parent, child)
+            parent.breakdown.append(child)
+            if child.cost_usd is None and child.total_tokens:
+                missing_cost_orgs.add(org_key)
+        return _finalize_group_costs(list(rows_by_org.values()), missing_cost_orgs)
 
     if group_by == "user":
         stmt = (

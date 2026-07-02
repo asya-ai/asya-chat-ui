@@ -31,6 +31,7 @@ export const UsagePage = () => {
   const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonth)
   const [expandedModels, setExpandedModels] = useState<Set<string>>(() => new Set())
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(() => new Set())
+  const [expandedOrgs, setExpandedOrgs] = useState<Set<string>>(() => new Set())
   const { t, locale } = useI18n()
 
   type SortKey =
@@ -315,12 +316,6 @@ export const UsagePage = () => {
       active: location.pathname.startsWith("/settings/models"),
     },
     {
-      label: "Agents",
-      href: "/settings/agents",
-      visible: true,
-      active: location.pathname.startsWith("/settings/agents"),
-    },
-    {
       label: t("usage_title"),
       href: "/usage",
       visible: isAdmin,
@@ -391,7 +386,11 @@ export const UsagePage = () => {
           setExpandedRows: setExpandedUsers,
         })}
         {isSuperAdmin ? (
-          renderTable(t("usage_block_orgs"), rowsByOrg, sortOrg, setSortOrg)
+          renderTable(t("usage_block_orgs"), rowsByOrg, sortOrg, setSortOrg, {
+            showCost: true,
+            expandedRows: expandedOrgs,
+            setExpandedRows: setExpandedOrgs,
+          })
         ) : null}
       </div>
     </SettingsShell>

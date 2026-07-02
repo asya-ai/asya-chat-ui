@@ -8,8 +8,11 @@ import { Button } from "@/components/ui/button"
 import { useI18n } from "@/lib/i18n-context"
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((mod) => ({ default: mod.ChatPage })))
-const AgentsPage = lazy(() =>
-  import("@/pages/AgentsPage").then((mod) => ({ default: mod.AgentsPage }))
+const ProjectsPage = lazy(() =>
+  import("@/pages/projects/ProjectsPage").then((mod) => ({ default: mod.ProjectsPage }))
+)
+const ProjectPage = lazy(() =>
+  import("@/pages/projects/ProjectPage").then((mod) => ({ default: mod.ProjectPage }))
 )
 const InviteAcceptPage = lazy(() =>
   import("@/pages/InviteAccept").then((mod) => ({ default: mod.InviteAcceptPage }))
@@ -174,14 +177,23 @@ const App = () => {
           }
         />
         <Route
-          path="/settings/agents"
+          path="/projects"
           element={
             <RequireAuth>
-              <AgentsPage />
+              <ProjectsPage />
             </RequireAuth>
           }
         />
-        <Route path="/agents" element={<Navigate to="/settings/agents" replace />} />
+        <Route
+          path="/projects/:projectId"
+          element={
+            <RequireAuth>
+              <ProjectPage />
+            </RequireAuth>
+          }
+        />
+        <Route path="/settings/agents" element={<Navigate to="/projects" replace />} />
+        <Route path="/agents" element={<Navigate to="/projects" replace />} />
         <Route
           path="/shared/:shareToken"
           element={
