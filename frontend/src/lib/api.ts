@@ -22,6 +22,7 @@ import type {
   UserMemory,
   Agent,
   AgentShare,
+  AgentShareSuggestion,
   AgentSource,
 } from "@/lib/types"
 
@@ -663,6 +664,13 @@ export const agentApi = {
       method: "POST",
     }),
   listShares: (agentId: string) => apiFetch<AgentShare[]>(`/agents/${agentId}/shares`),
+  shareSuggestions: (agentId: string, query: string, limit = 10) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (query.trim()) params.set("q", query.trim())
+    return apiFetch<AgentShareSuggestion[]>(
+      `/agents/${agentId}/share-suggestions?${params.toString()}`
+    )
+  },
   share: (agentId: string, payload: { email: string; role: "owner" | "editor" | "viewer" }) =>
     apiFetch<AgentShare>(`/agents/${agentId}/shares`, {
       method: "POST",

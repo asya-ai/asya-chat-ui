@@ -13,7 +13,14 @@ import {
 } from "lucide-react"
 
 import { agentApi, chatApi, modelApi } from "@/lib/api"
-import type { Agent, AgentShare, AgentSource, Chat, ChatModel } from "@/lib/types"
+import type {
+  Agent,
+  AgentShare,
+  AgentShareSuggestion,
+  AgentSource,
+  Chat,
+  ChatModel,
+} from "@/lib/types"
 import { orgStore } from "@/lib/storage"
 import { readFilesAsAttachments } from "@/lib/file-utils"
 import { Button } from "@/components/ui/button"
@@ -89,6 +96,8 @@ export const ProjectPage = () => {
   const [shareOpen, setShareOpen] = useState(false)
   const [shareEmail, setShareEmail] = useState("")
   const [shareRole, setShareRole] = useState<"owner" | "editor" | "viewer">("viewer")
+  const [shareSuggestions, setShareSuggestions] = useState<AgentShareSuggestion[]>([])
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
 
   const canEdit = project?.role === "owner" || project?.role === "editor"
   const isOwner = project?.is_owner ?? false
@@ -159,6 +168,29 @@ export const ProjectPage = () => {
     return () => window.clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasPendingSources, projectId])
+
+  useEffect(() => {
+    if (!shareOpen || !project) {
+      setShareSuggestions([])
+      return
+    }
+    let cancelled = false
+    const handle = window.setTimeout(() => {
+      void agentApi
+        .shareSuggestions(project.id, shareEmail)
+        .then((items) => {
+          if (!cancelled) setShareSuggestions(items)
+        })
+        .catch(() => {
+          if (!cancelled) setShareSuggestions([])
+        })
+    }, 200)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareOpen, shareEmail, project, shares])
 
   const startChat = () => {
     if (!projectId) return
@@ -297,6 +329,7 @@ export const ProjectPage = () => {
       }
       await agentApi.share(project.id, { email, role: shareRole })
       setShareEmail("")
+      setSuggestionsOpen(false)
       setShares(await agentApi.listShares(project.id))
       notify("Access granted.")
     })
@@ -703,12 +736,46 @@ export const ProjectPage = () => {
             <DialogTitle>Share project</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="Email"
-                value={shareEmail}
-                onChange={(event) => setShareEmail(event.target.value)}
-              />
+            <div className="flex items-start gap-2">
+              <div className="relative flex-1">
+                <Input
+                  placeholder="Search by name or email"
+                  value={shareEmail}
+                  onChange={(event) => {
+                    setShareEmail(event.target.value)
+                    setSuggestionsOpen(true)
+                  }}
+                  onFocus={() => setSuggestionsOpen(true)}
+                  onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 150)}
+                />
+                {suggestionsOpen && shareSuggestions.length > 0 ? (
+                  <div className="bg-popover absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-md border p-1 shadow-md">
+                    {shareSuggestions.map((suggestion) => (
+                      <button
+                        key={suggestion.user_id}
+                        type="button"
+                        className="hover:bg-accent flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm"
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          setShareEmail(suggestion.email)
+                          setSuggestionsOpen(false)
+                        }}
+                      >
+                        {suggestion.display_name ? (
+                          <>
+                            <span className="truncate">{suggestion.display_name}</span>
+                            <span className="text-muted-foreground truncate text-xs">
+                              {suggestion.email}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="truncate">{suggestion.email}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <Select
                 value={shareRole}
                 onValueChange={(value) => setShareRole(value as "owner" | "editor" | "viewer")}

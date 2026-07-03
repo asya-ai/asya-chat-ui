@@ -13,6 +13,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import AuthContext, get_auth_context, get_db
@@ -114,6 +115,12 @@ class AgentShareRead(BaseModel):
     role: AgentAccessRole
     created_at: datetime
     updated_at: datetime
+
+
+class AgentShareSuggestion(BaseModel):
+    user_id: str
+    email: str
+    display_name: str | None = None
 
 
 def _to_agent_read(agent: Agent, user_id: UUID, role: AgentAccessRole) -> AgentRead:
@@ -427,10 +434,13 @@ def delete_agent(
             ).all()
             for embedding in embeddings:
                 session.delete(embedding)
+            session.flush()
         for chunk in chunks:
             session.delete(chunk)
+        session.flush()
     for source in sources:
         session.delete(source)
+    session.flush()
 
     session.delete(agent)
     session.commit()
@@ -570,8 +580,10 @@ def delete_source(
         ).all()
         for embedding in embeddings:
             session.delete(embedding)
+        session.flush()
     for chunk in chunks:
         session.delete(chunk)
+    session.flush()
     session.delete(source)
     session.commit()
 
@@ -622,6 +634,54 @@ def list_shares(
         )
         for access, user in rows
     ]
+
+
+@router.get("/{agent_id}/share-suggestions", response_model=list[AgentShareSuggestion])
+def share_suggestions(
+    agent_id: UUID,
+    q: str | None = None,
+    limit: int = 10,
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> list[AgentShareSuggestion]:
+    _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    capped_limit = max(1, min(limit, 25))
+
+    already_shared = set(
+        session.exec(
+            select(AgentAccess.user_id).where(AgentAccess.agent_id == agent_id)
+        ).all()
+    )
+
+    statement = (
+        select(User)
+        .join(OrgMembership, OrgMembership.user_id == User.id)
+        .where(OrgMembership.org_id == auth.org_id)
+    )
+    needle = (q or "").strip().lower()
+    if needle:
+        pattern = f"%{needle}%"
+        statement = statement.where(
+            func.lower(User.email).like(pattern)
+            | func.lower(func.coalesce(User.display_name, "")).like(pattern)
+            | func.lower(func.coalesce(User.username, "")).like(pattern)
+        )
+    statement = statement.order_by(User.email.asc()).limit(capped_limit + len(already_shared) + 1)
+
+    suggestions: list[AgentShareSuggestion] = []
+    for user in session.exec(statement).all():
+        if user.id in already_shared:
+            continue
+        suggestions.append(
+            AgentShareSuggestion(
+                user_id=str(user.id),
+                email=user.email,
+                display_name=user.display_name,
+            )
+        )
+        if len(suggestions) >= capped_limit:
+            break
+    return suggestions
 
 
 @router.post("/{agent_id}/shares", response_model=AgentShareRead)

@@ -330,3 +330,9 @@ export type AgentShare = {
   created_at: string
   updated_at: string
 }
+
+export type AgentShareSuggestion = {
+  user_id: string
+  email: string
+  display_name?: string | null
+}
