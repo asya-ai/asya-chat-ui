@@ -31,9 +31,63 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ArrowDown, ArrowUp, Database, Image } from "lucide-react"
+import { Database, GripVertical, Image } from "lucide-react"
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 
 type SettingsSection = "orgs" | "users" | "models"
+
+type SortableRowRenderProps = {
+  setNodeRef: (node: HTMLElement | null) => void
+  style: React.CSSProperties
+  attributes: React.HTMLAttributes<HTMLElement>
+  listeners: Record<string, (event: React.SyntheticEvent) => void> | undefined
+  isDragging: boolean
+}
+
+const SortableModelRow = ({
+  id,
+  children,
+}: {
+  id: string
+  children: (props: SortableRowRenderProps) => React.ReactNode
+}) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.8 : undefined,
+  }
+  return (
+    <>
+      {children({
+        setNodeRef,
+        style,
+        attributes: attributes as React.HTMLAttributes<HTMLElement>,
+        listeners: listeners as SortableRowRenderProps["listeners"],
+        isDragging,
+      })}
+    </>
+  )
+}
 
 const PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic", "openrouter", "vertex"] as const
 
@@ -113,15 +167,8 @@ export const OrgPage = () => {
     })
   }, [models])
 
-  const moveModel = async (modelId: string, direction: -1 | 1) => {
-    if (!isSuperAdmin) return
-    const ordered = [...orderedModels]
-    const index = ordered.findIndex((model) => model.id === modelId)
-    const nextIndex = index + direction
-    if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return
-    const swapped = [...ordered]
-    ;[swapped[index], swapped[nextIndex]] = [swapped[nextIndex], swapped[index]]
-    const next = swapped.map((model, idx) => ({
+  const persistModelOrder = async (ordered: ChatModel[]) => {
+    const next = ordered.map((model, idx) => ({
       ...model,
       display_order: idx + 1,
     }))
@@ -137,6 +184,21 @@ export const OrgPage = () => {
       setError(err instanceof Error ? err.message : t("common_save_failed"))
     }
   }
+
+  const handleModelDragEnd = (event: DragEndEvent) => {
+    if (!isSuperAdmin) return
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = orderedModels.findIndex((model) => model.id === active.id)
+    const newIndex = orderedModels.findIndex((model) => model.id === over.id)
+    if (oldIndex < 0 || newIndex < 0) return
+    void persistModelOrder(arrayMove(orderedModels, oldIndex, newIndex))
+  }
+
+  const modelSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
 
   const selectOrg = (orgId: string | null) => {
     if (orgId) {
@@ -1343,12 +1405,36 @@ export const OrgPage = () => {
                       </datalist>
                     </>
                   ) : null}
-                      <div className="space-y-2">
-                    {orderedModels.map((model, index) => (
-                      <div
-                        key={model.id}
-                        className="flex justify-between items-center px-3 py-2 border rounded-md"
+                      <DndContext
+                        sensors={modelSensors}
+                        collisionDetection={closestCenter}
+                        onDragEnd={handleModelDragEnd}
                       >
+                        <SortableContext
+                          items={orderedModels.map((model) => model.id)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                      <div className="space-y-2">
+                    {orderedModels.map((model) => (
+                      <SortableModelRow key={model.id} id={model.id}>
+                        {({ setNodeRef, style, attributes, listeners }) => (
+                      <div
+                        ref={setNodeRef}
+                        style={style}
+                        {...attributes}
+                        className="flex justify-between items-center px-3 py-2 border rounded-md bg-background"
+                      >
+                        <div className="flex items-center gap-2">
+                          {isSuperAdmin ? (
+                            <button
+                              type="button"
+                              className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
+                              aria-label={t("org_reorder_model")}
+                              {...listeners}
+                            >
+                              <GripVertical aria-hidden="true" className="w-4 h-4" />
+                            </button>
+                          ) : null}
                         <div>
                           {editingModelId === model.id ? (
                             <Input
@@ -1370,30 +1456,9 @@ export const OrgPage = () => {
                             {model.provider} · {model.model_name}
                           </p>
                         </div>
+                        </div>
                         {isSuperAdmin ? (
                           <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="w-8 h-8"
-                                onClick={() => moveModel(model.id, -1)}
-                                disabled={index === 0}
-                                aria-label={t("org_move_model_up")}
-                              >
-                                <ArrowUp aria-hidden="true" className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="w-8 h-8"
-                                onClick={() => moveModel(model.id, 1)}
-                                disabled={index === orderedModels.length - 1}
-                                aria-label={t("org_move_model_down")}
-                              >
-                                <ArrowDown aria-hidden="true" className="w-4 h-4" />
-                              </Button>
-                            </div>
                             <Select
                               value={model.reasoning_effort ?? "none"}
                               onValueChange={(value) => updateReasoningEffort(model.id, value)}
@@ -1443,13 +1508,17 @@ export const OrgPage = () => {
                           </div>
                         ) : null}
                       </div>
+                        )}
+                      </SortableModelRow>
                     ))}
+                  </div>
+                        </SortableContext>
+                      </DndContext>
                       {orderedModels.length === 0 ? (
                       <p className="text-muted-foreground text-sm">
                         {t("org_models_no_models")}
                       </p>
                     ) : null}
-                  </div>
                 </CardContent>
               </Card>
             ) : null}

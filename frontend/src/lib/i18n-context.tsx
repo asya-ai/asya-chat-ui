@@ -48,6 +48,9 @@ const translations = {
     auth_password: "Password",
     auth_org: "Organization",
     auth_use_different_org: "Use different organization",
+    auth_continue_sso: "Continue with SSO",
+    auth_signing_in_to: "Signing in to {org}",
+    auth_change_org: "Change",
     auth_password_requirements:
       "Password must be at least 10 characters and include uppercase, lowercase, number, and special character.",
     auth_forgot_password: "Forgot password?",
@@ -328,6 +331,7 @@ const translations = {
     app_error_title: "Something went wrong",
     org_move_model_up: "Move model up",
     org_move_model_down: "Move model down",
+    org_reorder_model: "Drag to reorder",
   },
   lv: {
     language: "Valoda",
@@ -370,6 +374,9 @@ const translations = {
     auth_password: "Parole",
     auth_org: "Organizācija",
     auth_use_different_org: "Izmantot citu organizāciju",
+    auth_continue_sso: "Turpināt ar SSO",
+    auth_signing_in_to: "Pierakstās organizācijā {org}",
+    auth_change_org: "Mainīt",
     auth_password_requirements:
       "Parolei jābūt vismaz 10 rakstzīmēm un jāietver lielie, mazie burti, cipars un speciālā rakstzīme.",
     auth_forgot_password: "Aizmirsāt paroli?",
@@ -652,6 +659,7 @@ const translations = {
     app_error_title: "Kaut kas nogāja greizi",
     org_move_model_up: "Pārvietot modeli augšup",
     org_move_model_down: "Pārvietot modeli lejup",
+    org_reorder_model: "Velciet, lai pārkārtotu",
   },
 } as const
 
