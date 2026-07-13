@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import json
 import httpx
 import anyio
+from json_repair import loads as repair_json_loads
 from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
@@ -1045,7 +1046,7 @@ def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
     if not text:
         return "", [], True
     try:
-        payload = json.loads(text)
+        payload = repair_json_loads(text)
     except Exception:
         return text, [], False
     if not isinstance(payload, dict):
@@ -1582,8 +1583,8 @@ async def _run_agentic_loop(
                     )
                 if response.content:
                     try:
-                        parsed = json.loads(response.content)
-                    except json.JSONDecodeError:
+                        parsed = repair_json_loads(response.content)
+                    except Exception:
                         parsed = None
                     if isinstance(parsed, dict) and "prompt" in parsed:
                         logger.info(

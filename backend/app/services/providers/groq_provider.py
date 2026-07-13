@@ -1,5 +1,6 @@
 import logging
 from groq import AsyncGroq
+from json_repair import loads as repair_json_loads
 
 from app.core.config import settings
 import json
@@ -143,8 +144,9 @@ class GroqProvider:
                 arguments = {}
                 if call.function.arguments:
                     try:
-                        arguments = json.loads(call.function.arguments)
-                    except json.JSONDecodeError:
+                        parsed_arguments = repair_json_loads(call.function.arguments)
+                        arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                    except Exception:
                         arguments = {}
                 tool_calls.append(
                     ChatToolCall(

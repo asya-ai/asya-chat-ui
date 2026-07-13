@@ -33,6 +33,21 @@ def test_provider_tool_calls_handles_invalid_json_arguments() -> None:
     ]
 
 
+def test_provider_tool_calls_repairs_malformed_json_arguments() -> None:
+    calls = [
+        ChatCompletionToolCall(
+            id="call-1",
+            function=ChatCompletionToolCallFunction(
+                name="weather",
+                arguments='{"city":"Riga",}',
+            ),
+        )
+    ]
+    assert _provider_tool_calls(calls) == [
+        {"id": "call-1", "name": "weather", "arguments": {"city": "Riga"}}
+    ]
+
+
 def test_normalize_provider_messages_coerces_orphan_tool_output() -> None:
     messages = [
         ChatMessagePayload(

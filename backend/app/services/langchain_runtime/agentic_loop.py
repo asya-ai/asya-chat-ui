@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import anyio
+from json_repair import loads as repair_json_loads
 
 from app.services.providers.base import ChatUsage
 from app.services.tools.registry import ToolResult, ToolRegistry
@@ -31,8 +32,8 @@ def _merge_chat_usage(base: ChatUsage | None, extra: ChatUsage | None) -> ChatUs
 
 def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
     try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
+        data = repair_json_loads(content)
+    except Exception:
         return content.strip(), [], False
     if not isinstance(data, dict):
         return content.strip(), [], False

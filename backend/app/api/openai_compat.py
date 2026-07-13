@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from json_repair import loads as repair_json_loads
 from pydantic import BaseModel, model_validator
 from sqlmodel import Session, select
 import json
@@ -212,10 +213,10 @@ def _provider_tool_calls(
     provider_calls: list[dict[str, Any]] = []
     for call in tool_calls or []:
         try:
-            parsed_arguments = json.loads(call.function.arguments or "{}")
+            parsed_arguments = repair_json_loads(call.function.arguments or "{}")
             if not isinstance(parsed_arguments, dict):
                 parsed_arguments = {}
-        except json.JSONDecodeError:
+        except Exception:
             parsed_arguments = {}
         provider_calls.append(
             {

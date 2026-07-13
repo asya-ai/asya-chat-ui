@@ -1,5 +1,6 @@
 import logging
 from openai import AsyncOpenAI, AsyncAzureOpenAI
+from json_repair import loads as repair_json_loads
 
 from app.core.config import settings
 import json
@@ -160,10 +161,10 @@ def _extract_response_tool_calls(result: object) -> list[ChatToolCall]:
             arguments = arguments_raw
         elif isinstance(arguments_raw, str) and arguments_raw.strip():
             try:
-                parsed = json.loads(arguments_raw)
+                parsed = repair_json_loads(arguments_raw)
                 if isinstance(parsed, dict):
                     arguments = parsed
-            except json.JSONDecodeError:
+            except Exception:
                 arguments = {}
         if call_id and name:
             tool_calls.append(
@@ -585,8 +586,9 @@ class OpenAIProvider:
                 arguments = {}
                 if call.function.arguments:
                     try:
-                        arguments = json.loads(call.function.arguments)
-                    except json.JSONDecodeError:
+                        parsed_arguments = repair_json_loads(call.function.arguments)
+                        arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                    except Exception:
                         arguments = {}
                 tool_calls.append(
                     ChatToolCall(
@@ -875,8 +877,9 @@ class AzureOpenAIProvider:
                 arguments = {}
                 if call.function.arguments:
                     try:
-                        arguments = json.loads(call.function.arguments)
-                    except json.JSONDecodeError:
+                        parsed_arguments = repair_json_loads(call.function.arguments)
+                        arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                    except Exception:
                         arguments = {}
                 tool_calls.append(
                     ChatToolCall(

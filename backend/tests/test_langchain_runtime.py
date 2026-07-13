@@ -67,7 +67,7 @@ class _WebScrapeAnswerProvider:
 
     async def chat(self, model: str, messages: list[dict]):
         return ChatResponse(
-            content='{"answer":"Use mean 0.5","insufficient_information":false,"quotes":["mean 0.5"]}',
+            content='{"answer":"Use mean 0.5","insufficient_information":false,"quotes":["mean 0.5"],}',
             usage=_usage(),
         )
 

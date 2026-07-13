@@ -141,6 +141,7 @@ dependencies = [
     { name = "google-genai" },
     { name = "groq" },
     { name = "httpx" },
+    { name = "json-repair" },
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "openai" },
@@ -178,6 +179,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=2.11.0" },
     { name = "groq", specifier = ">=1.5.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "json-repair", specifier = ">=0.61.4" },
     { name = "langchain", specifier = ">=1.3.13" },
     { name = "langchain-core", specifier = ">=1.4.9" },
     { name = "openai", specifier = ">=2.45.0" },
@@ -1184,6 +1186,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/41/f2/d34e8b3a08a9cc79a50b2208a93dce981fe615b64d5a4d4abee421d898df/joblib-1.5.3.tar.gz", hash = "sha256:8561a3269e6801106863fd0d6d84bb737be9e7631e33aaed3fb9ce5953688da3", size = 331603, upload-time = "2025-12-15T08:41:46.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/91/984aca2ec129e2757d1e4e3c81c3fcda9d0f85b74670a094cc443d9ee949/joblib-1.5.3-py3-none-any.whl", hash = "sha256:5fc3c5039fc5ca8c0276333a188bbd59d6b7ab37fe6632daa76bc7f9ec18e713", size = 309071, upload-time = "2025-12-15T08:41:44.973Z" },
+]
+
+[[package]]
+name = "json-repair"
+version = "0.61.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/f5/68b92610453eae5087a05a6f4123f0477dc2f3e84250c2d7de05552fa12a/json_repair-0.61.4.tar.gz", hash = "sha256:d78c212c1d72606bee30a7886820c9d6f7dbd659883dc2397304735a59f7bf86", size = 51069, upload-time = "2026-07-12T16:51:11.036Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/be/5b65e61de2c820e6e24837311249a98465d9b100db8da89f65068ad9e799/json_repair-0.61.4-py3-none-any.whl", hash = "sha256:1056d5468a6d4e8bb4498b3244f996c795e2d457fbb30465d71249d3ef7b481a", size = 49604, upload-time = "2026-07-12T16:51:09.735Z" },
 ]
 
 [[package]]
