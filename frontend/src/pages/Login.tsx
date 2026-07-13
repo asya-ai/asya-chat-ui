@@ -12,6 +12,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { loginOrgStore } from "@/lib/storage"
 
+type Stage = "org" | "sso" | "credentials"
+
 export const LoginPage = () => {
   const navigate = useNavigate()
   const { setToken } = useAuth()
@@ -19,27 +21,45 @@ export const LoginPage = () => {
   const [identifier, setIdentifier] = useState("")
   const [password, setPassword] = useState("")
   const [org, setOrg] = useState("")
+  const [ssoRedirectUrl, setSsoRedirectUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [resolving, setResolving] = useState(false)
   const [registrationEnabled, setRegistrationEnabled] = useState(false)
-  const [stage, setStage] = useState<"org" | "credentials">("org")
+  const [stage, setStage] = useState<Stage>("org")
   const hasError = Boolean(error)
   const [searchParams] = useSearchParams()
 
   useEffect(() => {
     const orgParam = searchParams.get("org")
-    if (orgParam) {
-      const normalized = orgParam.trim().toLowerCase()
-      if (!normalized) return
-      setOrg(normalized)
-      loginOrgStore.set(normalized)
-      setStage("credentials")
-      return
-    }
-    const previousOrg = loginOrgStore.get()
-    if (previousOrg) {
-      setOrg(previousOrg)
-      setStage("credentials")
+    const initialOrg = orgParam ? orgParam.trim().toLowerCase() : loginOrgStore.get()
+    if (!initialOrg) return
+
+    let cancelled = false
+    setOrg(initialOrg)
+    loginOrgStore.set(initialOrg)
+    setResolving(true)
+    authApi
+      .loginResolve("", initialOrg)
+      .then((resolve) => {
+        if (cancelled) return
+        if (resolve.action === "sso" && resolve.redirect_url) {
+          setSsoRedirectUrl(resolve.redirect_url)
+          setStage("sso")
+          return
+        }
+        setStage("credentials")
+      })
+      .catch(() => {
+        if (cancelled) return
+        setStage("org")
+      })
+      .finally(() => {
+        if (!cancelled) setResolving(false)
+      })
+
+    return () => {
+      cancelled = true
     }
   }, [searchParams])
 
@@ -49,6 +69,14 @@ export const LoginPage = () => {
       .then((data) => setRegistrationEnabled(data.enabled))
       .catch(() => setRegistrationEnabled(false))
   }, [])
+
+  const resetToOrg = () => {
+    setStage("org")
+    setSsoRedirectUrl(null)
+    setIdentifier("")
+    setPassword("")
+    setError(null)
+  }
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -64,13 +92,14 @@ export const LoginPage = () => {
       if (stage === "org") {
         const resolve = await authApi.loginResolve("", orgValue)
         if (resolve.action === "sso" && resolve.redirect_url) {
-          window.location.href = resolve.redirect_url
+          setSsoRedirectUrl(resolve.redirect_url)
+          setStage("sso")
           return
         }
         setStage("credentials")
         return
       }
-      const resolve = await authApi.loginResolve(identifier, orgValue || null)
+      const resolve = await authApi.loginResolve(identifier, orgValue)
       if (resolve.action === "sso" && resolve.redirect_url) {
         window.location.href = resolve.redirect_url
         return
@@ -79,7 +108,7 @@ export const LoginPage = () => {
         setError(t("auth_login_failed"))
         return
       }
-      const data = await authApi.login(identifier, password, orgValue || null)
+      const data = await authApi.login(identifier, password, orgValue)
       setToken(data.access_token)
       navigate("/chat")
     } catch (err) {
@@ -97,94 +126,103 @@ export const LoginPage = () => {
         </div>
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col gap-1">
               <CardTitle>{t("auth_sign_in")}</CardTitle>
-              {stage === "credentials" ? (
-                <button
-                  type="button"
-                  className="text-xs underline text-muted-foreground hover:text-foreground"
-                  onClick={() => setStage("org")}
-                >
-                  {t("auth_use_different_org")}
-                </button>
+              {stage !== "org" ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>{t("auth_signing_in_to", { org })}</span>
+                  <button
+                    type="button"
+                    className="underline hover:text-foreground"
+                    onClick={resetToOrg}
+                  >
+                    {t("auth_change_org")}
+                  </button>
+                </div>
               ) : null}
             </div>
           </CardHeader>
           <CardContent>
-            <form onSubmit={onSubmit} className="space-y-4">
-              {stage === "org" ? (
-                <Input
-                  placeholder={t("auth_org")}
-                  value={org}
-                  onChange={(event) => setOrg(event.target.value)}
-                  type="text"
-                  className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
-                  required
-                />
-              ) : (
-                <>
-                  <Input
-                    placeholder={t("auth_identifier")}
-                    value={identifier}
-                    onChange={(event) => setIdentifier(event.target.value)}
-                    type="text"
-                    className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
-                    required
-                  />
+            {stage === "sso" ? (
+              <div className="space-y-4">
+                {error ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                ) : null}
+                <Button
+                  className="w-full"
+                  disabled={loading || !ssoRedirectUrl}
+                  onClick={() => {
+                    if (ssoRedirectUrl) {
+                      setLoading(true)
+                      window.location.href = ssoRedirectUrl
+                    }
+                  }}
+                >
+                  {loading ? t("auth_sign_in_loading") : t("auth_continue_sso")}
+                </Button>
+              </div>
+            ) : (
+              <form onSubmit={onSubmit} className="space-y-4">
+                {stage === "org" ? (
                   <Input
                     placeholder={t("auth_org")}
                     value={org}
                     onChange={(event) => setOrg(event.target.value)}
                     type="text"
                     className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
-                  />
-                  <Input
-                    placeholder={t("auth_password")}
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    type="password"
-                    className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
                     required
                   />
-                </>
-              )}
-              {error ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              ) : null}
-              <Button className="w-full" disabled={loading}>
-                {loading
-                  ? t("auth_sign_in_loading")
-                  : stage === "org"
-                    ? t("auth_continue")
-                    : t("auth_sign_in")}
-              </Button>
-              {stage === "credentials" ? (
-                <div className="text-center text-sm text-muted-foreground">
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={() => setStage("org")}
-                  >
-                    {t("auth_org")}
-                  </button>
-                </div>
-              ) : null}
-              {registrationEnabled ? (
-                <div className="text-center text-sm text-muted-foreground">
-                  {t("auth_no_account")}{" "}
-                  <Link to="/register" className="underline">
-                    {t("auth_register")}
-                  </Link>
-                </div>
-              ) : null}
-            <div className="text-center text-sm">
-              <Link to="/reset-password" className="underline">
-                {t("auth_forgot_password")}
-              </Link>
-            </div>
-            </form>
+                ) : (
+                  <>
+                    <Input
+                      placeholder={t("auth_identifier")}
+                      value={identifier}
+                      onChange={(event) => setIdentifier(event.target.value)}
+                      type="text"
+                      className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
+                      required
+                    />
+                    <Input
+                      placeholder={t("auth_password")}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      type="password"
+                      className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
+                      required
+                    />
+                  </>
+                )}
+                {error ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                ) : null}
+                <Button className="w-full" disabled={loading || resolving}>
+                  {loading || resolving
+                    ? t("auth_sign_in_loading")
+                    : stage === "org"
+                      ? t("auth_continue")
+                      : t("auth_sign_in")}
+                </Button>
+                {registrationEnabled ? (
+                  <div className="text-center text-sm text-muted-foreground">
+                    {t("auth_no_account")}{" "}
+                    <Link to="/register" className="underline">
+                      {t("auth_register")}
+                    </Link>
+                  </div>
+                ) : null}
+                {stage === "credentials" ? (
+                  <div className="text-center text-sm">
+                    <Link to="/reset-password" className="underline">
+                      {t("auth_forgot_password")}
+                    </Link>
+                  </div>
+                ) : null}
+              </form>
+            )}
           </CardContent>
         </Card>
       </div>
