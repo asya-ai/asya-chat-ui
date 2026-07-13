@@ -245,7 +245,7 @@ const MermaidDiagram = ({
       />
       <div
         ref={containerRef}
-        className="overflow-x-auto [&_svg]:w-full [&_svg]:min-w-max [&_svg]:h-auto"
+        className="[&_svg]:w-full [&_svg]:min-w-max [&_svg]:h-auto overflow-x-auto"
       />
     </div>
   )
@@ -415,7 +415,7 @@ const MessageBubbleComponent = ({
                           <img
                             src={`data:${file.content_type};base64,${file.data_base64}`}
                             alt={file.file_name}
-                            className="rounded-md max-w-32 max-h-32 w-auto h-auto object-contain bg-muted/50"
+                            className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
                           />
                         </Button>
                       ))}
@@ -452,8 +452,8 @@ const MessageBubbleComponent = ({
               ) : null}
               {toolCallEvent.output?.raw_output ? (
                 <details className="pt-1">
-                  <summary className="cursor-pointer opacity-80">{t("chat_result")}</summary>
-                  <pre className="bg-background/40 mt-1 p-2 rounded overflow-x-auto whitespace-pre-wrap text-[11px]">
+                  <summary className="opacity-80 cursor-pointer">{t("chat_result")}</summary>
+                  <pre className="bg-background/40 mt-1 p-2 rounded overflow-x-auto text-[11px] whitespace-pre-wrap">
                     {JSON.stringify(toolCallEvent.output.raw_output, null, 2)}
                   </pre>
                 </details>
@@ -541,7 +541,7 @@ const MessageBubbleComponent = ({
                   }
                 }}
                 rows={3}
-                className="min-h-32 max-h-[60vh] overflow-y-auto bg-muted text-foreground"
+                className="bg-muted min-h-32 max-h-[60vh] overflow-y-auto text-foreground"
               />
               {editAttachmentError ? (
                 <p className="text-destructive text-sm" role="alert">
@@ -758,8 +758,8 @@ const MessageBubbleComponent = ({
                     table({ children, node, ...rest }) {
                       void node
                       return (
-                        <div className="overflow-x-auto my-3">
-                          <table className="w-full border border-muted-foreground/30 text-sm" {...rest}>
+                        <div className="my-3 overflow-x-auto">
+                          <table className="border border-muted-foreground/30 w-full text-sm" {...rest}>
                             {children}
                           </table>
                         </div>
@@ -780,7 +780,7 @@ const MessageBubbleComponent = ({
                     tr({ children, node, ...rest }) {
                       void node
                       return (
-                        <tr className="border-t border-muted-foreground/30" {...rest}>
+                        <tr className="border-muted-foreground/30 border-t" {...rest}>
                           {children}
                         </tr>
                       )
@@ -788,7 +788,7 @@ const MessageBubbleComponent = ({
                     th({ children, node, ...rest }) {
                       void node
                       return (
-                        <th className="px-3 py-2 text-left font-semibold" {...rest}>
+                        <th className="px-3 py-2 font-semibold text-left" {...rest}>
                           {children}
                         </th>
                       )
@@ -823,7 +823,7 @@ const MessageBubbleComponent = ({
                             <CopyTextButton
                               text={content}
                               label={t("chat_copy_code")}
-                              className="top-2 right-2 z-10 absolute bg-zinc-900/90 border border-white/15 text-[10px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50 uppercase tracking-wide"
+                              className="top-2 right-2 z-10 absolute bg-zinc-900/90 hover:bg-zinc-800 border border-white/15 text-[10px] text-zinc-300 hover:text-zinc-50 uppercase tracking-wide"
                             />
                             {match ? (
                               <SyntaxHighlighter
@@ -888,7 +888,7 @@ const MessageBubbleComponent = ({
                           <img
                             src={attachmentSrc(attachment)}
                             alt={attachment.file_name}
-                            className="rounded-md max-w-32 max-h-32 w-auto h-auto object-contain bg-muted/50"
+                            className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
                           />
                         </Button>
                       )
@@ -962,10 +962,10 @@ const MessageBubbleComponent = ({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 text-xs"
+                className="px-2 h-7 text-xs"
                 onClick={() => onRetryMessage(msg)}
               >
-                <RotateCcw aria-hidden="true" className="w-3.5 h-3.5 mr-1" />
+                <RotateCcw aria-hidden="true" className="mr-1 w-3.5 h-3.5" />
                 {t("chat_retry")}
               </Button>
             ) : null}
