@@ -18,8 +18,10 @@ from app.models import (
 )
 from app.services.org_service import (
     ensure_default_roles,
+    ensure_login_domains_unique,
     require_org_admin,
     require_super_admin,
+    validate_login_domains,
 )
 
 router = APIRouter(prefix="/orgs", tags=["orgs"])
@@ -75,6 +77,7 @@ class OrgWebSettingsUpdate(BaseModel):
 
 class OrgAuthSettingsRead(BaseModel):
     slug: str
+    login_domains: list[str]
     oidc_enabled: bool
     oidc_issuer: str | None
     oidc_client_id: str | None
@@ -88,6 +91,7 @@ class OrgAuthSettingsRead(BaseModel):
 
 class OrgAuthSettingsUpdate(BaseModel):
     slug: str | None = None
+    login_domains: list[str] | None = None
     oidc_enabled: bool | None = None
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
@@ -632,6 +636,7 @@ def get_auth_settings(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
     return OrgAuthSettingsRead(
         slug=org.slug or "",
+        login_domains=validate_login_domains(org.login_domains),
         oidc_enabled=org.oidc_enabled,
         oidc_issuer=org.oidc_issuer,
         oidc_client_id=org.oidc_client_id,
@@ -665,6 +670,10 @@ def update_auth_settings(
     if "slug" in updates:
         slug_candidate = _slugify(updates.pop("slug") or "")
         org.slug = _ensure_unique_slug(session, slug_candidate, org.id)
+    if "login_domains" in updates:
+        domains = validate_login_domains(updates.pop("login_domains"))
+        ensure_login_domains_unique(session, org.id, domains)
+        org.login_domains = domains or None
     if "oidc_issuer" in updates:
         issuer = updates.pop("oidc_issuer")
         org.oidc_issuer = issuer.strip() or None if issuer is not None else None

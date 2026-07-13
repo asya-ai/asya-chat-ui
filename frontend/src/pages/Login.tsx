@@ -33,22 +33,55 @@ export const LoginPage = () => {
   useEffect(() => {
     const orgParam = searchParams.get("org")
     const initialOrg = orgParam ? orgParam.trim().toLowerCase() : loginOrgStore.get()
-    if (!initialOrg) return
+    const clientHost = window.location.host
+
+    const applyResolve = (resolve: { action: string; redirect_url?: string | null; org?: string | null }) => {
+      const resolvedOrg = resolve.org?.trim().toLowerCase()
+      if (resolvedOrg) {
+        setOrg(resolvedOrg)
+        loginOrgStore.set(resolvedOrg)
+      }
+      if (resolve.action === "sso" && resolve.redirect_url) {
+        setSsoRedirectUrl(resolve.redirect_url)
+        setStage("sso")
+        return
+      }
+      if (resolvedOrg) {
+        setStage("credentials")
+      }
+    }
+
+    if (initialOrg) {
+      let cancelled = false
+      setOrg(initialOrg)
+      loginOrgStore.set(initialOrg)
+      setResolving(true)
+      authApi
+        .loginResolve("", initialOrg, clientHost)
+        .then((resolve) => {
+          if (cancelled) return
+          applyResolve(resolve)
+        })
+        .catch(() => {
+          if (cancelled) return
+          setStage("org")
+        })
+        .finally(() => {
+          if (!cancelled) setResolving(false)
+        })
+
+      return () => {
+        cancelled = true
+      }
+    }
 
     let cancelled = false
-    setOrg(initialOrg)
-    loginOrgStore.set(initialOrg)
     setResolving(true)
     authApi
-      .loginResolve("", initialOrg)
+      .loginResolve("", null, clientHost)
       .then((resolve) => {
         if (cancelled) return
-        if (resolve.action === "sso" && resolve.redirect_url) {
-          setSsoRedirectUrl(resolve.redirect_url)
-          setStage("sso")
-          return
-        }
-        setStage("credentials")
+        applyResolve(resolve)
       })
       .catch(() => {
         if (cancelled) return
@@ -82,6 +115,7 @@ export const LoginPage = () => {
     event.preventDefault()
     setLoading(true)
     setError(null)
+    const clientHost = window.location.host
     try {
       const orgValue = org.trim().toLowerCase()
       if (!orgValue) {
@@ -90,7 +124,11 @@ export const LoginPage = () => {
       }
       loginOrgStore.set(orgValue)
       if (stage === "org") {
-        const resolve = await authApi.loginResolve("", orgValue)
+        const resolve = await authApi.loginResolve("", orgValue, clientHost)
+        if (resolve.org) {
+          setOrg(resolve.org)
+          loginOrgStore.set(resolve.org)
+        }
         if (resolve.action === "sso" && resolve.redirect_url) {
           setSsoRedirectUrl(resolve.redirect_url)
           setStage("sso")
@@ -99,7 +137,11 @@ export const LoginPage = () => {
         setStage("credentials")
         return
       }
-      const resolve = await authApi.loginResolve(identifier, orgValue)
+      const resolve = await authApi.loginResolve(identifier, orgValue, clientHost)
+      if (resolve.org) {
+        setOrg(resolve.org)
+        loginOrgStore.set(resolve.org)
+      }
       if (resolve.action === "sso" && resolve.redirect_url) {
         window.location.href = resolve.redirect_url
         return
@@ -108,7 +150,7 @@ export const LoginPage = () => {
         setError(t("auth_login_failed"))
         return
       }
-      const data = await authApi.login(identifier, password, orgValue)
+      const data = await authApi.login(identifier, password, orgValue, clientHost)
       setToken(data.access_token)
       navigate("/chat")
     } catch (err) {

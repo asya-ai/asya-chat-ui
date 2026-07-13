@@ -1,8 +1,96 @@
+import re
+
 from fastapi import HTTPException, status
 from sqlmodel import Session, select
 
 from app.core.secret_crypto import decrypt_secret
 from app.models import Org, OrgMembership, OrgProviderConfig, Role
+
+_LOGIN_DOMAIN_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+)
+_MAX_LOGIN_DOMAINS = 20
+
+
+def normalize_login_domain(value: str) -> str | None:
+    raw = value.strip().lower()
+    if not raw:
+        return None
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    raw = raw.split("/", 1)[0]
+    if raw.startswith("["):
+        end = raw.find("]")
+        if end != -1:
+            host = raw[1:end]
+            return host or None
+    if ":" in raw:
+        host, port = raw.rsplit(":", 1)
+        if port.isdigit():
+            raw = host
+    raw = raw.rstrip(".")
+    return raw or None
+
+
+def is_valid_login_domain(domain: str) -> bool:
+    if domain == "localhost":
+        return True
+    return bool(_LOGIN_DOMAIN_RE.match(domain))
+
+
+def normalize_login_domains(domains: list[str] | None) -> list[str]:
+    if not domains:
+        return []
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in domains:
+        value = normalize_login_domain(item)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def validate_login_domains(domains: list[str] | None) -> list[str]:
+    normalized = normalize_login_domains(domains)
+    for domain in normalized:
+        if not is_valid_login_domain(domain):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid login domain: {domain}",
+            )
+    if len(normalized) > _MAX_LOGIN_DOMAINS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many login domains",
+        )
+    return normalized
+
+
+def get_org_by_login_domain(session: Session, domain: str) -> Org | None:
+    normalized = normalize_login_domain(domain)
+    if not normalized:
+        return None
+    orgs = session.exec(
+        select(Org).where(Org.is_active == True, Org.login_domains.is_not(None))
+    ).all()
+    for org in orgs:
+        if normalized in normalize_login_domains(org.login_domains):
+            return org
+    return None
+
+
+def ensure_login_domains_unique(
+    session: Session, org_id, domains: list[str]
+) -> None:
+    for domain in domains:
+        existing = get_org_by_login_domain(session, domain)
+        if existing and existing.id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Login domain already in use: {domain}",
+            )
 
 
 def ensure_default_roles(session: Session, org_id) -> tuple[Role, Role]:

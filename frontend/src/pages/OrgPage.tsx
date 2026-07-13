@@ -790,6 +790,7 @@ export const OrgPage = () => {
     if (!orgSettingsId || !authSettings) return
     const payload = {
       slug: authSettings.slug,
+      login_domains: authSettings.login_domains,
       oidc_enabled: authSettings.oidc_enabled,
       oidc_issuer: authSettings.oidc_issuer ?? "",
       oidc_client_id: authSettings.oidc_client_id ?? "",
@@ -1620,6 +1621,19 @@ export const OrgPage = () => {
               placeholder={t("org_auth_org_slug")}
               value={authSettings?.slug ?? ""}
               onChange={(event) => updateAuthField("slug", event.target.value)}
+            />
+            <Input
+              placeholder={t("org_auth_login_domains")}
+              value={authSettings?.login_domains?.join(", ") ?? ""}
+              onChange={(event) =>
+                updateAuthField(
+                  "login_domains",
+                  event.target.value
+                    .split(/[,;\s]+/)
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+                )
+              }
             />
             <Input
               placeholder={t("org_auth_oidc_issuer")}

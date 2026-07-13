@@ -27,7 +27,12 @@ from app.core.security import (
 )
 from app.models import Invite, Org, OrgMembership, PasswordReset, Role, User, UserMemory
 from app.services.email_service import send_invite_email, send_password_reset_email
-from app.services.org_service import ensure_default_roles, require_org_admin
+from app.services.org_service import (
+    ensure_default_roles,
+    get_org_by_login_domain,
+    normalize_login_domain,
+    require_org_admin,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -81,16 +86,19 @@ class LoginRequest(BaseModel):
     identifier: str
     password: str
     org: str | None = None
+    host: str | None = None
 
 
 class LoginResolveRequest(BaseModel):
     identifier: str | None = None
     org: str | None = None
+    host: str | None = None
 
 
 class LoginResolveResponse(BaseModel):
     action: str
     redirect_url: str | None = None
+    org: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -179,6 +187,39 @@ def _get_org_by_slug(session: Session, slug_or_name: str) -> Org | None:
             (Org.slug == normalized) | (Org.name.ilike(normalized)),
         )
     ).first()
+
+
+def _get_request_login_host(request: Request, client_host: str | None = None) -> str | None:
+    if client_host:
+        return normalize_login_domain(client_host)
+    forwarded = request.headers.get("x-forwarded-host")
+    if forwarded:
+        return normalize_login_domain(forwarded.split(",", 1)[0].strip())
+    host = request.headers.get("host")
+    if host:
+        return normalize_login_domain(host)
+    return None
+
+
+def _resolve_login_org(
+    session: Session,
+    request: Request,
+    *,
+    explicit_org: str | None,
+    client_host: str | None,
+) -> Org | None:
+    host = _get_request_login_host(request, client_host)
+    if host:
+        host_org = get_org_by_login_domain(session, host)
+        if host_org:
+            return host_org
+    if explicit_org:
+        return _get_org_by_slug(session, explicit_org.strip())
+    return None
+
+
+def _org_login_slug(org: Org) -> str:
+    return (org.slug or org.name).strip().lower()
 
 
 def _get_membership_orgs(session: Session, user_id: UUID) -> list[Org]:
@@ -389,7 +430,9 @@ def registration_enabled(session: Session = Depends(get_db)) -> RegistrationStat
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, session: Session = Depends(get_db)) -> TokenResponse:
+def login(
+    payload: LoginRequest, request: Request, session: Session = Depends(get_db)
+) -> TokenResponse:
     user = _get_user_by_identifier(session, payload.identifier)
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
@@ -404,13 +447,13 @@ def login(payload: LoginRequest, session: Session = Depends(get_db)) -> TokenRes
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
         )
-    if payload.org:
-        org = _get_org_by_slug(session, payload.org)
-        if not org:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials",
-            )
+    org = _resolve_login_org(
+        session,
+        request,
+        explicit_org=payload.org,
+        client_host=payload.host,
+    )
+    if org:
         membership = session.exec(
             select(OrgMembership).where(
                 OrgMembership.user_id == user.id, OrgMembership.org_id == org.id
@@ -421,6 +464,11 @@ def login(payload: LoginRequest, session: Session = Depends(get_db)) -> TokenRes
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials",
             )
+    elif payload.org:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
     token = create_access_token(str(user.id), token_version=user.token_version)
     return TokenResponse(access_token=token)
 
@@ -431,16 +479,23 @@ async def login_resolve(
     request: Request,
     session: Session = Depends(get_db),
 ) -> LoginResolveResponse:
-    org: Org | None = None
-    if payload.org:
-        org = _get_org_by_slug(session, payload.org.strip())
-        if not org or not org.is_active:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    org = _resolve_login_org(
+        session,
+        request,
+        explicit_org=payload.org,
+        client_host=payload.host,
+    )
+    if not org and payload.org:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if org:
+        org_slug = _org_login_slug(org)
         if not payload.identifier:
             if org.oidc_enabled:
                 redirect_url = await _build_oidc_authorize_url(request, org)
-                return LoginResolveResponse(action="sso", redirect_url=redirect_url)
-            return LoginResolveResponse(action="local")
+                return LoginResolveResponse(
+                    action="sso", redirect_url=redirect_url, org=org_slug
+                )
+            return LoginResolveResponse(action="local", org=org_slug)
         identifier = payload.identifier.strip()
         if not identifier:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
@@ -452,11 +507,13 @@ async def login_resolve(
                 )
             ).first()
             if membership and user.auth_provider == "local":
-                return LoginResolveResponse(action="local")
+                return LoginResolveResponse(action="local", org=org_slug)
         if org.oidc_enabled:
             redirect_url = await _build_oidc_authorize_url(request, org)
-            return LoginResolveResponse(action="sso", redirect_url=redirect_url)
-        return LoginResolveResponse(action="local")
+            return LoginResolveResponse(
+                action="sso", redirect_url=redirect_url, org=org_slug
+            )
+        return LoginResolveResponse(action="local", org=org_slug)
 
     if not payload.identifier:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization required")

@@ -18,6 +18,7 @@ export type OrgWebSettings = {
 
 export type OrgAuthSettings = {
   slug: string
+  login_domains: string[]
   oidc_enabled: boolean
   oidc_issuer?: string | null
   oidc_client_id?: string | null
@@ -31,6 +32,7 @@ export type OrgAuthSettings = {
 
 export type OrgAuthSettingsUpdate = {
   slug?: string | null
+  login_domains?: string[] | null
   oidc_enabled?: boolean
   oidc_issuer?: string | null
   oidc_client_id?: string | null
