@@ -603,7 +603,11 @@ def _build_tool_registry(
             _exec_handler,
         )
     if memory_enabled and user_id:
-        mem_ctx = MemoryToolContext(session=session, user_id=user_id)
+        mem_ctx = MemoryToolContext(
+            session=session,
+            user_id=user_id,
+            current_chat_id=chat_id,
+        )
 
         async def _store_memory_handler(args: dict) -> object:
             return await store_memory(mem_ctx, content=args.get("content", ""))

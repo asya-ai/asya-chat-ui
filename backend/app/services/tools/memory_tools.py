@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class MemoryToolContext:
     session: Session
     user_id: UUID
+    current_chat_id: UUID | None = None
 
 
 async def store_memory(context: MemoryToolContext, *, content: str) -> ToolResult:
@@ -63,6 +64,8 @@ async def search_past_chats(
         Chat.user_id == context.user_id,
         Chat.is_deleted.is_(False),
     ]
+    if context.current_chat_id:
+        base_chat_filters.append(Chat.id != context.current_chat_id)
     eligible_chats_subq = select(Chat.id).where(*base_chat_filters).subquery()
     search_query = func.plainto_tsquery("simple", query)
     title_vector = func.to_tsvector("simple", func.coalesce(Chat.title, ""))
