@@ -17,8 +17,8 @@ def _attachment(*, attachment_id: str, file_name: str, payload: bytes) -> ChatMe
     )
 
 
-def test_validate_imports_allows_geopandas_and_shapefile() -> None:
-    _validate_imports("import geopandas as gpd\nimport shapefile")
+def test_validate_imports_allows_presentation_dependencies() -> None:
+    _validate_imports("import geopandas as gpd\nimport shapefile\nfrom pptx import Presentation")
 
 
 def test_write_inputs_stages_raw_attachments_without_preprocessing(tmp_path) -> None:

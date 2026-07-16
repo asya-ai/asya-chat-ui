@@ -36,6 +36,7 @@ DEFAULT_ALLOWLIST = {
     "sympy",
     "openpyxl",
     "docx",
+    "pptx",
     "pypdf",
     "pdfplumber",
     "fitz",
