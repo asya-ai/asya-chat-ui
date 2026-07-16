@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import anyio
 import pytest
 
 from app.services.langchain_runtime import LangChainToolExecutor, run_agentic_loop_langchain
@@ -64,8 +65,12 @@ class _ThoughtSignatureProvider:
 class _WebScrapeAnswerProvider:
     calls: int = 0
     seen_messages: list[list[dict]] | None = None
+    answer_messages: list[list[dict]] | None = None
 
     async def chat(self, model: str, messages: list[dict]):
+        if self.answer_messages is None:
+            self.answer_messages = []
+        self.answer_messages.append(messages.copy())
         return ChatResponse(
             content='{"answer":"Use mean 0.5","insufficient_information":false,"quotes":["mean 0.5"],}',
             usage=_usage(),
@@ -139,18 +144,25 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
         _echo,
     )
     provider = _FakeProvider()
+    tool_event_sender, tool_event_receiver = anyio.create_memory_object_stream(4)
     content, attachments, sources, image_usages, usage = await run_agentic_loop_langchain(
         provider=provider,
         model_name="fake-model",
         messages=[{"role": "user", "content": "say hello"}],
         tool_registry=registry,
         max_steps=3,
+        tool_event_sender=tool_event_sender,
     )
+    await tool_event_sender.aclose()
+    tool_events = [event async for event in tool_event_receiver]
+
     assert content == "final answer"
     assert attachments == []
     assert isinstance(sources, list)
     assert image_usages == []
     assert usage is not None
+    assert tool_events[-1]["state"] == "end"
+    assert tool_events[-1]["input_preview"] == '{"text": "hello"}'
 
 
 @pytest.mark.asyncio
@@ -243,6 +255,10 @@ async def test_agentic_loop_normalizes_web_scrape_answer_before_roundtrip():
 
     assert content == "final answer"
     assert provider.seen_messages is not None
+    assert provider.answer_messages is not None
+    answer_content = provider.answer_messages[0][1]["content"]
+    assert answer_content[1]["type"] == "image_url"
+    assert huge_screenshot in answer_content[1]["image_url"]["url"]
     second_call_messages = provider.seen_messages[1]
     tool_message = next(msg for msg in second_call_messages if msg.get("role") == "tool")
     assert "analysis_input" not in tool_message["content"]

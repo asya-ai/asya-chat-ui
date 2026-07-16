@@ -85,12 +85,33 @@ async def _generate_web_scrape_answer(
         "Analyze the provided website content and answer the question.\n"
         f'Question: "{question}"\n\n'
         "Rules:\n"
-        "1) Use only the provided source material.\n"
+        "1) Use only the provided source material (markdown and screenshot if present).\n"
         "2) If the source material is insufficient, say so clearly.\n"
         "3) Do not use prior/personal knowledge.\n"
         "4) Return strict JSON with keys: answer (string), insufficient_information (boolean), quotes (array of strings).\n"
         "5) quotes must contain direct quotes from the source, or be [] when insufficient."
     )
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": instructions + "\n\nSource markdown:\n" + markdown,
+        }
+    ]
+    screenshot_base64 = str(analysis_input.get("screenshot_base64") or "")
+    screenshot_content_type = (
+        str(analysis_input.get("screenshot_content_type") or "image/png").strip()
+        or "image/png"
+    )
+    include_image = bool(screenshot_base64)
+    if include_image:
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{screenshot_content_type};base64,{screenshot_base64}"
+                },
+            }
+        )
     prompt_messages = [
         {
             "role": "system",
@@ -99,12 +120,15 @@ async def _generate_web_scrape_answer(
                 "Never rely on outside knowledge."
             ),
         },
-        {
-            "role": "user",
-            "content": instructions + "\n\nSource markdown:\n" + markdown,
-        },
+        {"role": "user", "content": user_content},
     ]
-    response = await provider.chat(model_name, prompt_messages)
+    try:
+        response = await provider.chat(model_name, prompt_messages)
+    except Exception:
+        if not include_image:
+            raise
+        prompt_messages[1] = {"role": "user", "content": user_content[:1]}
+        response = await provider.chat(model_name, prompt_messages)
     answer, quotes, insufficient = _parse_web_answer_payload(response.content or "")
     normalized["answer"] = answer
     normalized["quotes"] = quotes
@@ -206,6 +230,7 @@ async def run_agentic_loop_langchain(
             }
         )
         for call in tool_calls:
+            input_preview = json.dumps(call.arguments, ensure_ascii=False)[:200]
             if call.name == "code_execution":
                 await _emit_tool_event(
                     {
@@ -233,7 +258,7 @@ async def run_agentic_loop_langchain(
                     "id": f"call:{call.id}",
                     "tool_name": call.name,
                     "state": "start",
-                    "input_preview": json.dumps(call.arguments, ensure_ascii=False)[:200],
+                    "input_preview": input_preview,
                     "output": {},
                 }
             )
@@ -289,6 +314,7 @@ async def run_agentic_loop_langchain(
                     "id": f"call:{call.id}",
                     "tool_name": call.name,
                     "state": "end",
+                    "input_preview": input_preview,
                     "output": {
                         "status": "error" if result.output.get("error") else "ok",
                         "result_preview": json.dumps(result.output, ensure_ascii=False)[:240],

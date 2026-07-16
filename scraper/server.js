@@ -374,20 +374,58 @@ const shouldUseBodyFallback = (articleMarkdown, bodyMarkdown) => {
   return false;
 };
 
+const preferredContentMarkdown = (document, url) => {
+  const selectors = [
+    "#dp",
+    "#ppd",
+    "[data-testid='product-detail']",
+    "[data-testid='product-details']",
+    "[itemtype*='Product']",
+    "main",
+    "[role='main']",
+    "article",
+  ];
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    if (!element) continue;
+    const markdown = htmlFragmentToMarkdown(element.outerHTML, url);
+    if (
+      markdownWordCount(markdown) >= 40 &&
+      !looksBoilerplateMarkdown(markdown)
+    ) {
+      return markdown;
+    }
+  }
+  return "";
+};
+
+const shouldUsePreferredContent = (articleMarkdown, preferredMarkdown) => {
+  if (!preferredMarkdown) return false;
+  if (!articleMarkdown || looksBoilerplateMarkdown(articleMarkdown)) return true;
+
+  const articleWords = markdownWordCount(articleMarkdown);
+  const preferredWords = markdownWordCount(preferredMarkdown);
+  return preferredWords >= 80 && articleWords < preferredWords * 0.4;
+};
+
 const toMarkdown = (html, url) => {
   const dom = new JSDOM(html, { url });
-  cleanupDocument(dom.window.document);
-  const reader = new Readability(dom.window.document);
+  const document = dom.window.document;
+  const preferredMarkdown = preferredContentMarkdown(document, url);
+  const reader = new Readability(document.cloneNode(true));
   const article = reader.parse();
-  const bodyHtml = dom.window.document.body?.innerHTML || "";
+  const bodyHtml = document.body?.innerHTML || "";
   const bodyMarkdown = htmlFragmentToMarkdown(bodyHtml, url);
   const articleMarkdown = article?.content
     ? htmlFragmentToMarkdown(article.content, url)
     : "";
+  if (shouldUsePreferredContent(articleMarkdown, preferredMarkdown)) {
+    return preferredMarkdown;
+  }
   if (shouldUseBodyFallback(articleMarkdown, bodyMarkdown)) {
     return bodyMarkdown;
   }
-  return articleMarkdown || bodyMarkdown;
+  return articleMarkdown || preferredMarkdown || bodyMarkdown;
 };
 
 app.post("/scrape", async (req, res) => {
