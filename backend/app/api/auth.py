@@ -214,8 +214,11 @@ def _resolve_login_org(
         if host_org:
             return host_org
     if explicit_org:
-        return _get_org_by_slug(session, explicit_org.strip())
-    return None
+        explicit_org_match = _get_org_by_slug(session, explicit_org.strip())
+        if explicit_org_match:
+            return explicit_org_match
+    active_orgs = session.exec(select(Org).where(Org.is_active == True).limit(2)).all()
+    return active_orgs[0] if len(active_orgs) == 1 else None
 
 
 def _org_login_slug(org: Org) -> str:
