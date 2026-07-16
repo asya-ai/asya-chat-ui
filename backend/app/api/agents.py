@@ -27,6 +27,7 @@ from app.models import (
     AgentSourceKind,
     AgentSourceStatus,
     AgentVisibility,
+    Chat,
     OrgMembership,
     User,
 )
@@ -416,6 +417,12 @@ def delete_agent(
     agent, _ = _require_agent_access(
         session, auth, agent_id, minimum_role=AgentAccessRole.owner
     )
+
+    chats = session.exec(select(Chat).where(Chat.agent_id == agent.id)).all()
+    for chat in chats:
+        chat.agent_id = None
+        session.add(chat)
+    session.flush()
 
     access_rows = session.exec(
         select(AgentAccess).where(AgentAccess.agent_id == agent.id)
