@@ -287,7 +287,8 @@ async def web_scrape(
 
     async def _call_scraper(item: str, mode: str) -> tuple[dict[str, Any] | None, str | None]:
         payload = {"url": item, "output": mode}
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Scraper may settle SPAs for ~20s+; keep client timeout above that.
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{settings.scraper_url}/scrape", json=payload
             )
@@ -334,6 +335,12 @@ async def web_scrape(
                 markdown = markdown_data.get("markdown", "") or ""
                 if len(markdown) > text_limit:
                     markdown = markdown[:text_limit]
+                if not str(markdown).strip():
+                    return {
+                        **base_output,
+                        "error": "Scrape returned empty content",
+                        "blocked": False,
+                    }
                 blocked_reason = _looks_like_blocked_page(
                     markdown_data.get("title"), markdown
                 )
@@ -388,6 +395,12 @@ async def web_scrape(
             markdown = data.get("markdown", "") or ""
             if len(markdown) > text_limit:
                 markdown = markdown[:text_limit]
+            if not str(markdown).strip():
+                return {
+                    **base_output,
+                    "error": "Scrape returned empty content",
+                    "output": "markdown",
+                }
             blocked_reason = _looks_like_blocked_page(data.get("title"), markdown)
             if blocked_reason:
                 return {

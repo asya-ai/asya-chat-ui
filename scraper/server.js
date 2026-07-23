@@ -9,6 +9,13 @@ import dns from "dns/promises";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  BROWSER_USER_AGENT,
+  CHROME_LAUNCH_ARGS,
+  documentToMarkdown,
+  fetchDocument,
+  isDirectTextDocument,
+} from "./http_fetch.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -269,17 +276,97 @@ const validateUrl = async (urlString) => {
 };
 
 const getBrowser = async () => {
-  if (!browser) {
-    browser = await puppeteer.launch({
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+  if (browser?.connected) {
+    return browser;
   }
+  if (browser) {
+    try {
+      await browser.close();
+    } catch {
+      // ignore close errors on a dead browser
+    }
+    browser = null;
+  }
+
+  const launchOptions = {
+    headless: true,
+    args: CHROME_LAUNCH_ARGS,
+    ignoreHTTPSErrors: true,
+  };
+  // Optional override for custom images; default is Puppeteer's image-bundled Chrome.
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  try {
+    browser = await puppeteer.launch(launchOptions);
+  } catch (error) {
+    const message =
+      error && typeof error === "object" && "message" in error
+        ? String(error.message)
+        : String(error);
+    throw new Error(
+      `Failed to launch Puppeteer Chrome (is it installed in the image via ` +
+        `"puppeteer browsers install chrome"?): ${message}`,
+    );
+  }
+  browser.on("disconnected", () => {
+    browser = null;
+  });
   return browser;
 };
 
 const DEFAULT_VIEWPORT = { width: 1366, height: 1800 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const preparePage = async (page) => {
+  await page.setViewport(DEFAULT_VIEWPORT);
+  await page.setUserAgent(BROWSER_USER_AGENT);
+  await page.setExtraHTTPHeaders({
+    "Accept-Language": "en-US,en;q=0.9",
+  });
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => undefined,
+    });
+  });
+};
+
+const attachPrivateRedirectGuard = async (page) => {
+  // Async request handlers race easily in Puppeteer; resolve carefully and
+  // never call continue/abort twice.
+  await page.setRequestInterception(true);
+  page.on("request", (request) => {
+    const finish = async () => {
+      try {
+        if (request.isInterceptResolutionHandled?.()) {
+          return;
+        }
+        if (request.isNavigationRequest() && request.redirectChain().length > 0) {
+          const valid = await validateUrl(request.url());
+          if (request.isInterceptResolutionHandled?.()) {
+            return;
+          }
+          if (!valid) {
+            await request.abort();
+            return;
+          }
+        }
+        await request.continue();
+      } catch {
+        try {
+          if (!request.isInterceptResolutionHandled?.()) {
+            await request.abort();
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+    void finish();
+  });
+};
 
 const settlePage = async (page) => {
   // Let SPA routes, deferred scripts, and hydration settle.
@@ -310,6 +397,14 @@ const settlePage = async (page) => {
       }
       window.scrollTo(0, 0);
     });
+  } catch {}
+
+  // Wait until the page has some visible text (soft-blocks / blank shells fail this).
+  try {
+    await page.waitForFunction(
+      () => (document.body?.innerText || "").replace(/\s+/g, " ").trim().length > 40,
+      { timeout: 10000 },
+    );
   } catch {}
 
   // One final short settle after scrolling.
@@ -447,43 +542,124 @@ app.post("/scrape", async (req, res) => {
       return res.status(400).json({ error: "Invalid or private URL" });
     }
 
-    const browserInstance = await getBrowser();
-    const page = await browserInstance.newPage();
-    await page.setViewport(DEFAULT_VIEWPORT);
-
-    // Enable request interception to block private IPs during navigation
-    await page.setRequestInterception(true);
-    page.on("request", async (request) => {
-      if (request.isNavigationRequest() && request.redirectChain().length > 0) {
-        const targetUrl = request.url();
-        const valid = await validateUrl(targetUrl);
-        if (!valid) {
-          request.abort();
-          return;
+    let httpDoc = null;
+    if (outputMode === "markdown") {
+      try {
+        httpDoc = await fetchDocument(url);
+        // Plain text / JSON / etc. do not need a browser.
+        if (isDirectTextDocument(httpDoc)) {
+          const direct = documentToMarkdown(httpDoc, { textLimit });
+          if (direct?.markdown) {
+            return res.json(direct);
+          }
         }
+      } catch (directError) {
+        const message =
+          directError && typeof directError === "object" && "message" in directError
+            ? String(directError.message)
+            : String(directError);
+        console.warn("HTTP probe failed, continuing with browser", {
+          url,
+          error: message,
+        });
       }
-      request.continue();
-    });
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
-    await settlePage(page);
-    const finalUrl = page.url();
-    const title = await page.title();
-    if (outputMode === "screenshot") {
-      const screenshot = await captureScreenshotSafe(page);
-      await page.close();
-      return res.json({ finalUrl, title, screenshot });
     }
 
-    const html = await page.content();
-    await page.close();
+    const httpMarkdownFallback = async () => {
+      if (!httpDoc) {
+        httpDoc = await fetchDocument(url);
+      }
+      return documentToMarkdown(httpDoc, { textLimit, toMarkdown });
+    };
 
-    let markdown = toMarkdown(html, finalUrl);
-    if (textLimit && markdown.length > textLimit) {
-      markdown = markdown.slice(0, textLimit);
+    let page = null;
+    let closed = false;
+    const closePage = async () => {
+      if (!page || closed) return;
+      closed = true;
+      try {
+        await page.close();
+      } catch {
+        // ignore
+      }
+    };
+
+    try {
+      const browserInstance = await getBrowser();
+      page = await browserInstance.newPage();
+      await preparePage(page);
+      await attachPrivateRedirectGuard(page);
+
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await settlePage(page);
+      const finalUrl = page.url();
+      if (!(await validateUrl(finalUrl))) {
+        throw new Error("Redirected to invalid or private URL");
+      }
+      const title = await page.title();
+      if (outputMode === "screenshot") {
+        const screenshot = await captureScreenshotSafe(page);
+        await closePage();
+        return res.json({ finalUrl, title, screenshot });
+      }
+
+      const html = await page.content();
+      await closePage();
+
+      let markdown = toMarkdown(html, finalUrl);
+      if (textLimit && markdown.length > textLimit) {
+        markdown = markdown.slice(0, textLimit);
+      }
+
+      // Soft-blocked / blank SPA shells: reuse the HTTP body when possible.
+      if (!String(markdown || "").trim()) {
+        try {
+          const fallback = await httpMarkdownFallback();
+          if (fallback?.markdown) {
+            return res.json(fallback);
+          }
+        } catch (fallbackError) {
+          const message =
+            fallbackError && typeof fallbackError === "object" && "message" in fallbackError
+              ? String(fallbackError.message)
+              : String(fallbackError);
+          console.warn("HTTP fallback after empty browser scrape failed", {
+            url,
+            error: message,
+          });
+        }
+        return res.status(422).json({
+          error: "Scrape returned empty content",
+          detail: `No extractable text from ${finalUrl || url}`,
+          finalUrl,
+          title,
+        });
+      }
+
+      return res.json({ finalUrl, title, markdown });
+    } catch (browserError) {
+      await closePage();
+      if (outputMode === "screenshot") {
+        throw browserError;
+      }
+      // Browser launch/navigation failures: still try HTTP extraction.
+      try {
+        const fallback = await httpMarkdownFallback();
+        if (fallback?.markdown) {
+          console.warn("Browser scrape failed, served HTTP fallback", {
+            url,
+            error:
+              browserError && typeof browserError === "object" && "message" in browserError
+                ? String(browserError.message)
+                : String(browserError),
+          });
+          return res.json(fallback);
+        }
+      } catch {
+        // fall through to original browser error
+      }
+      throw browserError;
     }
-
-    return res.json({ finalUrl, title, markdown });
   } catch (err) {
     const message =
       err && typeof err === "object" && "message" in err

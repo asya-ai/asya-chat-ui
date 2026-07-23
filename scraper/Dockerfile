@@ -43,9 +43,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && pnpm install --frozen-lockfile=false && pnpm exec puppeteer browsers install chrome
+# Install Chrome into the image cache (not a host binary). Puppeteer launches this.
+RUN corepack enable && pnpm install --frozen-lockfile=false \
+    && pnpm exec puppeteer browsers install chrome
 
-COPY server.js blocked_selectors.json ./
+COPY server.js http_fetch.js blocked_selectors.json ./
 
 EXPOSE 3001
 

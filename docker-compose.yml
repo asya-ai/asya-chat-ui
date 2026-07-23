@@ -90,6 +90,8 @@ services:
       context: ./scraper
     env_file:
       - .env
+    # Chrome needs more than Docker's default 64MB /dev/shm.
+    shm_size: "256mb"
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/healthz').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
       interval: 10s
