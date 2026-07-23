@@ -2170,7 +2170,7 @@ export const ChatPage = () => {
 
   return (
     <div className="flex bg-background h-svh overflow-hidden">
-      <aside className="hidden md:flex flex-col bg-background p-4 border-r w-72 min-h-0 shrink-0">
+      <aside className="hidden md:flex flex-col bg-sidebar text-sidebar-foreground p-3 w-72 min-h-0 shrink-0">
         <ChatSidebar
           title={t("chat_title")}
           labels={{
@@ -2201,16 +2201,19 @@ export const ChatPage = () => {
           getChatActivityDate={getChatActivityDate}
         />
       </aside>
-      <main id="main-content" className="flex flex-col flex-1 bg-background min-h-0 overflow-hidden">
+      <main
+        id="main-content"
+        className="flex flex-col flex-1 min-h-0 overflow-hidden bg-card md:m-3 md:ml-0 md:rounded-[var(--radius-card)] md:border md:border-border"
+      >
         <h1 className="sr-only">{activeChatTitle}</h1>
-        <div className="flex items-center gap-3 p-4 border-b">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-card">
           <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon" className="md:hidden" aria-label={t("sidebar_toggle")}>
                 <Menu aria-hidden="true" className="w-5 h-5" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="p-4 w-72">
+            <SheetContent side="left" className="bg-sidebar p-3 w-72" showCloseButton={false}>
               <div className="flex flex-col h-full">
                 <ChatSidebar
                   title={t("chat_title")}
@@ -2224,6 +2227,7 @@ export const ChatPage = () => {
                     unshare: t("chat_unshare"),
                     searchPlaceholder: t("chat_search_placeholder"),
                     noResults: t("chat_search_no_results"),
+                    close: t("common_close"),
                   }}
                   groups={groupedChats}
                   projects={agents}
@@ -2246,6 +2250,7 @@ export const ChatPage = () => {
                     setSidebarOpen(false)
                     navigate("/settings/me")
                   }}
+                  onRequestClose={() => setSidebarOpen(false)}
                   formatRelativeAge={formatRelativeAge}
                   getChatActivityDate={getChatActivityDate}
                 />

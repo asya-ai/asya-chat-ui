@@ -50,14 +50,26 @@ const MessageListComponent = ({
       ))}
       {!isLoading && messages.length === 0 ? (
         <div className="flex flex-col justify-center items-center min-h-full text-center">
-          <h2 className="font-semibold text-2xl">{t("chat_welcome_title")}</h2>
+          <img
+            src="/logo_asya.png"
+            alt=""
+            className="mb-4 size-14 rounded-xl object-contain dark:hidden"
+          />
+          <img
+            src="/logo_asya_light.png"
+            alt=""
+            className="mb-4 size-14 rounded-xl object-contain hidden dark:block"
+          />
+          <h2 className="font-heading text-3xl font-normal tracking-tight">
+            {t("chat_welcome_title")}
+          </h2>
           <p className="mt-2 text-muted-foreground text-sm">
             {t("chat_welcome_created_by")}{" "}
             <a
               href="https://asya.ai"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline underline-offset-2"
+              className="text-primary underline underline-offset-2"
             >
               asya.ai
             </a>

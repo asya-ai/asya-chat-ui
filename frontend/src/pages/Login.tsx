@@ -166,22 +166,36 @@ export const LoginPage = () => {
         <div className="flex justify-end">
           <LanguageSelect />
         </div>
-        <Card>
+        <Card className="rounded-[var(--radius-card)] border-border shadow-none">
           <CardHeader>
-            <div className="flex flex-col gap-1">
-              <CardTitle>{t("auth_sign_in")}</CardTitle>
-              {stage !== "org" ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>{t("auth_signing_in_to", { org })}</span>
-                  <button
-                    type="button"
-                    className="underline hover:text-foreground"
-                    onClick={resetToOrg}
-                  >
-                    {t("auth_change_org")}
-                  </button>
-                </div>
-              ) : null}
+            <div className="flex flex-col items-center gap-3 text-center">
+              <img
+                src="/logo_asya.png"
+                alt="asya.ai"
+                className="size-12 rounded-lg object-contain dark:hidden"
+              />
+              <img
+                src="/logo_asya_light.png"
+                alt="asya.ai"
+                className="size-12 rounded-lg object-contain hidden dark:block"
+              />
+              <div className="flex flex-col gap-1">
+                <CardTitle className="font-heading text-3xl font-normal">
+                  {t("auth_sign_in")}
+                </CardTitle>
+                {stage !== "org" ? (
+                  <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                    <span>{t("auth_signing_in_to", { org })}</span>
+                    <button
+                      type="button"
+                      className="underline hover:text-foreground"
+                      onClick={resetToOrg}
+                    >
+                      {t("auth_change_org")}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </CardHeader>
           <CardContent>

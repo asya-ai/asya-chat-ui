@@ -59,9 +59,23 @@ export const RegisterPage = () => {
         <div className="flex justify-end">
           <LanguageSelect />
         </div>
-        <Card>
+        <Card className="rounded-[var(--radius-card)] border-border shadow-none">
           <CardHeader>
-            <CardTitle>{t("auth_create_account")}</CardTitle>
+            <div className="flex flex-col items-center gap-3 text-center">
+              <img
+                src="/logo_asya.png"
+                alt="asya.ai"
+                className="size-12 rounded-lg object-contain dark:hidden"
+              />
+              <img
+                src="/logo_asya_light.png"
+                alt="asya.ai"
+                className="size-12 rounded-lg object-contain hidden dark:block"
+              />
+              <CardTitle className="font-heading text-3xl font-normal">
+                {t("auth_create_account")}
+              </CardTitle>
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={onSubmit} className="space-y-4">

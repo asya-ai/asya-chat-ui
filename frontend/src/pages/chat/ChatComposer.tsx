@@ -3,7 +3,7 @@ import { useRef } from "react"
 import type { ChatMessageAttachmentInput } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Plus, X, Brain, Globe, SquareTerminal } from "lucide-react"
+import { Paperclip, X, Brain, Globe, SquareTerminal } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import {
@@ -12,6 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { cn } from "@/lib/utils"
 
 type ChatComposerProps = {
   message: string
@@ -42,6 +43,12 @@ type ChatComposerProps = {
   sendLabel: string
   stopLabel: string
 }
+
+const toolToggleClass = (active: boolean) =>
+  cn(
+    "gap-1.5 h-7 rounded-lg px-2 text-muted-foreground hover:text-foreground",
+    active && "bg-secondary text-foreground"
+  )
 
 export const ChatComposer = ({
   message,
@@ -100,9 +107,14 @@ export const ChatComposer = ({
     t("chat_reasoning_default")
 
   return (
-    <div className="border-t px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+    <div className="px-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
       <div
-        className={`space-y-3 rounded-md ${isDragActive ? "ring-2 ring-primary/40 ring-offset-2 ring-offset-background" : ""}`}
+        className={cn(
+          "flex flex-col justify-between gap-2 rounded-lg border border-border bg-card p-2",
+          "shadow-none transition-[box-shadow,border-color]",
+          "focus-within:border-primary/40 focus-within:shadow-[0_0_0_3px] focus-within:shadow-primary/30",
+          isDragActive && "border-primary/50 shadow-[0_0_0_3px] shadow-primary/30"
+        )}
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -122,17 +134,22 @@ export const ChatComposer = ({
             }
           }}
           placeholder={placeholder}
-          rows={3}
-          className="max-h-48 overflow-y-auto"
+          rows={2}
+          className={cn(
+            "max-h-48 min-h-[52px] resize-none overflow-y-auto",
+            "border-0 bg-transparent px-1.5 py-1 text-sm shadow-none",
+            "placeholder:text-muted-foreground",
+            "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+          )}
           disabled={loading || readOnly}
         />
         {attachmentError ? (
-          <p className="text-destructive text-sm" role="alert">
+          <p className="px-1.5 text-destructive text-sm" role="alert">
             {attachmentError}
           </p>
         ) : null}
         {pendingAttachments.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 px-1">
             {pendingAttachments.map((attachment, index) => {
               const isImage = attachment.content_type.startsWith("image/")
               return (
@@ -160,7 +177,7 @@ export const ChatComposer = ({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="-top-2 -right-2 absolute bg-background shadow rounded-full w-8 h-8"
+                    className="-top-2 -right-2 absolute bg-card shadow rounded-full w-8 h-8"
                     onClick={() => onRemoveAttachment(index)}
                     aria-label={t("common_delete")}
                   >
@@ -171,8 +188,8 @@ export const ChatComposer = ({
             })}
           </div>
         ) : null}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-end justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-0.5">
             <input
               ref={fileInputRef}
               type="file"
@@ -184,22 +201,23 @@ export const ChatComposer = ({
             <Button
               variant="ghost"
               size="icon"
+              className="size-7 text-muted-foreground"
               onClick={handlePickFiles}
               disabled={loading || readOnly}
               aria-label={t("chat_add_files")}
             >
-              <Plus aria-hidden="true" className="w-5 h-5" />
+              <Paperclip aria-hidden="true" className="size-4" />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className={`gap-2 ${reasoningEffort ? "text-primary bg-primary/10" : "text-muted-foreground"}`}
+                  className={toolToggleClass(Boolean(reasoningEffort))}
                   title={t("chat_reasoning_effort")}
                   disabled={loading || readOnly}
                 >
-                  <Brain aria-hidden="true" className="w-4 h-4" />
+                  <Brain aria-hidden="true" className="size-3.5" />
                   <span className="text-xs">{currentReasoningLabel}</span>
                 </Button>
               </DropdownMenuTrigger>
@@ -218,24 +236,20 @@ export const ChatComposer = ({
             <Button
               variant="ghost"
               size="sm"
-              className={`gap-2 ${
-                webSearchEnabled ? "text-primary bg-primary/10" : "text-muted-foreground"
-              }`}
+              className={toolToggleClass(webSearchEnabled)}
               title={
                 webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
               }
               disabled={loading || readOnly}
               onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
             >
-              <Globe aria-hidden="true" className="w-4 h-4" />
+              <Globe aria-hidden="true" className="size-3.5" />
               <span className="text-xs">{t("chat_web_search")}</span>
             </Button>
             <Button
               variant="ghost"
               size="sm"
-              className={`gap-2 ${
-                codeExecutionEnabled ? "text-primary bg-primary/10" : "text-muted-foreground"
-              }`}
+              className={toolToggleClass(codeExecutionEnabled)}
               title={
                 codeExecutionEnabled
                   ? t("chat_code_execution_on")
@@ -244,17 +258,23 @@ export const ChatComposer = ({
               disabled={loading || readOnly}
               onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
             >
-              <SquareTerminal aria-hidden="true" className="w-4 h-4" />
+              <SquareTerminal aria-hidden="true" className="size-3.5" />
               <span className="text-xs">{t("org_code_execution")}</span>
             </Button>
           </div>
-          <div className="flex items-center justify-end gap-2">
+          <div className="shrink-0">
             {loading ? (
-              <Button variant="destructive" size="sm" onClick={onStop}>
+              <Button variant="destructive" size="sm" className="h-9" onClick={onStop}>
                 {stopLabel}
               </Button>
             ) : (
-              <Button size="sm" onClick={onSend} disabled={!canSend}>
+              <Button
+                size="sm"
+                className="h-9"
+                variant={canSend ? "default" : "secondary"}
+                onClick={onSend}
+                disabled={!canSend}
+              >
                 {sendLabel}
               </Button>
             )}
