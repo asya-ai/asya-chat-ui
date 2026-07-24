@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from google.genai import types
+
 from app.services.providers.gemini_provider import GeminiProvider
 
 
@@ -61,3 +63,54 @@ def test_build_function_call_part_keeps_signature_on_part_only() -> None:
     assert part["function_call"]["name"] == "web_search"
     assert part["function_call"]["args"] == {"query": "jetson"}
     assert "thought_signature" not in part["function_call"]
+
+
+def test_build_config_omits_tools_and_system_when_using_cached_content() -> None:
+    provider = _provider_without_init()
+    cache_config = types.GenerateContentConfig(cached_content="cachedContents/abc")
+    tools = [types.Tool(google_search={})]
+
+    config = provider._build_config(
+        system_instruction="be helpful",
+        cache_config=cache_config,
+        tools=tools,
+    )
+
+    assert config is not None
+    assert config.cached_content == "cachedContents/abc"
+    assert config.system_instruction is None
+    assert config.tools is None
+
+
+def test_build_config_includes_tools_and_system_without_cache() -> None:
+    provider = _provider_without_init()
+    tools = [types.Tool(google_search={})]
+
+    config = provider._build_config(
+        system_instruction="be helpful",
+        tools=tools,
+    )
+
+    assert config is not None
+    assert config.cached_content is None
+    assert config.system_instruction == "be helpful"
+    assert config.tools == tools
+
+
+def test_cache_key_includes_system_and_tools() -> None:
+    provider = _provider_without_init()
+    provider.prompt_cache_key = None
+    contents = [{"role": "user", "parts": [{"text": "hello"}]}]
+    tools = [{"google_search": {}}]
+
+    key_plain = provider._cache_key_for_contents("gemini-flash", contents)
+    key_with_system = provider._cache_key_for_contents(
+        "gemini-flash", contents, system_instruction="sys"
+    )
+    key_with_tools = provider._cache_key_for_contents(
+        "gemini-flash", contents, tools=tools
+    )
+
+    assert key_plain != key_with_system
+    assert key_plain != key_with_tools
+    assert key_with_system != key_with_tools

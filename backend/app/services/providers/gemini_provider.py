@@ -38,10 +38,36 @@ class GeminiProvider:
         self.logger = logging.getLogger(__name__)
         self.prompt_cache_key = prompt_cache_key
 
-    def _cache_key_for_contents(self, model: str, contents: list[dict]) -> str:
+    @staticmethod
+    def _tools_fingerprint(tools: list | None) -> str:
+        if not tools:
+            return ""
+        serialized = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                serialized.append(tool)
+            elif hasattr(tool, "model_dump"):
+                serialized.append(tool.model_dump(mode="json", exclude_none=True))
+            else:
+                serialized.append(str(tool))
+        return json.dumps(serialized, sort_keys=True, ensure_ascii=False)
+
+    def _cache_key_for_contents(
+        self,
+        model: str,
+        contents: list[dict],
+        *,
+        system_instruction: str | None = None,
+        tools: list | None = None,
+    ) -> str:
         base = json.dumps(contents, sort_keys=True, ensure_ascii=False)
         prefix = self.prompt_cache_key or ""
-        digest = hashlib.sha256(f"{model}:{prefix}:{base}".encode("utf-8")).hexdigest()
+        tools_fp = self._tools_fingerprint(tools)
+        digest = hashlib.sha256(
+            f"{model}:{prefix}:{system_instruction or ''}:{tools_fp}:{base}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
         return digest
 
     def _prune_cached_content(self) -> None:
@@ -87,7 +113,12 @@ class GeminiProvider:
         return True
 
     def _maybe_cached_content_config(
-        self, model: str, contents: list[dict]
+        self,
+        model: str,
+        contents: list[dict],
+        *,
+        system_instruction: str | None = None,
+        tools: list | None = None,
     ) -> tuple[list[dict], types.GenerateContentConfig | None]:
         if not settings.gemini_cached_content_enabled:
             return contents, None
@@ -105,7 +136,12 @@ class GeminiProvider:
         )
         if total_chars < 4096:
             return contents, None
-        cache_key = self._cache_key_for_contents(model, prefix)
+        cache_key = self._cache_key_for_contents(
+            model,
+            prefix,
+            system_instruction=system_instruction,
+            tools=tools,
+        )
         cached_name = self._get_cached_content_name(cache_key)
         if not cached_name:
             try:
@@ -116,12 +152,19 @@ class GeminiProvider:
                     if not role or not parts:
                         return contents, None
                     prefix_contents.append(types.Content(role=role, parts=parts))
+                # Tools/system must live on the cache; generate_content rejects them
+                # when cached_content is set.
+                create_kwargs: dict = {
+                    "contents": prefix_contents,
+                    "ttl": f"{settings.gemini_cached_content_ttl_seconds}s",
+                }
+                if system_instruction:
+                    create_kwargs["system_instruction"] = system_instruction
+                if tools:
+                    create_kwargs["tools"] = tools
                 cached = self.client.caches.create(
                     model=model,
-                    config=types.CreateCachedContentConfig(
-                        contents=prefix_contents,
-                        ttl=f"{settings.gemini_cached_content_ttl_seconds}s",
-                    ),
+                    config=types.CreateCachedContentConfig(**create_kwargs),
                 )
                 cached_name = cached.name
                 self._set_cached_content_name(cache_key, cached_name)
@@ -228,16 +271,19 @@ class GeminiProvider:
         *,
         system_instruction: str | None = None,
         cache_config: types.GenerateContentConfig | None = None,
-        tools: list[types.Tool] | None = None,
+        tools: list | None = None,
     ) -> types.GenerateContentConfig | None:
-        has_anything = system_instruction or cache_config or tools
-        if not has_anything:
+        cached_content = (
+            getattr(cache_config, "cached_content", None) if cache_config else None
+        )
+        if cached_content:
+            # Mutually exclusive with tools/system_instruction on the request.
+            return types.GenerateContentConfig(cached_content=cached_content)
+        if not system_instruction and not tools:
             return None
         config = types.GenerateContentConfig()
         if system_instruction:
             config.system_instruction = system_instruction
-        if cache_config and getattr(cache_config, "cached_content", None):
-            config.cached_content = cache_config.cached_content
         if tools:
             config.tools = tools
         return config
@@ -307,7 +353,9 @@ class GeminiProvider:
                 elif isinstance(content, str):
                     contents.append({"role": role, "parts": [{"text": content}]})
             contents_to_send, cache_config = self._maybe_cached_content_config(
-                model, contents
+                model,
+                contents,
+                system_instruction=system_instruction,
             )
             config = self._build_config(
                 system_instruction=system_instruction,
@@ -436,7 +484,10 @@ class GeminiProvider:
                 for tool in tools
             ]
             contents_to_send, cache_config = self._maybe_cached_content_config(
-                model, contents
+                model,
+                contents,
+                system_instruction=system_instruction,
+                tools=tool_declarations,
             )
             config = self._build_config(
                 system_instruction=system_instruction,
@@ -541,10 +592,13 @@ class GeminiProvider:
                         contents.append({"role": role, "parts": parts})
                 elif isinstance(content, str):
                     contents.append({"role": role, "parts": [{"text": content}]})
-            contents_to_send, cache_config = self._maybe_cached_content_config(
-                model, contents
-            )
             google_search_tools = [{"google_search": {}}]
+            contents_to_send, cache_config = self._maybe_cached_content_config(
+                model,
+                contents,
+                system_instruction=system_instruction,
+                tools=google_search_tools,
+            )
             config = self._build_config(
                 system_instruction=system_instruction,
                 cache_config=cache_config,
