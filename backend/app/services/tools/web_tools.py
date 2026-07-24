@@ -90,8 +90,15 @@ def _locale_to_region(locale: str | None) -> str | None:
     parts = value.split("-")
     language = parts[0].lower() if parts else ""
     country = parts[1].lower() if len(parts) > 1 else ""
-    if not language or not country:
+    if not language:
         return None
+    if not country:
+        defaults = {
+            "en": "us-en",
+            "lv": "lv-lv",
+            "ja": "jp-ja",
+        }
+        return defaults.get(language)
     if country == "gb":
         country = "uk"
     return f"{country}-{language}"

@@ -186,9 +186,11 @@ const CopyTextButton = ({
 const MermaidDiagram = ({
   chart,
   copyLabel,
+  renderFailedLabel,
 }: {
   chart: string
   copyLabel: string
+  renderFailedLabel: string
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [renderError, setRenderError] = useState<string | null>(null)
@@ -211,7 +213,7 @@ const MermaidDiagram = ({
         setRenderError(
           error instanceof Error
             ? error.message
-            : "Failed to render Mermaid diagram."
+            : renderFailedLabel
         )
       }
     }
@@ -219,7 +221,7 @@ const MermaidDiagram = ({
     return () => {
       cancelled = true
     }
-  }, [chart])
+  }, [chart, renderFailedLabel])
 
   if (renderError) {
     return (
@@ -818,6 +820,7 @@ const MessageBubbleComponent = ({
                           <MermaidDiagram
                             chart={mermaidChart}
                             copyLabel={t("chat_copy_mermaid")}
+                            renderFailedLabel={t("chat_mermaid_render_failed")}
                           />
                         )
                       }

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { FolderOpen, Plus, Search } from "lucide-react"
 
 import { agentApi } from "@/lib/api"
+import { useI18n } from "@/lib/i18n-context"
 import type { Agent } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,6 +20,7 @@ import {
 
 export const ProjectsPage = () => {
   const navigate = useNavigate()
+  const { t } = useI18n()
   const [projects, setProjects] = useState<Agent[]>([])
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(true)
@@ -35,12 +37,12 @@ export const ProjectsPage = () => {
         setError(null)
         setProjects(await agentApi.list())
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load projects")
+        setError(err instanceof Error ? err.message : t("project_load_failed"))
       } finally {
         setLoading(false)
       }
     })()
-  }, [])
+  }, [t])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -55,7 +57,7 @@ export const ProjectsPage = () => {
   const handleCreate = async () => {
     const name = newName.trim()
     if (!name) {
-      setError("Project name is required.")
+      setError(t("project_name_required"))
       return
     }
     try {
@@ -70,7 +72,7 @@ export const ProjectsPage = () => {
       setNewInstructions("")
       navigate(`/projects/${created.id}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create project")
+      setError(err instanceof Error ? err.message : t("project_create_failed"))
     } finally {
       setCreating(false)
     }
@@ -81,23 +83,20 @@ export const ProjectsPage = () => {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <FolderOpen className="h-6 w-6" aria-hidden="true" />
-          <h1 className="text-2xl font-semibold">Projects</h1>
+          <h1 className="text-2xl font-semibold">{t("project_title")}</h1>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => navigate("/chat")}>
-            Back to chat
+            {t("common_back_to_chat")}
           </Button>
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden="true" />
-            New project
+            {t("project_new")}
           </Button>
         </div>
       </header>
 
-      <p className="text-muted-foreground text-sm">
-        Group chats, custom instructions, and files together. Everything you add stays available to
-        every chat inside the project.
-      </p>
+      <p className="text-muted-foreground text-sm">{t("project_description")}</p>
 
       <div className="relative">
         <Search
@@ -107,9 +106,9 @@ export const ProjectsPage = () => {
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search projects"
+          placeholder={t("project_search_placeholder")}
           className="pl-9"
-          aria-label="Search projects"
+          aria-label={t("project_search_aria")}
         />
       </div>
 
@@ -120,7 +119,7 @@ export const ProjectsPage = () => {
       ) : null}
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">Loading projects...</p>
+        <p className="text-muted-foreground text-sm">{t("project_loading")}</p>
       ) : filtered.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-dashed py-20 text-center">
           <div className="bg-muted flex h-14 w-14 items-center justify-center rounded-2xl">
@@ -128,18 +127,20 @@ export const ProjectsPage = () => {
           </div>
           <div className="space-y-1">
             <p className="font-medium">
-              {projects.length === 0 ? "No projects yet" : "No projects match your search"}
+              {projects.length === 0
+                ? t("project_empty_title")
+                : t("project_empty_search_title")}
             </p>
             <p className="text-muted-foreground text-sm">
               {projects.length === 0
-                ? "Create your first project to organize related chats."
-                : "Try a different search term."}
+                ? t("project_empty_desc")
+                : t("project_empty_search_desc")}
             </p>
           </div>
           {projects.length === 0 ? (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" aria-hidden="true" />
-              New project
+              {t("project_new")}
             </Button>
           ) : null}
         </div>
@@ -166,7 +167,9 @@ export const ProjectsPage = () => {
               {project.description ? (
                 <p className="text-muted-foreground line-clamp-2 text-sm">{project.description}</p>
               ) : (
-                <p className="text-muted-foreground/70 text-sm italic">No description</p>
+                <p className="text-muted-foreground/70 text-sm italic">
+                  {t("project_no_description")}
+                </p>
               )}
             </Card>
           ))}
@@ -176,12 +179,12 @@ export const ProjectsPage = () => {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create project</DialogTitle>
+            <DialogTitle>{t("project_create_title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <Input
               autoFocus
-              placeholder="Project name"
+              placeholder={t("project_name_placeholder")}
               value={newName}
               onChange={(event) => setNewName(event.target.value)}
               onKeyDown={(event) => {
@@ -193,17 +196,17 @@ export const ProjectsPage = () => {
             />
             <Textarea
               rows={4}
-              placeholder="Custom instructions (optional) - how should the model behave in this project?"
+              placeholder={t("project_instructions_placeholder")}
               value={newInstructions}
               onChange={(event) => setNewInstructions(event.target.value)}
             />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
+              {t("common_cancel")}
             </Button>
             <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
-              Create project
+              {t("project_create_action")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -281,14 +281,38 @@ export const authApi = {
       body: JSON.stringify({ org_id: orgId, email }),
     }),
   me: () =>
-    apiFetch<{ id: string; email: string; is_super_admin: boolean; is_admin: boolean; memory_enabled: boolean }>(
-      "/auth/me"
-    ),
+    apiFetch<{
+      id: string
+      email: string
+      is_super_admin: boolean
+      is_admin: boolean
+      memory_enabled: boolean
+      locale: string | null
+    }>("/auth/me"),
   toggleMemory: (memoryEnabled: boolean) =>
-    apiFetch<{ id: string; email: string; is_super_admin: boolean; is_admin: boolean; memory_enabled: boolean }>(
-      "/auth/me/memory",
-      { method: "PATCH", body: JSON.stringify({ memory_enabled: memoryEnabled }) }
-    ),
+    apiFetch<{
+      id: string
+      email: string
+      is_super_admin: boolean
+      is_admin: boolean
+      memory_enabled: boolean
+      locale: string | null
+    }>("/auth/me/memory", {
+      method: "PATCH",
+      body: JSON.stringify({ memory_enabled: memoryEnabled }),
+    }),
+  updateLocale: (locale: string) =>
+    apiFetch<{
+      id: string
+      email: string
+      is_super_admin: boolean
+      is_admin: boolean
+      memory_enabled: boolean
+      locale: string | null
+    }>("/auth/me/locale", {
+      method: "PATCH",
+      body: JSON.stringify({ locale }),
+    }),
   changePassword: (currentPassword: string, newPassword: string) =>
     apiFetch("/auth/me/password", {
       method: "PATCH",

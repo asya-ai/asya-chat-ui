@@ -125,12 +125,16 @@ class PasswordResetConfirm(BaseModel):
     new_password: str
 
 
+ALLOWED_LOCALES = {"en", "lv", "ja"}
+
+
 class MeResponse(BaseModel):
     id: str
     email: EmailStr
     is_super_admin: bool
     is_admin: bool
     memory_enabled: bool
+    locale: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -168,6 +172,30 @@ def _normalize_identifier(value: str) -> str:
 
 def _normalize_email(value: str) -> str:
     return value.strip().lower()
+
+
+def _is_admin_user(session: Session, user: User) -> bool:
+    if user.is_super_admin:
+        return True
+    membership = session.exec(
+        select(OrgMembership).where(OrgMembership.user_id == user.id)
+    ).first()
+    if membership:
+        role = session.exec(select(Role).where(Role.id == membership.role_id)).first()
+        if role and role.name in {"admin", "owner"}:
+            return True
+    return False
+
+
+def _me_response(session: Session, user: User) -> MeResponse:
+    return MeResponse(
+        id=str(user.id),
+        email=user.email,
+        is_super_admin=user.is_super_admin,
+        is_admin=_is_admin_user(session, user),
+        memory_enabled=user.memory_enabled,
+        locale=user.locale,
+    )
 
 
 def _get_user_by_identifier(session: Session, identifier: str) -> User | None:
@@ -759,25 +787,7 @@ def get_me(
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MeResponse:
-    is_admin = False
-    if current_user.is_super_admin:
-        is_admin = True
-    else:
-        membership = session.exec(
-            select(OrgMembership).where(OrgMembership.user_id == current_user.id)
-        ).first()
-        if membership:
-            role = session.exec(select(Role).where(Role.id == membership.role_id)).first()
-            if role and role.name in {"admin", "owner"}:
-                is_admin = True
-
-    return MeResponse(
-        id=str(current_user.id),
-        email=current_user.email,
-        is_super_admin=current_user.is_super_admin,
-        is_admin=is_admin,
-        memory_enabled=current_user.memory_enabled,
-    )
+    return _me_response(session, current_user)
 
 
 @router.patch("/me/password", status_code=status.HTTP_204_NO_CONTENT)
@@ -834,24 +844,29 @@ def toggle_memory(
     current_user.memory_enabled = payload.memory_enabled
     session.add(current_user)
     session.commit()
-    is_admin = False
-    if current_user.is_super_admin:
-        is_admin = True
-    else:
-        membership = session.exec(
-            select(OrgMembership).where(OrgMembership.user_id == current_user.id)
-        ).first()
-        if membership:
-            role = session.exec(select(Role).where(Role.id == membership.role_id)).first()
-            if role and role.name in {"admin", "owner"}:
-                is_admin = True
-    return MeResponse(
-        id=str(current_user.id),
-        email=current_user.email,
-        is_super_admin=current_user.is_super_admin,
-        is_admin=is_admin,
-        memory_enabled=current_user.memory_enabled,
-    )
+    return _me_response(session, current_user)
+
+
+class LocaleUpdateRequest(BaseModel):
+    locale: str
+
+
+@router.patch("/me/locale", response_model=MeResponse)
+def update_locale(
+    payload: LocaleUpdateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MeResponse:
+    locale = payload.locale.strip().lower()
+    if locale not in ALLOWED_LOCALES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid locale (use {'/'.join(sorted(ALLOWED_LOCALES))})",
+        )
+    current_user.locale = locale
+    session.add(current_user)
+    session.commit()
+    return _me_response(session, current_user)
 
 
 class MemoryRead(BaseModel):
@@ -948,13 +963,7 @@ def update_super_admin(
     session.add(user)
     session.commit()
     session.refresh(user)
-    return MeResponse(
-        id=str(user.id),
-        email=user.email,
-        is_super_admin=user.is_super_admin,
-        is_admin=user.is_super_admin,
-        memory_enabled=user.memory_enabled,
-    )
+    return _me_response(session, user)
 
 
 @router.post("/invites")

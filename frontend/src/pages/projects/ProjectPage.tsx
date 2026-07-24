@@ -13,11 +13,13 @@ import {
 } from "lucide-react"
 
 import { agentApi, chatApi, modelApi } from "@/lib/api"
+import { useI18n, type TranslationKey } from "@/lib/i18n-context"
 import type {
   Agent,
   AgentShare,
   AgentShareSuggestion,
   AgentSource,
+  AgentSourceStatus,
   Chat,
   ChatModel,
 } from "@/lib/types"
@@ -64,9 +66,23 @@ const formatDate = (value: string) => {
   }
 }
 
+const SOURCE_STATUS_KEYS: Record<AgentSourceStatus, TranslationKey> = {
+  queued: "project_status_queued",
+  indexing: "project_status_indexing",
+  ready: "project_status_ready",
+  failed: "project_status_failed",
+}
+
+const ROLE_KEYS = {
+  viewer: "project_role_viewer",
+  editor: "project_role_editor",
+  owner: "project_role_owner",
+} as const satisfies Record<"viewer" | "editor" | "owner", TranslationKey>
+
 export const ProjectPage = () => {
   const navigate = useNavigate()
   const { projectId } = useParams<{ projectId: string }>()
+  const { t, tCount } = useI18n()
   const orgId = orgStore.get() ?? ""
 
   const [project, setProject] = useState<Agent | null>(null)
@@ -134,7 +150,7 @@ export const ProjectPage = () => {
         setError(null)
         const found = await loadProject()
         if (!found) {
-          setError("Project not found or you no longer have access.")
+          setError(t("project_not_found_access"))
           return
         }
         await Promise.all([
@@ -147,13 +163,13 @@ export const ProjectPage = () => {
             : Promise.resolve(),
         ])
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load project")
+        setError(err instanceof Error ? err.message : t("project_load_one_failed"))
       } finally {
         setLoading(false)
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId])
+  }, [projectId, t])
 
   const hasPendingSources = useMemo(
     () => sources.some((source) => source.status === "queued" || source.status === "indexing"),
@@ -208,7 +224,7 @@ export const ProjectPage = () => {
       setError(null)
       await fn()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : t("common_error"))
     } finally {
       setBusy(false)
     }
@@ -218,7 +234,7 @@ export const ProjectPage = () => {
     withBusy(async () => {
       if (!project) return
       if (!instrName.trim()) {
-        setError("Project name is required.")
+        setError(t("project_name_required"))
         return
       }
       await agentApi.update(project.id, {
@@ -228,14 +244,14 @@ export const ProjectPage = () => {
         preferred_model_id: instrModelId || null,
       })
       await loadProject()
-      notify("Project instructions saved.")
+      notify(t("project_instructions_saved"))
     })
 
   const handleUploadFiles = () =>
     withBusy(async () => {
       if (!project || sourceFiles.length === 0) return
       const attachments = await readFilesAsAttachments(sourceFiles)
-      if (attachments.length === 0) throw new Error("Failed to read selected files")
+      if (attachments.length === 0) throw new Error(t("project_files_read_failed"))
       await Promise.all(
         attachments.map((attachment, index) =>
           agentApi.createSource(project.id, {
@@ -250,7 +266,9 @@ export const ProjectPage = () => {
       setSourceFiles([])
       setSourceFileKey((key) => key + 1)
       await loadSources()
-      notify(`${attachments.length} file${attachments.length === 1 ? "" : "s"} uploaded.`)
+      notify(
+        tCount("project_file_uploaded", "project_files_uploaded", attachments.length)
+      )
     })
 
   const handleAddUrl = () =>
@@ -258,7 +276,7 @@ export const ProjectPage = () => {
       if (!project) return
       const url = sourceUrl.trim()
       if (!url) {
-        setError("URL is required.")
+        setError(t("project_url_required"))
         return
       }
       await agentApi.createSource(project.id, {
@@ -269,7 +287,7 @@ export const ProjectPage = () => {
       setSourceUrl("")
       setSourceUrlTitle("")
       await loadSources()
-      notify("URL added and indexing.")
+      notify(t("project_url_added"))
     })
 
   const handleReindex = (sourceId: string) =>
@@ -277,7 +295,7 @@ export const ProjectPage = () => {
       if (!project) return
       await agentApi.reindexSource(project.id, sourceId)
       await loadSources()
-      notify("Reindexing started.")
+      notify(t("project_reindex_started"))
     })
 
   const handleDeleteSource = (sourceId: string) =>
@@ -285,7 +303,7 @@ export const ProjectPage = () => {
       if (!project) return
       await agentApi.removeSource(project.id, sourceId)
       await loadSources()
-      notify("File removed.")
+      notify(t("project_file_removed"))
     })
 
   const handleRename = () =>
@@ -293,13 +311,13 @@ export const ProjectPage = () => {
       if (!project) return
       const name = renameValue.trim()
       if (!name) {
-        setError("Project name is required.")
+        setError(t("project_name_required"))
         return
       }
       await agentApi.update(project.id, { name })
       setRenameOpen(false)
       await loadProject()
-      notify("Project renamed.")
+      notify(t("project_renamed"))
     })
 
   const handleDeleteProject = () =>
@@ -324,14 +342,14 @@ export const ProjectPage = () => {
       if (!project) return
       const email = shareEmail.trim()
       if (!email) {
-        setError("Email is required.")
+        setError(t("project_email_required"))
         return
       }
       await agentApi.share(project.id, { email, role: shareRole })
       setShareEmail("")
       setSuggestionsOpen(false)
       setShares(await agentApi.listShares(project.id))
-      notify("Access granted.")
+      notify(t("project_access_granted"))
     })
 
   const handleRemoveShare = (userId: string) =>
@@ -353,7 +371,7 @@ export const ProjectPage = () => {
   if (loading) {
     return (
       <div className="mx-auto flex min-h-svh w-full max-w-4xl items-center justify-center px-4">
-        <p className="text-muted-foreground text-sm">Loading project...</p>
+        <p className="text-muted-foreground text-sm">{t("project_loading_one")}</p>
       </div>
     )
   }
@@ -361,16 +379,16 @@ export const ProjectPage = () => {
   if (!project) {
     return (
       <div className="mx-auto flex min-h-svh w-full max-w-4xl flex-col items-center justify-center gap-4 px-4 text-center">
-        <p className="text-muted-foreground">{error ?? "Project not found."}</p>
-        <Button onClick={() => navigate("/projects")}>Back to projects</Button>
+        <p className="text-muted-foreground">{error ?? t("project_not_found")}</p>
+        <Button onClick={() => navigate("/projects")}>{t("project_back_to_projects")}</Button>
       </div>
     )
   }
 
   const tabs: { id: Tab; label: string; count?: number }[] = [
-    { id: "chats", label: "Chats", count: chats.length },
-    { id: "files", label: "Files", count: sources.length },
-    { id: "instructions", label: "Instructions" },
+    { id: "chats", label: t("project_tab_chats"), count: chats.length },
+    { id: "files", label: t("project_tab_files"), count: sources.length },
+    { id: "instructions", label: t("project_tab_instructions") },
   ]
 
   return (
@@ -383,7 +401,7 @@ export const ProjectPage = () => {
           onClick={() => navigate("/projects")}
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          Projects
+          {t("project_title")}
         </Button>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -395,12 +413,12 @@ export const ProjectPage = () => {
           <div className="flex items-center gap-2">
             <Button onClick={startChat}>
               <MessageSquarePlus className="h-4 w-4" aria-hidden="true" />
-              New chat
+              {t("chat_new_title")}
             </Button>
             {canEdit ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="Project actions">
+                  <Button variant="outline" size="icon" aria-label={t("project_actions_aria")}>
                     <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -411,16 +429,16 @@ export const ProjectPage = () => {
                       setRenameOpen(true)
                     }}
                   >
-                    Rename
+                    {t("project_rename")}
                   </DropdownMenuItem>
                   {isOwner ? (
-                    <DropdownMenuItem onClick={openShare}>Share</DropdownMenuItem>
+                    <DropdownMenuItem onClick={openShare}>{t("project_share")}</DropdownMenuItem>
                   ) : null}
                   {isOwner ? (
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
-                        Delete project
+                        {t("project_delete")}
                       </DropdownMenuItem>
                     </>
                   ) : null}
@@ -468,8 +486,8 @@ export const ProjectPage = () => {
         sortedChats.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed py-16 text-center">
             <MessageSquarePlus className="text-muted-foreground h-6 w-6" aria-hidden="true" />
-            <p className="text-muted-foreground text-sm">No chats in this project yet.</p>
-            <Button onClick={startChat}>Start a chat</Button>
+            <p className="text-muted-foreground text-sm">{t("project_no_chats")}</p>
+            <Button onClick={startChat}>{t("project_start_chat")}</Button>
           </div>
         ) : (
           <div className="space-y-2">
@@ -490,7 +508,7 @@ export const ProjectPage = () => {
                 className="hover:border-primary/60 hover:bg-accent/40 flex cursor-pointer flex-row items-center justify-between gap-3 px-4 py-3 transition-colors"
               >
                 <p className="min-w-0 flex-1 truncate font-medium">
-                  {chat.title || "Untitled chat"}
+                  {chat.title || t("project_untitled_chat")}
                 </p>
                 <span className="text-muted-foreground shrink-0 text-xs">
                   {formatDate(chat.last_activity_at)}
@@ -508,7 +526,7 @@ export const ProjectPage = () => {
               <div className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-medium">
                   <Upload className="h-4 w-4" aria-hidden="true" />
-                  Upload files
+                  {t("project_upload_files")}
                 </p>
                 <Input
                   key={sourceFileKey}
@@ -523,11 +541,11 @@ export const ProjectPage = () => {
                     disabled={sourceFiles.length === 0 || busy}
                     size="sm"
                   >
-                    Upload
+                    {t("project_upload")}
                   </Button>
                   {sourceFiles.length > 0 ? (
                     <span className="text-muted-foreground text-xs">
-                      {sourceFiles.length} selected
+                      {t("project_files_selected", { count: sourceFiles.length })}
                     </span>
                   ) : null}
                 </div>
@@ -535,20 +553,20 @@ export const ProjectPage = () => {
               <div className="space-y-2 border-t pt-4">
                 <p className="flex items-center gap-2 text-sm font-medium">
                   <Link2 className="h-4 w-4" aria-hidden="true" />
-                  Add a URL
+                  {t("project_add_url")}
                 </p>
                 <Input
-                  placeholder="https://example.com/article"
+                  placeholder={t("project_url_placeholder")}
                   value={sourceUrl}
                   onChange={(event) => setSourceUrl(event.target.value)}
                 />
                 <Input
-                  placeholder="Title (optional)"
+                  placeholder={t("project_url_title_placeholder")}
                   value={sourceUrlTitle}
                   onChange={(event) => setSourceUrlTitle(event.target.value)}
                 />
                 <Button onClick={handleAddUrl} disabled={!sourceUrl.trim() || busy} size="sm">
-                  Add URL
+                  {t("project_add_url_action")}
                 </Button>
               </div>
             </Card>
@@ -556,7 +574,7 @@ export const ProjectPage = () => {
 
           <div className="space-y-2">
             {sources.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No files added yet.</p>
+              <p className="text-muted-foreground text-sm">{t("project_no_files")}</p>
             ) : (
               sources.map((source) => (
                 <Card key={source.id} className="gap-2 p-3">
@@ -583,7 +601,7 @@ export const ProjectPage = () => {
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <Badge variant={source.status === "ready" ? "secondary" : "outline"}>
-                        {source.status}
+                        {t(SOURCE_STATUS_KEYS[source.status])}
                       </Badge>
                       {canEdit ? (
                         <>
@@ -591,7 +609,7 @@ export const ProjectPage = () => {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            aria-label="Reindex file"
+                            aria-label={t("project_reindex_aria")}
                             disabled={busy}
                             onClick={() => handleReindex(source.id)}
                           >
@@ -601,7 +619,7 @@ export const ProjectPage = () => {
                             variant="ghost"
                             size="icon"
                             className="text-destructive h-8 w-8"
-                            aria-label="Delete file"
+                            aria-label={t("project_delete_file_aria")}
                             disabled={busy}
                             onClick={() => handleDeleteSource(source.id)}
                           >
@@ -621,7 +639,7 @@ export const ProjectPage = () => {
       {tab === "instructions" ? (
         <div className="max-w-2xl space-y-4">
           <div className="space-y-2">
-            <label className="text-sm font-medium">Name</label>
+            <label className="text-sm font-medium">{t("project_name_label")}</label>
             <Input
               value={instrName}
               onChange={(event) => setInstrName(event.target.value)}
@@ -629,42 +647,40 @@ export const ProjectPage = () => {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium">Description</label>
+            <label className="text-sm font-medium">{t("project_description_label")}</label>
             <Input
               value={instrDescription}
               onChange={(event) => setInstrDescription(event.target.value)}
-              placeholder="What is this project about?"
+              placeholder={t("project_description_placeholder")}
               disabled={!canEdit}
             />
           </div>
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm font-medium">
               <Settings2 className="h-4 w-4" aria-hidden="true" />
-              Custom instructions
+              {t("project_custom_instructions")}
             </label>
-            <p className="text-muted-foreground text-xs">
-              These instructions are applied to every chat inside this project.
-            </p>
+            <p className="text-muted-foreground text-xs">{t("project_custom_instructions_help")}</p>
             <Textarea
               rows={8}
               value={instrPrompt}
               onChange={(event) => setInstrPrompt(event.target.value)}
-              placeholder="e.g. Always answer concisely and cite the project files when relevant."
+              placeholder={t("project_custom_instructions_placeholder")}
               disabled={!canEdit}
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium">Preferred model</label>
+            <label className="text-sm font-medium">{t("project_preferred_model")}</label>
             <Select
               value={instrModelId || "__none__"}
               onValueChange={(value) => setInstrModelId(value === "__none__" ? "" : value)}
               disabled={!canEdit}
             >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="No preferred model" />
+                <SelectValue placeholder={t("project_no_preferred_model")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">No preferred model</SelectItem>
+                <SelectItem value="__none__">{t("project_no_preferred_model")}</SelectItem>
                 {models.map((model) => (
                   <SelectItem key={model.id} value={model.id}>
                     {model.display_name} ({model.provider})
@@ -675,10 +691,10 @@ export const ProjectPage = () => {
           </div>
           {canEdit ? (
             <Button onClick={handleSaveInstructions} disabled={busy}>
-              Save changes
+              {t("project_save_changes")}
             </Button>
           ) : (
-            <p className="text-muted-foreground text-sm">You have view-only access to this project.</p>
+            <p className="text-muted-foreground text-sm">{t("project_view_only")}</p>
           )}
         </div>
       ) : null}
@@ -686,7 +702,7 @@ export const ProjectPage = () => {
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rename project</DialogTitle>
+            <DialogTitle>{t("project_rename_title")}</DialogTitle>
           </DialogHeader>
           <Input
             autoFocus
@@ -701,10 +717,10 @@ export const ProjectPage = () => {
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameOpen(false)}>
-              Cancel
+              {t("common_cancel")}
             </Button>
             <Button onClick={handleRename} disabled={busy || !renameValue.trim()}>
-              Save
+              {t("common_save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -713,18 +729,15 @@ export const ProjectPage = () => {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete project</DialogTitle>
+            <DialogTitle>{t("project_delete_title")}</DialogTitle>
           </DialogHeader>
-          <p className="text-muted-foreground text-sm">
-            This permanently deletes the project, its instructions, and files. Chats created in the
-            project are kept but are no longer grouped. This cannot be undone.
-          </p>
+          <p className="text-muted-foreground text-sm">{t("project_delete_desc")}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-              Cancel
+              {t("common_cancel")}
             </Button>
             <Button variant="destructive" onClick={handleDeleteProject} disabled={busy}>
-              Delete
+              {t("common_delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -733,13 +746,13 @@ export const ProjectPage = () => {
       <Dialog open={shareOpen} onOpenChange={setShareOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Share project</DialogTitle>
+            <DialogTitle>{t("project_share_title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="flex items-start gap-2">
               <div className="relative flex-1">
                 <Input
-                  placeholder="Search by name or email"
+                  placeholder={t("project_share_search_placeholder")}
                   value={shareEmail}
                   onChange={(event) => {
                     setShareEmail(event.target.value)
@@ -784,18 +797,18 @@ export const ProjectPage = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="viewer">Viewer</SelectItem>
-                  <SelectItem value="editor">Editor</SelectItem>
-                  <SelectItem value="owner">Owner</SelectItem>
+                  <SelectItem value="viewer">{t("project_role_viewer")}</SelectItem>
+                  <SelectItem value="editor">{t("project_role_editor")}</SelectItem>
+                  <SelectItem value="owner">{t("project_role_owner")}</SelectItem>
                 </SelectContent>
               </Select>
               <Button onClick={handleAddShare} disabled={busy || !shareEmail.trim()}>
-                Add
+                {t("project_share_add")}
               </Button>
             </div>
             <div className="space-y-2">
               {shares.length === 0 ? (
-                <p className="text-muted-foreground text-sm">Not shared with anyone yet.</p>
+                <p className="text-muted-foreground text-sm">{t("project_share_empty")}</p>
               ) : (
                 shares.map((share) => (
                   <div
@@ -804,13 +817,15 @@ export const ProjectPage = () => {
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm">{share.email}</p>
-                      <p className="text-muted-foreground text-xs capitalize">{share.role}</p>
+                      <p className="text-muted-foreground text-xs">
+                        {t(ROLE_KEYS[share.role])}
+                      </p>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="text-destructive h-8 w-8"
-                      aria-label="Remove access"
+                      aria-label={t("project_remove_access_aria")}
                       disabled={busy}
                       onClick={() => handleRemoveShare(share.user_id)}
                     >
@@ -823,7 +838,7 @@ export const ProjectPage = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShareOpen(false)}>
-              Close
+              {t("common_close")}
             </Button>
           </DialogFooter>
         </DialogContent>

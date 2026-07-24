@@ -28,6 +28,8 @@ type ChatSidebarProps = {
     searchPlaceholder: string
     noResults: string
     close?: string
+    expandProjects: string
+    collapseProjects: string
   }
   groups: ChatGroup[]
   projects: Agent[]
@@ -88,7 +90,7 @@ export const ChatSidebar = ({
               variant="ghost"
               size="icon-sm"
               onClick={onRequestClose}
-              aria-label={labels.close ?? "Close"}
+              aria-label={labels.close}
             >
               <X className="size-4" aria-hidden="true" />
             </Button>
@@ -208,7 +210,7 @@ export const ChatSidebar = ({
                 variant="ghost"
                 size="icon"
                 className="size-6"
-                aria-label={projectsCollapsed ? "Expand projects" : "Collapse projects"}
+                aria-label={projectsCollapsed ? labels.expandProjects : labels.collapseProjects}
                 onClick={() => setProjectsCollapsed((value) => !value)}
               >
                 {projectsCollapsed ? (

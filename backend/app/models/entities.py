@@ -20,6 +20,7 @@ class User(SQLModel, table=True):
     is_active: bool = Field(default=True)
     is_super_admin: bool = Field(default=False)
     memory_enabled: bool = Field(default=False)
+    locale: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     memberships: List["OrgMembership"] = Relationship(back_populates="user")

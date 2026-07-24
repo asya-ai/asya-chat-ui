@@ -124,7 +124,7 @@ export const ChatPage = () => {
   const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState<boolean | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
-  const { locale, t } = useI18n()
+  const { locale, t, tCount } = useI18n()
   const shareToken = useMemo(() => {
     if (shareTokenParam) return shareTokenParam
     return new URLSearchParams(location.search).get("share")
@@ -1356,7 +1356,7 @@ export const ChatPage = () => {
     }
     if (pendingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
       setAttachmentError(
-        t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+        tCount("chat_attachment_limit_file", "chat_attachment_limit_files", ATTACHMENTS_MAX_FILES)
       )
       return
     }
@@ -1485,7 +1485,7 @@ export const ChatPage = () => {
       if (pendingAttachments.length + next.length > ATTACHMENTS_MAX_FILES) {
         event.preventDefault()
         setAttachmentError(
-          t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+          tCount("chat_attachment_limit_file", "chat_attachment_limit_files", ATTACHMENTS_MAX_FILES)
         )
         return
       }
@@ -1563,7 +1563,7 @@ export const ChatPage = () => {
     }
     if (editingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
       setEditingAttachmentError(
-        t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+        tCount("chat_attachment_limit_file", "chat_attachment_limit_files", ATTACHMENTS_MAX_FILES)
       )
       return
     }
@@ -1637,7 +1637,7 @@ export const ChatPage = () => {
     }
     if (pendingAttachments.length + files.length > ATTACHMENTS_MAX_FILES) {
       setAttachmentError(
-        t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+        tCount("chat_attachment_limit_file", "chat_attachment_limit_files", ATTACHMENTS_MAX_FILES)
       )
       return
     }
@@ -1683,7 +1683,7 @@ export const ChatPage = () => {
       event.preventDefault()
       if (editingAttachments.length + next.length > ATTACHMENTS_MAX_FILES) {
         setEditingAttachmentError(
-          t("chat_attachment_limit_files", { count: String(ATTACHMENTS_MAX_FILES) })
+          tCount("chat_attachment_limit_file", "chat_attachment_limit_files", ATTACHMENTS_MAX_FILES)
         )
         return
       }
@@ -2175,7 +2175,7 @@ export const ChatPage = () => {
           title={t("chat_title")}
           labels={{
             newChat: t("chat_new"),
-            projects: "Projects",
+            projects: t("project_title"),
             untitled: t("chat_untitled"),
             settings: t("common_settings"),
             delete: t("chat_delete"),
@@ -2183,6 +2183,8 @@ export const ChatPage = () => {
             unshare: t("chat_unshare"),
             searchPlaceholder: t("chat_search_placeholder"),
             noResults: t("chat_search_no_results"),
+            expandProjects: t("project_expand"),
+            collapseProjects: t("project_collapse"),
           }}
           groups={groupedChats}
           projects={agents}
@@ -2219,7 +2221,7 @@ export const ChatPage = () => {
                   title={t("chat_title")}
                   labels={{
                     newChat: t("chat_new"),
-                    projects: "Projects",
+                    projects: t("project_title"),
                     untitled: t("chat_untitled"),
                     settings: t("common_settings"),
                     delete: t("chat_delete"),
@@ -2228,6 +2230,8 @@ export const ChatPage = () => {
                     searchPlaceholder: t("chat_search_placeholder"),
                     noResults: t("chat_search_no_results"),
                     close: t("common_close"),
+                    expandProjects: t("project_expand"),
+                    collapseProjects: t("project_collapse"),
                   }}
                   groups={groupedChats}
                   projects={agents}
@@ -2284,17 +2288,17 @@ export const ChatPage = () => {
           {isAgentMode ? (
             <div className="flex items-center gap-3 text-muted-foreground text-sm">
               <span>
-                Project:{" "}
+                {t("project_label")}{" "}
                 {activeAgentId ? (
                   <button
                     type="button"
                     onClick={() => navigate(`/projects/${encodeURIComponent(activeAgentId)}`)}
                     className="font-medium text-foreground hover:underline"
                   >
-                    {activeAgent?.name ?? "Unknown project"}
+                    {activeAgent?.name ?? t("project_unknown")}
                   </button>
                 ) : (
-                  <span className="font-medium text-foreground">Unknown project</span>
+                  <span className="font-medium text-foreground">{t("project_unknown")}</span>
                 )}
               </span>
               <Button
@@ -2302,7 +2306,7 @@ export const ChatPage = () => {
                 size="sm"
                 onClick={() => navigate("/chat")}
               >
-                Leave project
+                {t("project_leave")}
               </Button>
             </div>
           ) : null}
@@ -2317,7 +2321,7 @@ export const ChatPage = () => {
         />
         <ChatComposer
           message={message}
-          placeholder={isAgentMode ? "Ask anything in this project..." : t("chat_message_placeholder")}
+          placeholder={isAgentMode ? t("project_message_placeholder") : t("chat_message_placeholder")}
           loading={currentChatLoading || isUploadingAttachments}
           readOnly={isSharedView}
           isDragActive={isDragActive}

@@ -88,6 +88,8 @@ def _locale_prompt(locale: str | None) -> str | None:
     value = locale.replace("_", "-").strip().lower()
     if value.startswith("lv"):
         language = "Latvian"
+    elif value.startswith("ja"):
+        language = "Japanese"
     elif value.startswith("en"):
         language = "English"
     else:
