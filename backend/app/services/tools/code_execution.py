@@ -26,6 +26,7 @@ DEFAULT_ALLOWLIST = {
     "geopandas",
     "shapefile",
     "matplotlib",
+    "cv2",
     "seaborn",
     "scipy",
     "sklearn",
