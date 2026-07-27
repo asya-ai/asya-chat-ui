@@ -65,6 +65,8 @@ services:
         condition: service_started
       dind:
         condition: service_started
+      executor-bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
       interval: 5s
@@ -79,6 +81,7 @@ services:
     volumes:
       - dind-data:/var/lib/docker
       - ./data/files:/data/files
+      - ./backend/executor:/executor:ro
     healthcheck:
       test: ["CMD-SHELL", "docker info || exit 1"]
       interval: 10s
@@ -131,6 +134,23 @@ services:
       restart_policy:
         condition: on-failure
 
+  beat:
+    image: chatui-backend
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "beat", "-l", "info"]
+    restart: unless-stopped
+
   nginx:
     build:
       context: .
@@ -141,6 +161,23 @@ services:
       backend:
         condition: service_healthy
 
+  # Builds the Python execution image inside dind (not on the host daemon).
+  executor-bootstrap:
+    image: docker:cli
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+    volumes:
+      - ./backend/executor:/executor:ro
+    depends_on:
+      dind:
+        condition: service_healthy
+    command:
+      - sh
+      - -ec
+      - docker build -t chatui-python-exec:latest /executor
+    restart: "no"
+
+  # Host-only build target (optional); code execution uses the image in dind instead.
   executor:
     build:
       context: ./backend/executor

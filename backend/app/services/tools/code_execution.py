@@ -432,9 +432,10 @@ async def run_code_execution(
             name="code_execution",
             output={
                 "error": (
-                    "Execution image not found. Build it with "
-                    "`docker compose --profile exec build executor` "
-                    "or set EXEC_DOCKER_IMAGE to an available image."
+                    "Execution image not found in the dind Docker daemon. "
+                    "Run `docker compose run --rm executor-bootstrap` "
+                    "or `docker compose exec dind docker build -t "
+                    f"{settings.exec_docker_image} /executor`."
                 )
             },
         )

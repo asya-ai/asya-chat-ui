@@ -1,6 +1,9 @@
-.PHONY: test test-backend test-backend-unit
+.PHONY: test test-backend test-backend-unit build-executor
 
 test: test-backend
+
+build-executor:
+	docker compose run --rm executor-bootstrap
 
 test-backend:
 	cd backend && uv run pytest
