@@ -3,8 +3,8 @@ from enum import Enum
 from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, JSON, String
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy import Column, JSON, String, event, inspect, update
+from sqlmodel import Field, Relationship, SQLModel, Session
 
 
 class User(SQLModel, table=True):
@@ -44,6 +44,8 @@ class Org(SQLModel, table=True):
     web_grounding_openai: bool = Field(default=False)
     exec_network_enabled: bool = Field(default=False)
     exec_policy: str = Field(default="always")
+    file_retention_days: Optional[int] = Field(default=30, nullable=True)
+    chat_retention_days: Optional[int] = Field(default=90, nullable=True)
     oidc_enabled: bool = Field(default=False)
     oidc_issuer: Optional[str] = Field(default=None)
     oidc_client_id: Optional[str] = Field(default=None)
@@ -209,6 +211,9 @@ class Chat(SQLModel, table=True):
     share_token: Optional[str] = Field(default=None, index=True, unique=True)
     is_deleted: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    last_activity_at: datetime = Field(
+        default_factory=datetime.utcnow, nullable=False, index=True
+    )
 
     org: Org = Relationship(back_populates="chats")
     user: User = Relationship(back_populates="chats")
@@ -315,8 +320,10 @@ class UsageEvent(SQLModel, table=True):
     __tablename__ = "usage_events"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    org_id: UUID = Field(foreign_key="orgs.id", index=True)
-    user_id: UUID = Field(foreign_key="users.id", index=True)
+    org_id: Optional[UUID] = Field(default=None, foreign_key="orgs.id", index=True)
+    user_id: Optional[UUID] = Field(default=None, foreign_key="users.id", index=True)
+    org_name_snapshot: str
+    user_name_snapshot: str
     chat_id: Optional[UUID] = Field(default=None, foreign_key="chats.id", index=True)
     message_id: Optional[UUID] = Field(
         default=None, foreign_key="chat_messages.id", index=True
@@ -337,8 +344,8 @@ class UsageEvent(SQLModel, table=True):
     image_format: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
-    org: Org = Relationship(back_populates="usage_events")
-    user: User = Relationship(back_populates="usage_events")
+    org: Optional[Org] = Relationship(back_populates="usage_events")
+    user: Optional[User] = Relationship(back_populates="usage_events")
     model: Optional[ChatModel] = Relationship(back_populates="usage_events")
 
 
@@ -458,5 +465,41 @@ class AgentEmbedding(SQLModel, table=True):
         default=None, sa_column=Column(JSON, nullable=True)
     )
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+@event.listens_for(Session, "before_flush")
+def refresh_chat_activity(session: Session, _flush_context: Any, _instances: Any) -> None:
+    chat_ids: set[UUID] = set()
+    for instance in session.new | session.dirty:
+        if isinstance(instance, (ChatMessage, ChatUpload)):
+            if instance.chat_id:
+                chat_ids.add(instance.chat_id)
+        elif isinstance(instance, Chat):
+            state = inspect(instance)
+            if (
+                instance.id
+                and not state.pending
+                and state.attrs.title.history.has_changes()
+            ):
+                chat_ids.add(instance.id)
+        elif isinstance(instance, UsageEvent) and (
+            not instance.org_name_snapshot or not instance.user_name_snapshot
+        ):
+            if not instance.org_id or not instance.user_id:
+                raise ValueError("Usage events require an existing user and organization")
+            org = session.get(Org, instance.org_id)
+            user = session.get(User, instance.user_id)
+            if not org or not user:
+                raise ValueError("Usage events require an existing user and organization")
+            instance.org_name_snapshot = org.name
+            instance.user_name_snapshot = (
+                user.display_name or user.username or user.email
+            )
+    if chat_ids:
+        session.execute(
+            update(Chat)
+            .where(Chat.id.in_(chat_ids))
+            .values(last_activity_at=datetime.utcnow())
+        )
 
 

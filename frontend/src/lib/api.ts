@@ -10,6 +10,7 @@ import type {
   ModelSuggestionProvider,
   Org,
   OrgMember,
+  OrgUpdate,
   OrgWebSettings,
   SourceItem,
   ToolEvent,
@@ -380,7 +381,7 @@ export const orgApi = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
-  update: (orgId: string, payload: { name?: string; is_active?: boolean; is_frozen?: boolean }) =>
+  update: (orgId: string, payload: OrgUpdate) =>
     apiFetch<Org>(`/orgs/${orgId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   remove: (orgId: string) => apiFetch(`/orgs/${orgId}`, { method: "DELETE" }),
   webSettings: (orgId: string) => apiFetch<OrgWebSettings>(`/orgs/${orgId}/web-settings`),

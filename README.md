@@ -124,10 +124,22 @@ docker compose -f docker-compose.yml up --build
 
 In this mode, nginx serves the production frontend build bundled in its image.
 
-### Optional executor image prebuild
+### Python execution image (dind)
+
+Code execution runs containers via the `dind` service, which has its own Docker daemon.
+Building on the host does not make the image visible there.
+
+On first `docker compose up`, `executor-bootstrap` builds `chatui-python-exec:latest`
+inside dind automatically. After changing files under `backend/executor/`, rebuild with:
 
 ```bash
-docker compose --profile exec build executor
+docker compose run --rm executor-bootstrap
+```
+
+Or manually inside dind:
+
+```bash
+docker compose exec dind docker build -t chatui-python-exec:latest /executor
 ```
 
 ## Key API Surfaces

@@ -1,7 +1,7 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from uuid import UUID
 
@@ -37,6 +37,8 @@ class OrgRead(BaseModel):
     slug: str | None = None
     is_active: bool
     is_frozen: bool
+    file_retention_days: int | None
+    chat_retention_days: int | None
 
 
 class OrgMemberRead(BaseModel):
@@ -55,6 +57,8 @@ class OrgUpdateRequest(BaseModel):
     slug: str | None = None
     is_active: bool | None = None
     is_frozen: bool | None = None
+    file_retention_days: int | None = Field(default=None, ge=0)
+    chat_retention_days: int | None = Field(default=None, ge=0)
 
 
 class OrgWebSettingsRead(BaseModel):
@@ -73,6 +77,16 @@ class OrgWebSettingsUpdate(BaseModel):
     web_grounding_openai: bool | None = None
     exec_network_enabled: bool | None = None
     exec_policy: str | None = None
+
+
+class OrgRetentionSettingsRead(BaseModel):
+    file_retention_days: int | None
+    chat_retention_days: int | None
+
+
+class OrgRetentionSettingsUpdate(BaseModel):
+    file_retention_days: int | None = Field(default=None, ge=0)
+    chat_retention_days: int | None = Field(default=None, ge=0)
 
 
 class OrgAuthSettingsRead(BaseModel):
@@ -230,6 +244,8 @@ def create_org(
         slug=org.slug,
         is_active=org.is_active,
         is_frozen=org.is_frozen,
+        file_retention_days=org.file_retention_days,
+        chat_retention_days=org.chat_retention_days,
     )
 
 
@@ -247,6 +263,8 @@ def list_orgs(
                 slug=org.slug,
                 is_active=org.is_active,
                 is_frozen=org.is_frozen,
+                file_retention_days=org.file_retention_days,
+                chat_retention_days=org.chat_retention_days,
             )
             for org in orgs
         ]
@@ -268,6 +286,8 @@ def list_orgs(
             slug=org.slug,
             is_active=org.is_active,
             is_frozen=org.is_frozen,
+            file_retention_days=org.file_retention_days,
+            chat_retention_days=org.chat_retention_days,
         )
     ]
 
@@ -289,6 +309,8 @@ def list_my_orgs(
             slug=org.slug,
             is_active=org.is_active,
             is_frozen=org.is_frozen,
+            file_retention_days=org.file_retention_days,
+            chat_retention_days=org.chat_retention_days,
         )
         for org in orgs
     ]
@@ -358,6 +380,59 @@ def update_web_settings(
         web_grounding_openai=org.web_grounding_openai,
         exec_network_enabled=org.exec_network_enabled,
         exec_policy=org.exec_policy,
+    )
+
+
+@router.get("/{org_id}/retention-settings", response_model=OrgRetentionSettingsRead)
+def get_retention_settings(
+    org_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> OrgRetentionSettingsRead:
+    try:
+        org_uuid = UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    if not current_user.is_super_admin:
+        require_org_admin(session, org_uuid, current_user.id)
+    org = session.get(Org, org_uuid)
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    return OrgRetentionSettingsRead(
+        file_retention_days=org.file_retention_days,
+        chat_retention_days=org.chat_retention_days,
+    )
+
+
+@router.put("/{org_id}/retention-settings", response_model=OrgRetentionSettingsRead)
+def update_retention_settings(
+    org_id: str,
+    payload: OrgRetentionSettingsUpdate,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> OrgRetentionSettingsRead:
+    try:
+        org_uuid = UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    if not current_user.is_super_admin:
+        require_org_admin(session, org_uuid, current_user.id)
+    org = session.get(Org, org_uuid)
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    updates = payload.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        setattr(org, key, value)
+    session.add(org)
+    session.commit()
+    session.refresh(org)
+    return OrgRetentionSettingsRead(
+        file_retention_days=org.file_retention_days,
+        chat_retention_days=org.chat_retention_days,
     )
 
 
@@ -539,6 +614,10 @@ def update_org(
     if payload.slug is not None:
         slug_candidate = _slugify(payload.slug)
         org.slug = _ensure_unique_slug(session, slug_candidate, org.id)
+    if "file_retention_days" in payload.model_fields_set:
+        org.file_retention_days = payload.file_retention_days
+    if "chat_retention_days" in payload.model_fields_set:
+        org.chat_retention_days = payload.chat_retention_days
 
     session.add(org)
     session.commit()
@@ -549,6 +628,8 @@ def update_org(
         slug=org.slug,
         is_active=org.is_active,
         is_frozen=org.is_frozen,
+        file_retention_days=org.file_retention_days,
+        chat_retention_days=org.chat_retention_days,
     )
 
 

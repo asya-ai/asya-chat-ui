@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
-from app.models import ChatModel, Org, OrgModel, OrgMembership, UsageEvent, User
+from app.models import ChatModel, OrgModel, OrgMembership, UsageEvent, User
 from app.services.model_pricing import estimate_token_cost_usd
 from app.services.org_service import require_org_admin
 
@@ -185,7 +185,7 @@ def usage_summary(
             )
         stmt = (
             select(
-                UsageEvent.org_id,
+                UsageEvent.org_name_snapshot,
                 UsageEvent.model_id,
                 func.sum(UsageEvent.prompt_tokens),
                 func.sum(UsageEvent.completion_tokens),
@@ -195,7 +195,7 @@ def usage_summary(
                 func.sum(UsageEvent.cached_tokens),
                 func.sum(UsageEvent.thinking_tokens),
             )
-            .group_by(UsageEvent.org_id, UsageEvent.model_id)
+            .group_by(UsageEvent.org_name_snapshot, UsageEvent.model_id)
         )
         if org_uuid:
             stmt = (
@@ -205,14 +205,11 @@ def usage_summary(
             )
         stmt = _apply_month_filter(stmt, month)
         results = session.exec(stmt).all()
-        org_map = {
-            org.id: org.name for org in session.exec(select(Org)).all()
-        }
         model_map = _model_usage_map(session)
         rows_by_org: dict[str, UsageSlice] = {}
         missing_cost_orgs: set[str] = set()
         for row in results:
-            org_key = org_map.get(row[0], str(row[0]))
+            org_key = row[0]
             meta = model_map.get(row[1])
             model_key = meta.display_name if meta else str(row[1] or "Unknown model")
             cost_usd = _cost_for_model_row(row, 2, meta)
@@ -227,7 +224,7 @@ def usage_summary(
     if group_by == "user":
         stmt = (
             select(
-                UsageEvent.user_id,
+                UsageEvent.user_name_snapshot,
                 UsageEvent.model_id,
                 func.sum(UsageEvent.prompt_tokens),
                 func.sum(UsageEvent.completion_tokens),
@@ -237,17 +234,16 @@ def usage_summary(
                 func.sum(UsageEvent.cached_tokens),
                 func.sum(UsageEvent.thinking_tokens),
             )
-            .group_by(UsageEvent.user_id, UsageEvent.model_id)
+            .group_by(UsageEvent.user_name_snapshot, UsageEvent.model_id)
         )
         stmt = _apply_org_filter(stmt, org_uuid)
         stmt = _apply_month_filter(stmt, month)
         results = session.exec(stmt).all()
-        user_map = {user.id: user.email for user in session.exec(select(User)).all()}
         model_map = _model_usage_map(session)
         rows_by_user: dict[str, UsageSlice] = {}
         missing_cost_users: set[str] = set()
         for row in results:
-            user_key = user_map.get(row[0], str(row[0]))
+            user_key = row[0]
             meta = model_map.get(row[1])
             model_key = meta.display_name if meta else str(row[1] or "Unknown model")
             cost_usd = _cost_for_model_row(row, 2, meta)
@@ -299,7 +295,7 @@ def usage_summary(
         stmt = (
             select(
                 month_label,
-                UsageEvent.user_id,
+                UsageEvent.user_name_snapshot,
                 func.sum(UsageEvent.prompt_tokens),
                 func.sum(UsageEvent.completion_tokens),
                 func.sum(UsageEvent.total_tokens),
@@ -308,17 +304,16 @@ def usage_summary(
                 func.sum(UsageEvent.cached_tokens),
                 func.sum(UsageEvent.thinking_tokens),
             )
-            .group_by(month_label, UsageEvent.user_id)
+            .group_by(month_label, UsageEvent.user_name_snapshot)
             .order_by(month_label.desc())
         )
         if org_uuid:
             stmt = stmt.where(UsageEvent.org_id == org_uuid)
         stmt = _apply_month_filter(stmt, month)
         results = session.exec(stmt).all()
-        user_map = {user.id: user.email for user in session.exec(select(User)).all()}
         return [
             UsageSlice(
-                key=f"{row[0]} — {user_map.get(row[1], str(row[1]))}",
+                key=f"{row[0]} — {row[1]}",
                 prompt_tokens=int(row[2] or 0),
                 completion_tokens=int(row[3] or 0),
                 total_tokens=int(row[4] or 0),
@@ -372,7 +367,7 @@ def usage_summary(
     stmt = (
         select(
             UsageEvent.model_id,
-            UsageEvent.user_id,
+            UsageEvent.user_name_snapshot,
             func.sum(UsageEvent.prompt_tokens),
             func.sum(UsageEvent.completion_tokens),
             func.sum(UsageEvent.total_tokens),
@@ -381,7 +376,7 @@ def usage_summary(
             func.sum(UsageEvent.cached_tokens),
             func.sum(UsageEvent.thinking_tokens),
         )
-        .group_by(UsageEvent.model_id, UsageEvent.user_id)
+        .group_by(UsageEvent.model_id, UsageEvent.user_name_snapshot)
     )
     if org_uuid:
         stmt = (
@@ -393,13 +388,12 @@ def usage_summary(
     results = session.exec(stmt).all()
 
     model_map = _model_usage_map(session)
-    user_map = {user.id: user.email for user in session.exec(select(User)).all()}
     rows_by_model: dict[str, UsageSlice] = {}
     missing_cost_models: set[str] = set()
     for row in results:
         meta = model_map.get(row[0])
         model_key = meta.display_name if meta else str(row[0] or "Unknown model")
-        user_key = user_map.get(row[1], str(row[1]))
+        user_key = row[1]
         cost_usd = _cost_for_model_row(row, 2, meta)
         child = _slice_from_row(user_key, row, 2, cost_usd)
         parent = rows_by_model.setdefault(model_key, _empty_slice(model_key))

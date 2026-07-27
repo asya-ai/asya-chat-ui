@@ -76,3 +76,12 @@ def maybe_read_file_bytes(file_path: str | None) -> bytes | None:
         return read_file_bytes(file_path)
     except Exception:
         return None
+
+
+def delete_file(file_path: str | None) -> None:
+    if not file_path:
+        return
+    try:
+        _absolute_path(file_path).unlink(missing_ok=True)
+    except (OSError, ValueError):
+        return

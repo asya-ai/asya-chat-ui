@@ -2601,18 +2601,8 @@ def list_chats(
         session, org_uuid, current_user.id, is_super_admin=current_user.is_super_admin
     )
 
-    last_activity_subq = (
-        select(
-            ChatMessage.chat_id,
-            func.max(ChatMessage.created_at).label("last_activity_at"),
-        )
-        .group_by(ChatMessage.chat_id)
-        .subquery()
-    )
     chats = session.exec(
-        select(Chat, last_activity_subq.c.last_activity_at)
-        .outerjoin(last_activity_subq, last_activity_subq.c.chat_id == Chat.id)
-        .where(
+        select(Chat).where(
             Chat.org_id == org_uuid,
             Chat.user_id == current_user.id,
             Chat.is_deleted.is_(False),
@@ -2626,9 +2616,9 @@ def list_chats(
             agent_id=str(chat.agent_id) if chat.agent_id else None,
             is_shared=bool(chat.share_token),
             created_at=chat.created_at,
-            last_activity_at=last_activity_at or chat.created_at,
+            last_activity_at=chat.last_activity_at,
         )
-        for chat, last_activity_at in chats
+        for chat in chats
     ]
 
 
@@ -2686,24 +2676,13 @@ def search_chats(
         .group_by(ChatMessage.chat_id)
         .subquery()
     )
-    last_activity_subq = (
-        select(
-            ChatMessage.chat_id,
-            func.max(ChatMessage.created_at).label("last_activity_at"),
-        )
-        .where(ChatMessage.chat_id.in_(select(eligible_chats_subq.c.id)))
-        .group_by(ChatMessage.chat_id)
-        .subquery()
-    )
     chats = session.exec(
         select(
             Chat,
-            last_activity_subq.c.last_activity_at,
             (title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)).label(
                 "rank"
             ),
         )
-        .outerjoin(last_activity_subq, last_activity_subq.c.chat_id == Chat.id)
         .outerjoin(message_rank_subq, message_rank_subq.c.chat_id == Chat.id)
         .where(*base_chat_filters)
         .where(title_match | (message_rank_subq.c.message_rank.is_not(None)))
@@ -2711,7 +2690,7 @@ def search_chats(
             (
                 title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)
             ).desc(),
-            func.coalesce(last_activity_subq.c.last_activity_at, Chat.created_at).desc(),
+            Chat.last_activity_at.desc(),
         )
         .limit(capped_limit)
     ).all()
@@ -2723,9 +2702,9 @@ def search_chats(
             agent_id=str(chat.agent_id) if chat.agent_id else None,
             is_shared=bool(chat.share_token),
             created_at=chat.created_at,
-            last_activity_at=last_activity_at or chat.created_at,
+            last_activity_at=chat.last_activity_at,
         )
-        for chat, last_activity_at, _rank in chats
+        for chat, _rank in chats
     ]
 
 

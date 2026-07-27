@@ -4,6 +4,16 @@ export type Org = {
   slug?: string | null
   is_active: boolean
   is_frozen: boolean
+  file_retention_days: number | null
+  chat_retention_days: number | null
+}
+
+export type OrgUpdate = {
+  name?: string
+  is_active?: boolean
+  is_frozen?: boolean
+  file_retention_days?: number | null
+  chat_retention_days?: number | null
 }
 
 export type OrgWebSettings = {

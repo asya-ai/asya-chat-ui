@@ -117,6 +117,9 @@ export const OrgPage = () => {
   >({})
   const [accessByOrgId, setAccessByOrgId] = useState<Record<string, string[]>>({})
   const [updatingAccess, setUpdatingAccess] = useState<Record<string, boolean>>({})
+  const [retentionDraftsByOrgId, setRetentionDraftsByOrgId] = useState<
+    Record<string, { fileRetentionDays: string | null; chatRetentionDays: string | null }>
+  >({})
   const [name, setName] = useState("")
   const [inviteEmail, setInviteEmail] = useState("")
   const [modelProvider, setModelProvider] = useState("openai")
@@ -137,7 +140,9 @@ export const OrgPage = () => {
   const [error, setError] = useState<string | null>(null)
   const [renameOrgId, setRenameOrgId] = useState<string | null>(null)
   const [renameOrgName, setRenameOrgName] = useState("")
+  const [retentionOrgId, setRetentionOrgId] = useState<string | null>(null)
   const [deleteOrgId, setDeleteOrgId] = useState<string | null>(null)
+  const retentionOrg = orgs.find((org) => org.id === retentionOrgId) ?? null
 
   const isImageModel = (model: ChatModel) => {
     if (model.supports_image_output === true) return true
@@ -214,6 +219,19 @@ export const OrgPage = () => {
   const loadOrgs = async () => {
     const data = await orgApi.list()
     setOrgs(data)
+    setRetentionDraftsByOrgId(
+      Object.fromEntries(
+        data.map((org) => [
+          org.id,
+          {
+            fileRetentionDays:
+              org.file_retention_days === null ? null : String(org.file_retention_days ?? 30),
+            chatRetentionDays:
+              org.chat_retention_days === null ? null : String(org.chat_retention_days ?? 90),
+          },
+        ])
+      )
+    )
     if (data.length > 0) {
       const firstId = data[0].id
       const storedId = orgStore.get()
@@ -680,6 +698,72 @@ export const OrgPage = () => {
     closeRenameDialog()
   }
 
+  const updateRetentionDraft = (
+    orgId: string,
+    field: "fileRetentionDays" | "chatRetentionDays",
+    value: string
+  ) => {
+    setRetentionDraftsByOrgId((prev) => {
+      const current = prev[orgId]
+      return {
+        ...prev,
+        [orgId]: {
+          fileRetentionDays: current ? current.fileRetentionDays : "30",
+          chatRetentionDays: current ? current.chatRetentionDays : "90",
+          [field]: value,
+        },
+      }
+    })
+  }
+
+  const saveOrgRetention = async (org: Org) => {
+    const draft = retentionDraftsByOrgId[org.id]
+    if (!draft) return
+    const fileRetentionDays =
+      draft.fileRetentionDays === null ? null : Number(draft.fileRetentionDays)
+    const chatRetentionDays =
+      draft.chatRetentionDays === null ? null : Number(draft.chatRetentionDays)
+    if (
+      (fileRetentionDays !== null &&
+        (!Number.isInteger(fileRetentionDays) || fileRetentionDays < 1)) ||
+      (chatRetentionDays !== null &&
+        (!Number.isInteger(chatRetentionDays) || chatRetentionDays < 1))
+    ) {
+      setError("Retention periods must be whole numbers of at least one day.")
+      return
+    }
+    const updated = await orgApi.update(org.id, {
+      file_retention_days: fileRetentionDays,
+      chat_retention_days: chatRetentionDays,
+    })
+    setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    setRetentionDraftsByOrgId((prev) => ({
+      ...prev,
+      [updated.id]: {
+        fileRetentionDays:
+          updated.file_retention_days === null ? null : String(updated.file_retention_days ?? 30),
+        chatRetentionDays:
+          updated.chat_retention_days === null ? null : String(updated.chat_retention_days ?? 90),
+      },
+    }))
+    setError(null)
+    setRetentionOrgId(null)
+  }
+
+  const neverExpireOrgRetention = (
+    orgId: string,
+    field: "fileRetentionDays" | "chatRetentionDays"
+  ) => {
+    setRetentionDraftsByOrgId((prev) => ({
+      ...prev,
+      [orgId]: {
+        fileRetentionDays: prev[orgId]?.fileRetentionDays ?? "30",
+        chatRetentionDays: prev[orgId]?.chatRetentionDays ?? "90",
+        [field]: null,
+      },
+    }))
+  }
+
   const toggleOrgFrozen = async (org: Org) => {
     const updated = await orgApi.update(org.id, { is_frozen: !org.is_frozen })
     setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
@@ -890,49 +974,58 @@ export const OrgPage = () => {
                   {orgs.map((org) => (
                     <div
                       key={org.id}
-                      className="flex flex-wrap justify-between items-center gap-3 px-3 py-2 border rounded-md"
+                      className="flex flex-col gap-3 rounded-md border p-4"
                     >
-                      <div>
-                        <p className="font-medium">{org.name}</p>
-                        <p className="text-muted-foreground text-xs">{org.id}</p>
-                        {!org.is_active ? (
-                          <p className="text-red-500 text-xs">{t("org_deleted")}</p>
-                        ) : org.is_frozen ? (
-                          <p className="text-amber-500 text-xs">{t("org_frozen")}</p>
-                        ) : null}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openAuthForOrg(org.id)}
-                        >
-                          {t("org_auth_open")}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openProvidersForOrg(org.id)}
-                        >
-                          {t("org_provider_configure")}
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => openRenameDialog(org)}>
-                          {t("org_rename")}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => toggleOrgFrozen(org)}
-                        >
-                          {org.is_frozen ? t("org_unfreeze") : t("org_freeze")}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openDeleteDialog(org.id)}
-                        >
-                          {t("common_delete")}
-                        </Button>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex flex-col gap-1">
+                          <p className="font-medium">{org.name}</p>
+                          <p className="text-muted-foreground text-xs">{org.id}</p>
+                          {!org.is_active ? (
+                            <p className="text-destructive text-xs">{t("org_deleted")}</p>
+                          ) : org.is_frozen ? (
+                            <p className="text-muted-foreground text-xs">{t("org_frozen")}</p>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openAuthForOrg(org.id)}
+                          >
+                            {t("org_auth_open")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openProvidersForOrg(org.id)}
+                          >
+                            {t("org_provider_configure")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setRetentionOrgId(org.id)}
+                          >
+                            Retention
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => openRenameDialog(org)}>
+                            {t("org_rename")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => toggleOrgFrozen(org)}
+                          >
+                            {org.is_frozen ? t("org_unfreeze") : t("org_freeze")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openDeleteDialog(org.id)}
+                          >
+                            {t("common_delete")}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1797,6 +1890,90 @@ export const OrgPage = () => {
               <p className="text-muted-foreground text-sm">{t("org_provider_none")}</p>
             ) : null}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(retentionOrg)} onOpenChange={(open) => (!open ? setRetentionOrgId(null) : null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Retention policy</DialogTitle>
+            <DialogDescription>
+              Set how long inactive chat files and chat history are retained for {retentionOrg?.name}.
+            </DialogDescription>
+          </DialogHeader>
+          {retentionOrg ? (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <p className="font-medium text-sm">Uploaded and generated files</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    className="w-24"
+                    aria-label={`File retention days for ${retentionOrg.name}`}
+                    placeholder="30"
+                    value={retentionDraftsByOrgId[retentionOrg.id]?.fileRetentionDays ?? ""}
+                    onChange={(event) =>
+                      updateRetentionDraft(retentionOrg.id, "fileRetentionDays", event.target.value)
+                    }
+                    disabled={!retentionOrg.is_active}
+                  />
+                  <span className="text-muted-foreground text-sm">days after last chat activity</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => neverExpireOrgRetention(retentionOrg.id, "fileRetentionDays")}
+                    disabled={!retentionOrg.is_active}
+                  >
+                    Never expire
+                  </Button>
+                </div>
+                {retentionDraftsByOrgId[retentionOrg.id]?.fileRetentionDays === null ? (
+                  <p className="text-muted-foreground text-sm">Files are retained indefinitely.</p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-2">
+                <p className="font-medium text-sm">Chat history</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    className="w-24"
+                    aria-label={`Chat retention days for ${retentionOrg.name}`}
+                    placeholder="90"
+                    value={retentionDraftsByOrgId[retentionOrg.id]?.chatRetentionDays ?? ""}
+                    onChange={(event) =>
+                      updateRetentionDraft(retentionOrg.id, "chatRetentionDays", event.target.value)
+                    }
+                    disabled={!retentionOrg.is_active}
+                  />
+                  <span className="text-muted-foreground text-sm">days after last chat activity</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => neverExpireOrgRetention(retentionOrg.id, "chatRetentionDays")}
+                    disabled={!retentionOrg.is_active}
+                  >
+                    Never expire
+                  </Button>
+                </div>
+                {retentionDraftsByOrgId[retentionOrg.id]?.chatRetentionDays === null ? (
+                  <p className="text-muted-foreground text-sm">Chats are retained indefinitely.</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRetentionOrgId(null)}>
+              {t("common_cancel")}
+            </Button>
+            <Button
+              onClick={() => retentionOrg && saveOrgRetention(retentionOrg)}
+              disabled={!retentionOrg?.is_active}
+            >
+              {t("common_save")}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import inspect
 import logging
 from typing import Any
@@ -9,7 +9,7 @@ from uuid import UUID
 import json
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlmodel import Session
 
 from app.api.chats import (
@@ -41,6 +41,8 @@ from app.models.entities import (
     ChatMessage,
     ChatMessageAttachment,
     ChatModel,
+    ChatUpload,
+    ChatViewEvent,
     GenerationStatus,
     Org,
     OrgModel,
@@ -49,6 +51,7 @@ from app.models.entities import (
     UserMemory,
 )
 from app.services.org_service import require_provider_enabled
+from app.services.file_storage import delete_file
 from app.services.agents.runtime import reindex_source
 from app.services.langchain_runtime import (
     chat_stream_with_langchain,
@@ -1109,3 +1112,87 @@ def reindex_agent_source(source_id: str) -> None:
             source_id,
             chunks_count,
         )
+
+
+def _delete_chat_files(session: Session, chat_ids: list[UUID]) -> None:
+    if not chat_ids:
+        return
+
+    uploads = session.scalars(
+        select(ChatUpload).where(ChatUpload.chat_id.in_(chat_ids))
+    ).all()
+    for upload in uploads:
+        delete_file(upload.file_path)
+    session.exec(delete(ChatUpload).where(ChatUpload.chat_id.in_(chat_ids)))
+
+    message_ids = session.scalars(
+        select(ChatMessage.id).where(ChatMessage.chat_id.in_(chat_ids))
+    ).all()
+    if not message_ids:
+        return
+    attachments = session.scalars(
+        select(ChatMessageAttachment).where(
+            ChatMessageAttachment.message_id.in_(message_ids)
+        )
+    ).all()
+    for attachment in attachments:
+        delete_file(attachment.file_path)
+    session.exec(
+        delete(ChatMessageAttachment).where(
+            ChatMessageAttachment.message_id.in_(message_ids)
+        )
+    )
+
+
+def _delete_expired_chat(session: Session, chat: Chat) -> None:
+    _delete_chat_files(session, [chat.id])
+    message_ids = session.scalars(
+        select(ChatMessage.id).where(ChatMessage.chat_id == chat.id)
+    ).all()
+    task_ids = session.scalars(
+        select(ChatGenerationTask.id).where(ChatGenerationTask.chat_id == chat.id)
+    ).all()
+    if task_ids:
+        session.exec(
+            delete(ChatGenerationEvent).where(ChatGenerationEvent.task_id.in_(task_ids))
+        )
+    session.exec(delete(ChatGenerationTask).where(ChatGenerationTask.chat_id == chat.id))
+    session.exec(delete(ChatViewEvent).where(ChatViewEvent.chat_id == chat.id))
+    if message_ids:
+        session.exec(
+            update(ChatMessage)
+            .where(ChatMessage.id.in_(message_ids))
+            .values(parent_id=None)
+        )
+        session.exec(delete(ChatMessage).where(ChatMessage.id.in_(message_ids)))
+    session.delete(chat)
+
+
+@celery_app.task(name="chatui.cleanup_retained_data")
+def cleanup_retained_data() -> None:
+    """Permanently remove expired chat files and chat history for each organization."""
+    now = datetime.utcnow()
+    with Session(engine) as session:
+        orgs = session.scalars(select(Org)).all()
+        for org in orgs:
+            if org.file_retention_days is not None:
+                file_cutoff = now - timedelta(days=org.file_retention_days)
+                expired_file_chats = session.scalars(
+                    select(Chat.id).where(
+                        Chat.org_id == org.id,
+                        Chat.last_activity_at < file_cutoff,
+                    )
+                ).all()
+                _delete_chat_files(session, expired_file_chats)
+
+            if org.chat_retention_days is not None:
+                chat_cutoff = now - timedelta(days=org.chat_retention_days)
+                expired_chats = session.scalars(
+                    select(Chat).where(
+                        Chat.org_id == org.id,
+                        Chat.last_activity_at < chat_cutoff,
+                    )
+                ).all()
+                for chat in expired_chats:
+                    _delete_expired_chat(session, chat)
+            session.commit()
