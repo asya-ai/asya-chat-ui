@@ -136,7 +136,7 @@ export const ChatComposer = ({
           placeholder={placeholder}
           rows={2}
           className={cn(
-            "max-h-48 min-h-[52px] resize-none overflow-y-auto",
+            "max-h-52 min-h-13 resize-none overflow-y-auto",
             "border-0 bg-transparent px-1.5 py-1 text-sm shadow-none",
             "placeholder:text-muted-foreground",
             "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
