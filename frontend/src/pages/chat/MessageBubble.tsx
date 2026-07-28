@@ -328,13 +328,17 @@ const MessageBubbleComponent = ({
   const canSaveEdit = Boolean(editingContent.trim() || editingAttachments.length > 0)
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`group ${isEditing ? "w-full max-w-3xl" : "max-w-[85%]"}`}>
+    <div
+      className={`mx-auto flex w-full max-w-(--chat-content-width) ${
+        isUser ? "justify-end" : "justify-start"
+      }`}
+    >
+      <div className={`group ${isEditing ? "w-full" : "max-w-[88%]"}`}>
         <div
-          className={`overflow-hidden rounded-lg px-4 py-3 text-sm leading-relaxed break-words whitespace-normal ${
+          className={`overflow-hidden rounded-lg p-2 text-sm leading-[18px] break-words whitespace-normal ${
             isUser
-              ? "bg-primary/10 text-foreground"
-              : "bg-secondary text-foreground"
+              ? "bg-secondary text-foreground"
+              : "bg-transparent text-foreground"
           }`}
         >
           <div className="flex justify-between items-center gap-2">

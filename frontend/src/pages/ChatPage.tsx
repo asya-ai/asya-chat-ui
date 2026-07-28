@@ -3,7 +3,7 @@ import type { CSSProperties } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, agentApi, chatApi } from "@/lib/api"
+import { ApiError, agentApi, authApi, chatApi } from "@/lib/api"
 import {
   codeExecutionEnabledStore,
   modelStore,
@@ -26,10 +26,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { Image as ImageIcon, Menu } from "lucide-react"
+import { Image as ImageIcon, Menu, PanelLeftOpen } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
+import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
@@ -101,7 +102,8 @@ export const ChatPage = () => {
     if (stored === "low" || stored === "medium" || stored === "high") {
       return stored
     }
-    return null
+    if (stored === "none") return null
+    return "medium"
   })
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
     const stored = webSearchEnabledStore.get()
@@ -117,10 +119,19 @@ export const ChatPage = () => {
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true)
+  const [currentUser, setCurrentUser] = useState<{
+    email: string
+    username: string | null
+    display_name: string | null
+    avatar_url: string | null
+  } | null>(null)
   const [chatSearchQuery, setChatSearchQuery] = useState("")
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
+  const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false)
+  const [clearingHistory, setClearingHistory] = useState(false)
   const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState<boolean | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -129,6 +140,7 @@ export const ChatPage = () => {
     if (shareTokenParam) return shareTokenParam
     return new URLSearchParams(location.search).get("share")
   }, [location.search, shareTokenParam])
+  const isHistoryView = location.pathname === "/history"
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => oneDark, [])
 
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
@@ -142,6 +154,13 @@ export const ChatPage = () => {
   } = useChatMessages(chatId ?? null, shareToken)
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
+
+  useEffect(() => {
+    authApi
+      .me()
+      .then(setCurrentUser)
+      .catch(() => setCurrentUser(null))
+  }, [])
 
   useEffect(() => {
     if (!orgId) {
@@ -806,63 +825,37 @@ export const ChatPage = () => {
     [parseChatDate, t]
   )
 
-  const groupedChats = useMemo(() => {
-    const now = new Date()
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const dayMs = 24 * 60 * 60 * 1000
+  const historyChats = useMemo(() => {
     const currentOrgChatIds = new Set(chats.map((chat) => chat.id))
     const sourceChats = chatSearchDebounced
       ? searchedChats.filter((chat) => currentOrgChatIds.has(chat.id))
       : chats
-    const sorted = [...sourceChats].sort(
+    return [...sourceChats].sort(
       (a, b) =>
         parseChatDate(getChatActivityDate(b)).getTime() -
         parseChatDate(getChatActivityDate(a)).getTime()
     )
-    const groups: { label: string; items: Chat[] }[] = []
-    for (const chat of sorted) {
-      const activityAt = parseChatDate(getChatActivityDate(chat))
-      const dayDiff = Math.floor(
-        (startOfToday.getTime() - new Date(activityAt.getFullYear(), activityAt.getMonth(), activityAt.getDate()).getTime()) /
-          dayMs
-      )
-      let label = t("chat_group_older")
-      if (dayDiff === 0) {
-        label = t("chat_group_today")
-      } else if (dayDiff === 1) {
-        label = t("chat_group_yesterday")
-      } else if (dayDiff <= 7) {
-        label = t("chat_group_prev_7")
-      } else if (dayDiff <= 30) {
-        label = t("chat_group_prev_30")
-      }
-      const existing = groups.find((group) => group.label === label)
-      if (existing) {
-        existing.items.push(chat)
-      } else {
-        groups.push({ label, items: [chat] })
-      }
-    }
-    return groups
-  }, [chatSearchDebounced, chats, getChatActivityDate, parseChatDate, searchedChats, t])
+  }, [chatSearchDebounced, chats, getChatActivityDate, parseChatDate, searchedChats])
 
-  const formatRelativeAge = (dateString: string) => {
-    const diffMs = Date.now() - parseChatDate(dateString).getTime()
-    const diffMinutes = Math.floor(diffMs / (60 * 1000))
-    if (diffMinutes < 60) {
-      return `${Math.max(diffMinutes, 1)}m`
-    }
-    const diffHours = Math.floor(diffMs / (60 * 60 * 1000))
-    if (diffHours < 24) {
-      return `${diffHours}h`
-    }
-    const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000))
-    if (diffDays < 7) {
-      return `${diffDays}d`
-    }
-    const diffWeeks = Math.floor(diffDays / 7)
-    return `${diffWeeks}w`
-  }
+  const formatHistoryDate = useCallback(
+    (dateString: string) => {
+      const date = parseChatDate(dateString)
+      const now = new Date()
+      if (
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate()
+      ) {
+        return t("chat_group_today")
+      }
+      return new Intl.DateTimeFormat(locale, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(date)
+    },
+    [locale, parseChatDate, t]
+  )
 
   useEffect(() => {
     if (orgsLoading) return
@@ -1188,6 +1181,19 @@ export const ChatPage = () => {
       replaceCurrentChatMessages([])
       setToolEvents([])
       navigate("/chat", { replace: true })
+    }
+  }
+
+  const clearHistory = async () => {
+    if (!orgId || chats.length === 0) return
+    setClearingHistory(true)
+    try {
+      await Promise.all(chats.map((chat) => chatApi.deleteChat(chat.id)))
+      queryClient.setQueryData<Chat[]>(["chats", orgId], [])
+      setClearHistoryConfirmOpen(false)
+    } finally {
+      setClearingHistory(false)
+      refetchChats().catch(() => null)
     }
   }
 
@@ -1967,7 +1973,7 @@ export const ChatPage = () => {
       data_base64: attachment.data_base64,
       content_url: attachment.content_url,
     }))
-    let uploadedRetryAttachments: ChatMessageAttachmentInput[] | null = null
+    let uploadedRetryAttachments: ChatMessageAttachmentInput[]
     try {
       setIsUploadingAttachments(true)
       uploadedRetryAttachments = await uploadAttachmentsForChat(chatId, retryAttachments)
@@ -1980,7 +1986,6 @@ export const ChatPage = () => {
     } finally {
       setIsUploadingAttachments(false)
     }
-    if (!uploadedRetryAttachments) return
     const { promise, cancel } = chatApi.editMessageStream(
       chatId,
       sourceUser.id,
@@ -2145,124 +2150,182 @@ export const ChatPage = () => {
     [navigate]
   )
 
-  const handleSelectProject = useCallback(
-    (project: Agent, onSelect?: () => void) => {
-      navigate(`/projects/${encodeURIComponent(project.id)}`)
-      onSelect?.()
-    },
-    [navigate]
-  )
-
   const activeAgent = useMemo(
     () => agents.find((item) => item.id === activeAgentId) ?? null,
     [agents, activeAgentId]
   )
 
   const activeChatTitle = useMemo(() => {
+    if (isHistoryView) return t("chat_history")
     if (activeAgent) return activeAgent.name
     const active = chats.find((chat) => chat.id === chatId)
     return active?.title || t("chat_title")
-  }, [activeAgent, chats, chatId, t])
+  }, [activeAgent, chats, chatId, isHistoryView, t])
 
   useEffect(() => {
     document.title = `${activeChatTitle} - ${t("app_title")}`
   }, [activeChatTitle, t])
 
-  return (
-    <div className="flex bg-background h-svh overflow-hidden">
-      <aside className="hidden md:flex flex-col bg-sidebar text-sidebar-foreground p-3 w-72 min-h-0 shrink-0">
+  const isEmptyChat = !isMessagesLoading && visibleMessages.length === 0
+  const imageModel = selectableChatModels.find(
+    (model) => model.is_available !== false && isImageOutputModel(model)
+  )
+  const activeOrgName = orgs.find((org) => org.id === orgId)?.name
+  const profileLabel =
+    currentUser?.display_name || currentUser?.username || currentUser?.email || t("me_settings")
+  const profileFirstName = profileLabel.trim().split(/\s+/)[0]
+  const welcomeTitle =
+    currentUser?.display_name || currentUser?.username
+      ? t("chat_welcome_named").replace("{name}", profileFirstName)
+      : t("chat_welcome_title")
+  const sidebarFooter = (
+    <Button
+      variant="ghost"
+      className="h-14 w-full justify-start gap-1.5 p-1.5 text-left"
+      onClick={() => navigate("/settings/me")}
+    >
+      {currentUser?.avatar_url ? (
+        <img
+          src={currentUser.avatar_url}
+          alt=""
+          className="size-11 shrink-0 rounded-lg object-cover"
+        />
+      ) : (
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-secondary text-sm font-semibold">
+          {profileLabel.slice(0, 1).toUpperCase()}
+        </span>
+      )}
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold leading-4">{profileLabel}</span>
+        {activeOrgName ? (
+          <span className="block truncate text-xs font-medium leading-4 text-muted-foreground">
+            {activeOrgName}
+          </span>
+        ) : null}
+      </span>
+    </Button>
+  )
+  const mobileSidebar = (
+    <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+      <SheetTrigger asChild>
+        <Button variant="ghost" size="icon" className="md:hidden" aria-label={t("sidebar_toggle")}>
+          <Menu aria-hidden="true" />
+        </Button>
+      </SheetTrigger>
+      <SheetContent side="left" className="w-57.25 bg-sidebar p-2" showCloseButton={false}>
         <ChatSidebar
           title={t("chat_title")}
           labels={{
             newChat: t("chat_new"),
+            history: t("chat_history"),
             projects: t("project_title"),
-            untitled: t("chat_untitled"),
-            settings: t("common_settings"),
-            delete: t("chat_delete"),
-            share: t("chat_share"),
-            unshare: t("chat_unshare"),
-            searchPlaceholder: t("chat_search_placeholder"),
-            noResults: t("chat_search_no_results"),
-            expandProjects: t("project_expand"),
-            collapseProjects: t("project_collapse"),
+            close: t("common_close"),
           }}
-          groups={groupedChats}
-          projects={agents}
-          searchQuery={chatSearchQuery}
-          activeChatId={chatId ?? null}
-          activeProjectId={activeAgentId}
-          onSearchChange={setChatSearchQuery}
+          activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
           onNewChat={startNewChat}
-          onSelectChat={(chat: Chat) => handleSelectChat(chat)}
+          onOpenHistory={() => {
+            setSidebarOpen(false)
+            navigate("/history")
+          }}
+          onOpenProjects={() => {
+            setSidebarOpen(false)
+            navigate("/projects")
+          }}
+          onRequestClose={() => setSidebarOpen(false)}
+          footer={sidebarFooter}
+        />
+      </SheetContent>
+    </Sheet>
+  )
+  const desktopSidebarToggle = (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="hidden md:inline-flex"
+      onClick={() => setDesktopSidebarOpen((open) => !open)}
+      aria-label={t("sidebar_toggle")}
+    >
+      {desktopSidebarOpen ? (
+        <span
+          aria-hidden="true"
+          className="figma-icon size-4"
+          style={{ maskImage: "url('/icon-panel.svg')" }}
+        />
+      ) : (
+        <PanelLeftOpen aria-hidden="true" />
+      )}
+    </Button>
+  )
+
+  return (
+    <div className="flex h-svh overflow-hidden bg-background">
+      <aside
+        className={`hidden min-h-0 w-57.25 shrink-0 flex-col bg-sidebar p-2 text-sidebar-foreground ${
+          desktopSidebarOpen ? "md:flex" : ""
+        }`}
+      >
+        <ChatSidebar
+          title={t("chat_title")}
+          labels={{
+            newChat: t("chat_new"),
+            history: t("chat_history"),
+            projects: t("project_title"),
+          }}
+          activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
+          onNewChat={startNewChat}
+          onOpenHistory={() => navigate("/history")}
           onOpenProjects={() => navigate("/projects")}
-          onSelectProject={(project: Agent) => handleSelectProject(project)}
-          onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
-          onToggleShareChat={toggleShareChat}
-          onOpenSettings={() => navigate("/settings/me")}
-          formatRelativeAge={formatRelativeAge}
-          getChatActivityDate={getChatActivityDate}
+          footer={sidebarFooter}
         />
       </aside>
       <main
         id="main-content"
-        className="flex flex-col flex-1 min-h-0 overflow-hidden bg-card md:m-3 md:ml-0 md:rounded-[var(--radius-card)] md:border md:border-border"
+        className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
+          desktopSidebarOpen ? "md:ml-0" : "md:ml-2"
+        }`}
       >
+        {isHistoryView ? (
+          <HistoryPanel
+            chats={historyChats}
+            query={chatSearchQuery}
+            leadingAction={
+              <>
+                {mobileSidebar}
+                {desktopSidebarToggle}
+              </>
+            }
+            labels={{
+              title: t("chat_history"),
+              clearAll: t("chat_history_clear_all"),
+              search: t("chat_search_placeholder"),
+              empty: chatSearchQuery
+                ? t("chat_search_no_results")
+                : t("chat_history_empty"),
+              untitled: t("chat_untitled"),
+              delete: t("chat_delete"),
+              share: t("chat_share"),
+              unshare: t("chat_unshare"),
+              actions: t("chat_history_actions"),
+            }}
+            onQueryChange={setChatSearchQuery}
+            onSelectChat={(chat) => handleSelectChat(chat)}
+            onClearAll={() => setClearHistoryConfirmOpen(true)}
+            onDeleteChat={setDeleteConfirmChat}
+            onToggleShareChat={toggleShareChat}
+            formatDate={formatHistoryDate}
+          />
+        ) : (
+          <>
         <h1 className="sr-only">{activeChatTitle}</h1>
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-card">
-          <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-            <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="md:hidden" aria-label={t("sidebar_toggle")}>
-                <Menu aria-hidden="true" className="w-5 h-5" />
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="left" className="bg-sidebar p-3 w-72" showCloseButton={false}>
-              <div className="flex flex-col h-full">
-                <ChatSidebar
-                  title={t("chat_title")}
-                  labels={{
-                    newChat: t("chat_new"),
-                    projects: t("project_title"),
-                    untitled: t("chat_untitled"),
-                    settings: t("common_settings"),
-                    delete: t("chat_delete"),
-                    share: t("chat_share"),
-                    unshare: t("chat_unshare"),
-                    searchPlaceholder: t("chat_search_placeholder"),
-                    noResults: t("chat_search_no_results"),
-                    close: t("common_close"),
-                    expandProjects: t("project_expand"),
-                    collapseProjects: t("project_collapse"),
-                  }}
-                  groups={groupedChats}
-                  projects={agents}
-                  searchQuery={chatSearchQuery}
-                  activeChatId={chatId ?? null}
-                  activeProjectId={activeAgentId}
-                  onSearchChange={setChatSearchQuery}
-                  onNewChat={startNewChat}
-                  onSelectChat={(chat: Chat) => handleSelectChat(chat, () => setSidebarOpen(false))}
-                  onOpenProjects={() => {
-                    setSidebarOpen(false)
-                    navigate("/projects")
-                  }}
-                  onSelectProject={(project: Agent) =>
-                    handleSelectProject(project, () => setSidebarOpen(false))
-                  }
-                  onDeleteChat={(chat: Chat) => setDeleteConfirmChat(chat)}
-                  onToggleShareChat={toggleShareChat}
-                  onOpenSettings={() => {
-                    setSidebarOpen(false)
-                    navigate("/settings/me")
-                  }}
-                  onRequestClose={() => setSidebarOpen(false)}
-                  formatRelativeAge={formatRelativeAge}
-                  getChatActivityDate={getChatActivityDate}
-                />
-              </div>
-            </SheetContent>
-          </Sheet>
+        <div className="relative -left-px -top-px flex h-15 w-[calc(100%+2px)] shrink-0 items-center justify-between bg-background px-3 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+          {mobileSidebar}
+          {desktopSidebarToggle}
           <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger className="w-56" aria-label={t("chat_select_model")}>
+            <SelectTrigger
+              className="w-[267px] border-0 bg-transparent shadow-none"
+              aria-label={t("chat_select_model")}
+            >
               <SelectValue placeholder={t("chat_select_model")} />
             </SelectTrigger>
             <SelectContent className="max-h-96">
@@ -2273,13 +2336,50 @@ export const ChatPage = () => {
                   disabled={model.is_available === false}
                 >
                   <span className="inline-flex items-center gap-2">
-                    {isImageOutputModel(model) ? (
+                    {model.provider === "openai" ? (
+                      <span
+                        aria-hidden="true"
+                        className="figma-icon size-5"
+                        style={{ maskImage: "url('/icon-provider-openai.svg')" }}
+                      />
+                    ) : isImageOutputModel(model) ? (
                       <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
                     ) : null}
-                    <span>
-                      {model.display_name} ({model.provider}){" "}
-                      {model.is_available === false ? `(${t("common_disabled")})` : ""}
+                    <span>{model.display_name}</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={reasoningEffort ?? "default"}
+            onValueChange={(value) =>
+              setReasoningEffort(value === "default" ? null : value)
+            }
+          >
+            <SelectTrigger
+              className="hidden w-[130px] border-0 bg-transparent shadow-none sm:flex"
+              aria-label={t("chat_reasoning_effort")}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[
+                ["default", t("chat_reasoning_default")],
+                ["low", t("chat_reasoning_low")],
+                ["medium", t("chat_reasoning_medium")],
+                ["high", t("chat_reasoning_high")],
+              ].map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="flex size-5 items-center justify-center">
+                      <span
+                        aria-hidden="true"
+                        className="figma-icon size-[14.1667px]"
+                        style={{ maskImage: "url('/icon-reasoning.svg')" }}
+                      />
                     </span>
+                    <span>{label}</span>
                   </span>
                 </SelectItem>
               ))}
@@ -2310,9 +2410,24 @@ export const ChatPage = () => {
               </Button>
             </div>
           ) : null}
+          </div>
+          <Button
+            variant="ghost"
+            className="hidden h-9 px-4 md:inline-flex"
+            aria-disabled="true"
+            title={t("chat_enable_incognito")}
+          >
+            <span
+              aria-hidden="true"
+              className="figma-icon size-4"
+              style={{ maskImage: "url('/icon-incognito.svg')" }}
+            />
+            {t("chat_enable_incognito")}
+          </Button>
         </div>
         <MessageList
           messages={visibleMessages}
+          welcomeTitle={welcomeTitle}
           isLoading={isMessagesLoading}
           onScroll={handleMessagesScroll}
           containerRef={messagesContainerRef}
@@ -2327,7 +2442,6 @@ export const ChatPage = () => {
           isDragActive={isDragActive}
           pendingAttachments={pendingAttachments}
           attachmentError={attachmentError}
-          reasoningEffort={reasoningEffort}
           webSearchEnabled={webSearchEnabled}
           codeExecutionEnabled={codeExecutionEnabled}
           inputRef={composerInputRef}
@@ -2342,12 +2456,23 @@ export const ChatPage = () => {
           onDragOver={handleComposerDragOver}
           onDragLeave={handleComposerDragLeave}
           onDrop={handleComposerDrop}
-          onReasoningEffortChange={setReasoningEffort}
           onWebSearchEnabledChange={setWebSearchEnabled}
           onCodeExecutionEnabledChange={setCodeExecutionEnabled}
+          onCreateImage={
+            imageModel
+              ? () => {
+                  setSelectedModel(imageModel.id)
+                  composerInputRef.current?.focus()
+                }
+              : undefined
+          }
           sendLabel={t("common_send")}
           stopLabel={t("common_stop")}
+          welcomeTitle={welcomeTitle}
+          centered={isEmptyChat}
         />
+          </>
+        )}
         <Dialog
           open={Boolean(previewAttachment)}
           onOpenChange={(open) => {
@@ -2408,6 +2533,31 @@ export const ChatPage = () => {
                 }}
               >
                 {t("chat_delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={clearHistoryConfirmOpen} onOpenChange={setClearHistoryConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("chat_history_clear_confirm_title")}</DialogTitle>
+              <DialogDescription>{t("chat_history_clear_confirm_desc")}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                autoFocus
+                variant="outline"
+                disabled={clearingHistory}
+                onClick={() => setClearHistoryConfirmOpen(false)}
+              >
+                {t("chat_cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={clearingHistory}
+                onClick={() => clearHistory().catch(() => null)}
+              >
+                {clearingHistory ? t("chat_history_clearing") : t("chat_history_clear_all")}
               </Button>
             </DialogFooter>
           </DialogContent>

@@ -161,26 +161,26 @@ export const LoginPage = () => {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <div className="flex min-h-svh items-center justify-center bg-background p-4 sm:p-6">
       <div className="w-full max-w-md space-y-3">
         <div className="flex justify-end">
           <LanguageSelect />
         </div>
-        <Card className="rounded-[var(--radius-card)] border-border shadow-none">
+        <Card className="rounded-[var(--radius-card)] border-border bg-card shadow-none">
           <CardHeader>
             <div className="flex flex-col items-center gap-3 text-center">
               <img
                 src="/logo_asya.png"
                 alt="asya.ai"
-                className="size-12 rounded-lg object-contain dark:hidden"
+                className="h-10 w-32 object-contain dark:hidden"
               />
               <img
                 src="/logo_asya_light.png"
                 alt="asya.ai"
-                className="size-12 rounded-lg object-contain hidden dark:block"
+                className="hidden h-10 w-32 object-contain dark:block"
               />
               <div className="flex flex-col gap-1">
-                <CardTitle className="font-heading text-3xl font-normal">
+                <CardTitle className="font-heading text-4xl font-normal leading-10">
                   {t("auth_sign_in")}
                 </CardTitle>
                 {stage !== "org" ? (

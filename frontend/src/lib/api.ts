@@ -285,6 +285,9 @@ export const authApi = {
     apiFetch<{
       id: string
       email: string
+      username: string | null
+      display_name: string | null
+      avatar_url: string | null
       is_super_admin: boolean
       is_admin: boolean
       memory_enabled: boolean
@@ -294,6 +297,9 @@ export const authApi = {
     apiFetch<{
       id: string
       email: string
+      username: string | null
+      display_name: string | null
+      avatar_url: string | null
       is_super_admin: boolean
       is_admin: boolean
       memory_enabled: boolean
@@ -306,6 +312,9 @@ export const authApi = {
     apiFetch<{
       id: string
       email: string
+      username: string | null
+      display_name: string | null
+      avatar_url: string | null
       is_super_admin: boolean
       is_admin: boolean
       memory_enabled: boolean

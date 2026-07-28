@@ -55,13 +55,23 @@ export const InviteAcceptPage = () => {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <div className="flex min-h-svh items-center justify-center bg-background p-4 sm:p-6">
       <div className="w-full max-w-md space-y-3">
         <div className="flex justify-end">
           <LanguageSelect />
         </div>
-        <Card>
-          <CardHeader>
+        <Card className="bg-card">
+          <CardHeader className="text-center">
+            <img
+              src="/logo_asya.png"
+              alt="asya.ai"
+              className="mx-auto h-10 w-32 object-contain dark:hidden"
+            />
+            <img
+              src="/logo_asya_light.png"
+              alt="asya.ai"
+              className="mx-auto hidden h-10 w-32 object-contain dark:block"
+            />
             <CardTitle>{t("auth_accept_invite")}</CardTitle>
           </CardHeader>
           <CardContent>

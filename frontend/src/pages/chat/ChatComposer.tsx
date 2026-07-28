@@ -3,15 +3,16 @@ import { useRef } from "react"
 import type { ChatMessageAttachmentInput } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Paperclip, X, Brain, Globe, SquareTerminal } from "lucide-react"
+import {
+  ArrowUp,
+  Globe,
+  Paperclip,
+  Square,
+  SquareTerminal,
+  X,
+} from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 
 type ChatComposerProps = {
@@ -22,7 +23,6 @@ type ChatComposerProps = {
   isDragActive: boolean
   pendingAttachments: ChatMessageAttachmentInput[]
   attachmentError?: string | null
-  reasoningEffort: string | null
   webSearchEnabled: boolean
   codeExecutionEnabled: boolean
   inputRef?: React.RefObject<HTMLTextAreaElement | null>
@@ -37,16 +37,18 @@ type ChatComposerProps = {
   onDragOver: (event: React.DragEvent<HTMLDivElement>) => void
   onDragLeave: (event: React.DragEvent<HTMLDivElement>) => void
   onDrop: (event: React.DragEvent<HTMLDivElement>) => void
-  onReasoningEffortChange: (effort: string | null) => void
   onWebSearchEnabledChange: (enabled: boolean) => void
   onCodeExecutionEnabledChange: (enabled: boolean) => void
+  onCreateImage?: () => void
   sendLabel: string
   stopLabel: string
+  welcomeTitle: string
+  centered?: boolean
 }
 
 const toolToggleClass = (active: boolean) =>
   cn(
-    "gap-1.5 h-7 rounded-lg px-2 text-muted-foreground hover:text-foreground",
+    "gap-1.5 px-2 rounded-lg h-7 text-muted-foreground hover:text-foreground",
     active && "bg-secondary text-foreground"
   )
 
@@ -58,7 +60,6 @@ export const ChatComposer = ({
   isDragActive,
   pendingAttachments,
   attachmentError,
-  reasoningEffort,
   webSearchEnabled,
   codeExecutionEnabled,
   inputRef,
@@ -73,11 +74,13 @@ export const ChatComposer = ({
   onDragOver,
   onDragLeave,
   onDrop,
-  onReasoningEffortChange,
   onWebSearchEnabledChange,
   onCodeExecutionEnabledChange,
+  onCreateImage,
   sendLabel,
   stopLabel,
+  welcomeTitle,
+  centered = false,
 }: ChatComposerProps) => {
   const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -95,22 +98,24 @@ export const ChatComposer = ({
 
   const canSend = !readOnly && Boolean(message.trim() || pendingAttachments.length > 0)
 
-  const reasoningLevels = [
-    { value: null, label: t("chat_reasoning_default") },
-    { value: "low", label: t("chat_reasoning_low") },
-    { value: "medium", label: t("chat_reasoning_medium") },
-    { value: "high", label: t("chat_reasoning_high") },
-  ]
-
-  const currentReasoningLabel =
-    reasoningLevels.find((l) => l.value === reasoningEffort)?.label ??
-    t("chat_reasoning_default")
-
   return (
-    <div className="px-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+    <div
+      className={cn(
+        "z-10",
+        centered
+          ? "absolute left-1/2 top-1/2 flex w-(--chat-content-width) -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-8 p-0 max-md:top-auto max-md:bottom-4 max-md:w-[calc(100%-2rem)] max-md:translate-y-0 max-md:gap-6"
+          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+      )}
+    >
+      {centered ? (
+        <h2 className="max-md:hidden w-full font-heading font-normal text-4xl text-center leading-10">
+          {welcomeTitle}
+        </h2>
+      ) : null}
       <div
         className={cn(
-          "flex flex-col justify-between gap-2 rounded-lg border border-border bg-card p-2",
+          "flex flex-col justify-between bg-card border border-border rounded-2xl w-full",
+          centered ? "h-26 gap-0 p-0" : "gap-2 p-2",
           "shadow-none transition-[box-shadow,border-color]",
           "focus-within:border-primary/40 focus-within:shadow-[0_0_0_3px] focus-within:shadow-primary/30",
           isDragActive && "border-primary/50 shadow-[0_0_0_3px] shadow-primary/30"
@@ -134,10 +139,12 @@ export const ChatComposer = ({
             }
           }}
           placeholder={placeholder}
-          rows={2}
+          rows={centered ? 1 : 2}
           className={cn(
-            "max-h-52 min-h-13 resize-none overflow-y-auto",
-            "border-0 bg-transparent px-1.5 py-1 text-sm shadow-none",
+            "bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
+            centered
+              ? "-mx-px -mt-px h-13 min-h-13 max-h-13 w-[calc(100%+2px)] px-5 py-4 leading-5"
+              : "max-h-52 min-h-13 px-1.5 py-1",
             "placeholder:text-muted-foreground",
             "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
           )}
@@ -188,8 +195,13 @@ export const ChatComposer = ({
             })}
           </div>
         ) : null}
-        <div className="flex items-end justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-0.5">
+        <div
+          className={cn(
+            "flex justify-between gap-2",
+            centered ? "h-13 items-center p-2" : "items-end"
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-0.5 min-w-0">
             <input
               ref={fileInputRef}
               type="file"
@@ -200,87 +212,146 @@ export const ChatComposer = ({
             />
             <Button
               variant="ghost"
-              size="icon"
-              className="size-7 text-muted-foreground"
+              size={centered ? "icon" : "icon-sm"}
+              className="text-muted-foreground"
               onClick={handlePickFiles}
               disabled={loading || readOnly}
               aria-label={t("chat_add_files")}
             >
-              <Paperclip aria-hidden="true" className="size-4" />
+              {centered ? (
+                <span
+                  aria-hidden="true"
+                  className="size-4 figma-icon"
+                  style={{ maskImage: "url('/icon-attachment.svg')" }}
+                />
+              ) : (
+                <Paperclip aria-hidden="true" className="size-4" />
+              )}
             </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={toolToggleClass(Boolean(reasoningEffort))}
-                  title={t("chat_reasoning_effort")}
-                  disabled={loading || readOnly}
-                >
-                  <Brain aria-hidden="true" className="size-3.5" />
-                  <span className="text-xs">{currentReasoningLabel}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {reasoningLevels.map((level) => (
-                  <DropdownMenuItem
-                    key={level.value ?? "default"}
-                    onClick={() => onReasoningEffortChange(level.value)}
-                    className={reasoningEffort === level.value ? "bg-accent" : ""}
-                  >
-                    {level.label}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={toolToggleClass(webSearchEnabled)}
-              title={
-                webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
-              }
-              disabled={loading || readOnly}
-              onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
-            >
-              <Globe aria-hidden="true" className="size-3.5" />
-              <span className="text-xs">{t("chat_web_search")}</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={toolToggleClass(codeExecutionEnabled)}
-              title={
-                codeExecutionEnabled
-                  ? t("chat_code_execution_on")
-                  : t("chat_code_execution_off")
-              }
-              disabled={loading || readOnly}
-              onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
-            >
-              <SquareTerminal aria-hidden="true" className="size-3.5" />
-              <span className="text-xs">{t("org_code_execution")}</span>
-            </Button>
+            {!centered ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={toolToggleClass(webSearchEnabled)}
+                title={
+                  webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
+                }
+                disabled={loading || readOnly}
+                onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
+              >
+                <Globe aria-hidden="true" className="size-3.5" />
+                <span className="text-xs">{t("chat_web_search")}</span>
+              </Button>
+            ) : null}
+            {!centered ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={toolToggleClass(codeExecutionEnabled)}
+                title={
+                  codeExecutionEnabled
+                    ? t("chat_code_execution_on")
+                    : t("chat_code_execution_off")
+                }
+                disabled={loading || readOnly}
+                onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
+              >
+                <SquareTerminal aria-hidden="true" className="size-3.5" />
+                <span className="text-xs">{t("org_code_execution")}</span>
+              </Button>
+            ) : null}
           </div>
           <div className="shrink-0">
             {loading ? (
-              <Button variant="destructive" size="sm" className="h-9" onClick={onStop}>
-                {stopLabel}
+              <Button
+                variant="destructive"
+                size={centered ? "icon" : "sm"}
+                className="h-9"
+                onClick={onStop}
+                aria-label={stopLabel}
+              >
+                {centered ? <Square aria-hidden="true" /> : stopLabel}
+              </Button>
+            ) : centered && !canSend ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => inputRef?.current?.focus()}
+                aria-label={t("chat_voice_input")}
+              >
+                <span
+                  aria-hidden="true"
+                  className="size-4 figma-icon"
+                  style={{ maskImage: "url('/icon-microphone.svg')" }}
+                />
               </Button>
             ) : (
               <Button
-                size="sm"
+                size={centered ? "icon" : "sm"}
                 className="h-9"
                 variant={canSend ? "default" : "secondary"}
                 onClick={onSend}
                 disabled={!canSend}
+                aria-label={sendLabel}
               >
-                {sendLabel}
+                {centered ? <ArrowUp aria-hidden="true" /> : sendLabel}
               </Button>
             )}
           </div>
         </div>
       </div>
+      {centered ? (
+        <div className="flex flex-wrap justify-center items-center gap-2 h-9">
+          <Button
+            variant="ghost"
+            className="px-4 w-33.5 h-9"
+            title={webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")}
+            disabled={loading || readOnly}
+            onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
+          >
+            <span
+              aria-hidden="true"
+              className="size-4 figma-icon"
+              style={{ maskImage: "url('/icon-web-search.svg')" }}
+            />
+            {t("chat_web_search")}
+          </Button>
+          {onCreateImage ? (
+            <Button
+              variant="ghost"
+              className="px-4 w-41 h-9"
+              disabled={loading || readOnly}
+              onClick={onCreateImage}
+            >
+              <span
+                aria-hidden="true"
+                className="size-4 figma-icon"
+                style={{ maskImage: "url('/icon-create-image.svg')" }}
+              />
+              {t("chat_create_image")}
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            className="px-4 w-39.5 h-9"
+            title={
+              codeExecutionEnabled
+                ? t("chat_code_execution_on")
+                : t("chat_code_execution_off")
+            }
+            disabled={loading || readOnly}
+            onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
+          >
+            <span
+              aria-hidden="true"
+              className="size-4 figma-icon"
+              style={{ maskImage: "url('/icon-code-execution.svg')" }}
+            />
+            {t("org_code_execution")}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

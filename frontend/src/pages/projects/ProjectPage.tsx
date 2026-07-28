@@ -52,6 +52,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { AppShell } from "@/components/AppShell"
 
 type Tab = "chats" | "files" | "instructions"
 
@@ -205,7 +206,6 @@ export const ProjectPage = () => {
       cancelled = true
       window.clearTimeout(handle)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareOpen, shareEmail, project, shares])
 
   const startChat = () => {
@@ -370,18 +370,32 @@ export const ProjectPage = () => {
 
   if (loading) {
     return (
-      <div className="mx-auto flex min-h-svh w-full max-w-4xl items-center justify-center px-4">
-        <p className="text-muted-foreground text-sm">{t("project_loading_one")}</p>
-      </div>
+      <AppShell activeSection="projects">
+        {(sidebarControls) => (
+          <div className="flex h-full flex-col">
+            <div className="flex h-15 shrink-0 items-center px-3">{sidebarControls}</div>
+            <div className="flex flex-1 items-center justify-center px-4">
+              <p className="text-muted-foreground text-sm">{t("project_loading_one")}</p>
+            </div>
+          </div>
+        )}
+      </AppShell>
     )
   }
 
   if (!project) {
     return (
-      <div className="mx-auto flex min-h-svh w-full max-w-4xl flex-col items-center justify-center gap-4 px-4 text-center">
-        <p className="text-muted-foreground">{error ?? t("project_not_found")}</p>
-        <Button onClick={() => navigate("/projects")}>{t("project_back_to_projects")}</Button>
-      </div>
+      <AppShell activeSection="projects">
+        {(sidebarControls) => (
+          <div className="flex h-full flex-col">
+            <div className="flex h-15 shrink-0 items-center px-3">{sidebarControls}</div>
+            <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
+              <p className="text-muted-foreground">{error ?? t("project_not_found")}</p>
+              <Button onClick={() => navigate("/projects")}>{t("project_back_to_projects")}</Button>
+            </div>
+          </div>
+        )}
+      </AppShell>
     )
   }
 
@@ -392,20 +406,25 @@ export const ProjectPage = () => {
   ]
 
   return (
-    <div className="mx-auto flex h-svh w-full max-w-4xl flex-col gap-6 overflow-y-auto px-4 py-8 sm:px-6">
+    <AppShell activeSection="projects">
+      {(sidebarControls) => (
+    <div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto p-4 sm:p-6">
       <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-muted-foreground -ml-2 mb-2"
-          onClick={() => navigate("/projects")}
-        >
-          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          {t("project_title")}
-        </Button>
+        <div className="-ml-2 mb-2 flex items-center gap-1">
+          {sidebarControls}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => navigate("/projects")}
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            {t("project_title")}
+          </Button>
+        </div>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="truncate text-2xl font-semibold">{project.name}</h1>
+            <h1 className="truncate font-heading text-4xl font-normal leading-10">{project.name}</h1>
             {project.description ? (
               <p className="text-muted-foreground mt-1 text-sm">{project.description}</p>
             ) : null}
@@ -484,7 +503,7 @@ export const ProjectPage = () => {
 
       {tab === "chats" ? (
         sortedChats.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed py-16 text-center">
+          <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed bg-card py-16 text-center">
             <MessageSquarePlus className="text-muted-foreground h-6 w-6" aria-hidden="true" />
             <p className="text-muted-foreground text-sm">{t("project_no_chats")}</p>
             <Button onClick={startChat}>{t("project_start_chat")}</Button>
@@ -844,6 +863,8 @@ export const ProjectPage = () => {
         </DialogContent>
       </Dialog>
     </div>
+      )}
+    </AppShell>
   )
 }
 

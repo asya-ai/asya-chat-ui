@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Card } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AppShell } from "@/components/AppShell"
 import {
   Dialog,
   DialogContent,
@@ -79,16 +80,16 @@ export const ProjectsPage = () => {
   }
 
   return (
-    <div className="mx-auto flex h-svh w-full max-w-5xl flex-col gap-6 overflow-y-auto px-4 py-8 sm:px-6">
+    <AppShell activeSection="projects">
+      {(sidebarControls) => (
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-6 overflow-y-auto p-4 sm:p-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <FolderOpen className="h-6 w-6" aria-hidden="true" />
-          <h1 className="text-2xl font-semibold">{t("project_title")}</h1>
+          <div className="flex items-center gap-1">{sidebarControls}</div>
+          <FolderOpen className="size-6" aria-hidden="true" />
+          <h1 className="font-heading text-4xl font-normal leading-10">{t("project_title")}</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/chat")}>
-            {t("common_back_to_chat")}
-          </Button>
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden="true" />
             {t("project_new")}
@@ -121,7 +122,7 @@ export const ProjectsPage = () => {
       {loading ? (
         <p className="text-muted-foreground text-sm">{t("project_loading")}</p>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-dashed py-20 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-[var(--radius-card)] border border-dashed bg-card py-20 text-center">
           <div className="bg-muted flex h-14 w-14 items-center justify-center rounded-2xl">
             <FolderOpen className="text-muted-foreground h-6 w-6" aria-hidden="true" />
           </div>
@@ -158,7 +159,7 @@ export const ProjectsPage = () => {
                   navigate(`/projects/${project.id}`)
                 }
               }}
-              className="hover:border-primary/60 hover:bg-accent/40 cursor-pointer gap-2 p-4 transition-colors"
+              className="cursor-pointer gap-2 p-4 transition-colors hover:border-primary/60 hover:bg-accent"
             >
               <div className="flex items-center gap-2">
                 <FolderOpen className="text-muted-foreground h-5 w-5 shrink-0" aria-hidden="true" />
@@ -212,6 +213,8 @@ export const ProjectsPage = () => {
         </DialogContent>
       </Dialog>
     </div>
+      )}
+    </AppShell>
   )
 }
 

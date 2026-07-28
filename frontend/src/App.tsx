@@ -49,7 +49,7 @@ const App = () => {
   useEffect(() => {
     const appTitle = t("app_title")
     const path = location.pathname
-    if (path.startsWith("/chat") || path.startsWith("/shared/")) {
+    if (path.startsWith("/chat") || path === "/history" || path.startsWith("/shared/")) {
       return
     }
     if (path.startsWith("/settings/")) {
@@ -170,6 +170,14 @@ const App = () => {
         />
         <Route
           path="/chat/:chatId"
+          element={
+            <RequireAuth>
+              <ChatPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/history"
           element={
             <RequireAuth>
               <ChatPage />

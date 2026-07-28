@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 type MessageListProps = {
   messages: ChatMessage[]
+  welcomeTitle: string
   isLoading?: boolean
   onScroll: () => void
   containerRef: React.RefObject<HTMLDivElement | null>
@@ -17,6 +18,7 @@ type MessageListProps = {
 
 const MessageListComponent = ({
   messages,
+  welcomeTitle,
   isLoading,
   onScroll,
   containerRef,
@@ -28,14 +30,14 @@ const MessageListComponent = ({
   return (
     <div
       ref={containerRef}
-      className="flex-1 space-y-4 p-6 min-h-0 overflow-y-auto"
+      className="relative flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 py-6 md:px-8"
       onScroll={onScroll}
       aria-live="polite"
       aria-relevant="additions text"
     >
       {isLoading
         ? loadingFallback ?? (
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               <Skeleton className="h-5 w-40" />
               <Skeleton className="h-20 w-3/4" />
               <Skeleton className="h-5 w-32" />
@@ -49,31 +51,21 @@ const MessageListComponent = ({
         </div>
       ))}
       {!isLoading && messages.length === 0 ? (
-        <div className="flex flex-col justify-center items-center min-h-full text-center">
-          <img
-            src="/logo_asya.png"
-            alt=""
-            className="mb-4 size-14 rounded-xl object-contain dark:hidden"
-          />
-          <img
-            src="/logo_asya_light.png"
-            alt=""
-            className="mb-4 size-14 rounded-xl object-contain hidden dark:block"
-          />
-          <h2 className="font-heading text-3xl font-normal tracking-tight">
-            {t("chat_welcome_title")}
+        <div className="flex min-h-full flex-col items-center text-center md:block max-md:pt-24">
+          <h2 className="font-heading text-4xl font-normal leading-10 md:hidden">
+            {welcomeTitle}
           </h2>
-          <p className="mt-2 text-muted-foreground text-sm">
-            {t("chat_welcome_created_by")}{" "}
-            <a
-              href="https://asya.ai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary underline underline-offset-2"
-            >
-              asya.ai
-            </a>
-          </p>
+          <div className="absolute -bottom-px left-1/2 flex w-(--chat-content-width) -translate-x-1/2 items-start gap-2 pb-8 text-left text-xs leading-4 text-(--content-secondary) max-md:hidden">
+            <span
+              aria-hidden="true"
+              className="figma-icon size-4 shrink-0"
+              style={{ maskImage: "url('/icon-privacy.svg')" }}
+            />
+            <div>
+              <p>{t("chat_privacy_message")}</p>
+              <p>{t("chat_privacy_message_detail")}</p>
+            </div>
+          </div>
         </div>
       ) : null}
       <div ref={endRef} />
@@ -85,6 +77,7 @@ export const MessageList = memo(
   MessageListComponent,
   (prev, next) =>
     prev.messages === next.messages &&
+    prev.welcomeTitle === next.welcomeTitle &&
     prev.isLoading === next.isLoading &&
     prev.onScroll === next.onScroll &&
     prev.containerRef === next.containerRef &&

@@ -131,6 +131,9 @@ ALLOWED_LOCALES = {"en", "lv", "ja"}
 class MeResponse(BaseModel):
     id: str
     email: EmailStr
+    username: str | None = None
+    display_name: str | None = None
+    avatar_url: str | None = None
     is_super_admin: bool
     is_admin: bool
     memory_enabled: bool
@@ -191,6 +194,8 @@ def _me_response(session: Session, user: User) -> MeResponse:
     return MeResponse(
         id=str(user.id),
         email=user.email,
+        username=user.username,
+        display_name=user.display_name,
         is_super_admin=user.is_super_admin,
         is_admin=_is_admin_user(session, user),
         memory_enabled=user.memory_enabled,
