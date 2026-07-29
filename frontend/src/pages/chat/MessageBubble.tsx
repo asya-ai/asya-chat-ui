@@ -24,6 +24,7 @@ type MessageBubbleProps = {
   thinkingLabels: string[]
   currentStepLabel: string | null
   currentToolLabel: string | null
+  showToolCallLogs: boolean
   actionsEnabled: boolean
   isEditing: boolean
   isEditDragActive: boolean
@@ -261,6 +262,7 @@ const MessageBubbleComponent = ({
   thinkingLabels,
   currentStepLabel,
   currentToolLabel,
+  showToolCallLogs,
   actionsEnabled,
   isEditing,
   isEditDragActive,
@@ -295,6 +297,13 @@ const MessageBubbleComponent = ({
     msg.tool_event?.type === "url_attachments" ? msg.tool_event : null
   const contextSummaryEvent =
     msg.tool_event?.type === "context_summary" ? msg.tool_event : null
+  const hasEventHeader = Boolean(
+    isCodeEvent ||
+      toolCallEvent ||
+      chatViewEvent ||
+      urlAttachmentsEvent ||
+      isContextSummaryEvent
+  )
   const canCopyMessage = Boolean(msg.content.trim())
   const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
   const attachmentSrc = (attachment: {
@@ -333,35 +342,31 @@ const MessageBubbleComponent = ({
         isUser ? "justify-end" : "justify-start"
       }`}
     >
-      <div className={`group ${isEditing || !isUser ? "w-full" : "max-w-[88%]"}`}>
+      <div className={`group ${isEditing || !isUser ? "w-full" : "max-w-full"}`}>
         <div
-          className={`overflow-hidden rounded-lg p-2 text-sm leading-[18px] break-words whitespace-normal ${
+          className={`overflow-hidden rounded-lg wrap-break-word whitespace-normal ${
             isUser
-              ? "bg-secondary text-foreground"
-              : "bg-transparent text-foreground"
+              ? "bg-secondary p-2 text-base leading-5 font-semibold text-foreground"
+              : hasEventHeader
+                ? "bg-transparent p-2 text-sm leading-4.5 text-foreground"
+                : "bg-transparent p-0 text-sm leading-4.5 text-foreground"
           }`}
         >
-          <div className="flex justify-between items-center gap-2">
-            <p
-              className={`mb-1.5 text-xs font-medium opacity-70 ${
-                isUser ? "ml-auto text-right" : ""
-              }`}
-            >
-              {isCodeEvent
-                ? t("chat_executing_code")
-                : toolCallEvent
-                  ? t("chat_tool_label", { name: toolCallEvent.tool_name })
-                : chatViewEvent
-                  ? t("chat_activity")
-                : urlAttachmentsEvent
-                  ? t("chat_downloading_attachments")
-                : isContextSummaryEvent
-                  ? t("chat_context_summarized")
-                  : isUser
-                    ? t("chat_you")
-                    : msg.model_name || t("chat_assistant")}
-            </p>
-          </div>
+          {hasEventHeader ? (
+            <div className="flex justify-between items-center gap-2">
+              <p className="mb-1.5 text-xs font-medium opacity-70">
+                {isCodeEvent
+                  ? t("chat_executing_code")
+                  : toolCallEvent
+                    ? t("chat_tool_label", { name: toolCallEvent.tool_name })
+                    : chatViewEvent
+                      ? t("chat_activity")
+                      : urlAttachmentsEvent
+                        ? t("chat_downloading_attachments")
+                        : t("chat_context_summarized")}
+              </p>
+            </div>
+          ) : null}
           {isCodeEvent ? (
             <details className="space-y-3">
               <summary className="text-xs uppercase tracking-wide cursor-pointer">
@@ -629,40 +634,55 @@ const MessageBubbleComponent = ({
           ) : (
             <>
               {isThinking ? (
-                <div className="space-y-2 py-2" role="status" aria-live="polite">
-                  {currentStepLabel || currentToolLabel ? (
-                    <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
-                      {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
-                    </div>
-                  ) : null}
-                  <div className="flex items-center gap-1">
-                    <span
-                      aria-hidden="true"
-                      className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                      style={{ animationDelay: "0ms" }}
-                    />
-                    <span
-                      aria-hidden="true"
-                      className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                      style={{ animationDelay: "150ms" }}
-                    />
-                    <span
-                      aria-hidden="true"
-                      className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                      style={{ animationDelay: "300ms" }}
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {thinkingLabels.map((label) => (
+                showToolCallLogs ? (
+                  <div className="space-y-2 py-2" role="status" aria-live="polite">
+                    {currentStepLabel || currentToolLabel ? (
+                      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                        {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
+                      </div>
+                    ) : null}
+                    <div className="flex items-center gap-1">
                       <span
-                        key={label}
-                        className="px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide"
-                      >
-                        {label}
-                      </span>
-                    ))}
+                        aria-hidden="true"
+                        className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                        style={{ animationDelay: "0ms" }}
+                      />
+                      <span
+                        aria-hidden="true"
+                        className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                        style={{ animationDelay: "150ms" }}
+                      />
+                      <span
+                        aria-hidden="true"
+                        className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                        style={{ animationDelay: "300ms" }}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {thinkingLabels.map((label) => (
+                        <span
+                          key={label}
+                          className="px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div
+                    className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                      style={{ maskImage: "url('/icon-thinking.svg')" }}
+                    />
+                    <span>{t("chat_thinking")}</span>
+                  </div>
+                )
               ) : (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
@@ -671,7 +691,7 @@ const MessageBubbleComponent = ({
                     p({ children, node, ...rest }) {
                       void node
                       return (
-                        <p className="my-2.5 leading-6" {...rest}>
+                        <p className={isUser ? "m-0 leading-5" : "my-2.5 leading-6"} {...rest}>
                           {children}
                         </p>
                       )
@@ -1020,6 +1040,7 @@ export const MessageBubble = memo(
     if (prev.isThinking !== next.isThinking) return false
     if (prev.currentStepLabel !== next.currentStepLabel) return false
     if (prev.currentToolLabel !== next.currentToolLabel) return false
+    if (prev.showToolCallLogs !== next.showToolCallLogs) return false
     if (prev.actionsEnabled !== next.actionsEnabled) return false
     if (prev.isEditing !== next.isEditing) return false
     if (prev.codeTheme !== next.codeTheme) return false

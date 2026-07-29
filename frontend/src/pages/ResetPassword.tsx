@@ -69,12 +69,14 @@ export const ResetPasswordPage = () => {
         <div className="flex justify-end">
           <LanguageSelect />
         </div>
-        <Card className="bg-card">
-          <CardHeader className="text-center">
-            <img src="/favicon.svg" alt="Eldigen" className="mx-auto size-10 object-contain" />
-            <CardTitle className="mt-2">
+        <Card className="rounded-[var(--radius-card)] border-border bg-card shadow-none">
+          <CardHeader>
+            <div className="flex flex-col items-center gap-3 text-center">
+              <img src="/favicon.svg" alt="Eldigen" className="size-10 object-contain" />
+              <CardTitle className="font-heading text-4xl font-normal leading-10">
               {token ? t("auth_reset_title") : t("auth_reset_request_title")}
-            </CardTitle>
+              </CardTitle>
+            </div>
           </CardHeader>
           <CardContent>
             {token ? (

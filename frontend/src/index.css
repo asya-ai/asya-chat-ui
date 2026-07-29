@@ -85,7 +85,7 @@ body {
 }
 
 :root {
-  --chat-content-width: clamp(35.9375rem, calc(40vw - 1px), 56.25rem);
+  --chat-content-width: 35.9375rem;
   --radius: 0.5rem;
 
   --background: #f5f3f2;

@@ -1030,8 +1030,7 @@ export const ChatPage = () => {
 
   const visibleMessages = useMemo(() => {
     const merged = mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
-      if (!msg.tool_event || msg.tool_event.type !== "tool_call") return true
-      if (msg.tool_event.tool_name === "code_execution") return false
+      if (!msg.tool_event) return true
       return showToolCallLogs
     })
     return collapseActivityEvents(merged)
@@ -2061,6 +2060,7 @@ export const ChatPage = () => {
           thinkingLabels={thinkingLabels}
           currentStepLabel={stepLabel}
           currentToolLabel={currentToolLabel}
+          showToolCallLogs={showToolCallLogs}
           actionsEnabled={!isSharedView}
           isEditing={isEditing}
           isEditDragActive={isEditing && isEditDragActive}
@@ -2110,6 +2110,7 @@ export const ChatPage = () => {
       handleEditDrop,
       removeEditingAttachment,
       isSharedView,
+      showToolCallLogs,
     ]
   )
 
