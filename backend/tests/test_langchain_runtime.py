@@ -17,8 +17,12 @@ def _usage() -> ChatUsage:
 @dataclass
 class _FakeProvider:
     calls: int = 0
+    seen_messages: list[list[dict]] | None = None
 
     async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+        if self.seen_messages is None:
+            self.seen_messages = []
+        self.seen_messages.append(messages.copy())
         self.calls += 1
         if self.calls == 1:
             return ChatResponse(
@@ -163,6 +167,66 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
     assert usage is not None
     assert tool_events[-1]["state"] == "end"
     assert tool_events[-1]["input_preview"] == '{"text": "hello"}'
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_keeps_attachment_data_out_of_model_and_tool_events():
+    registry = ToolRegistry()
+    image_base64 = "large-image-payload"
+
+    async def _echo(args: dict) -> ToolResult:
+        return ToolResult(
+            name="echo_tool",
+            output={
+                "file_name": "generated.png",
+                "data_base64": image_base64,
+                "files": [{"data_base64": image_base64}],
+            },
+            attachments=[
+                {
+                    "file_name": "generated.png",
+                    "content_type": "image/png",
+                    "data_base64": image_base64,
+                }
+            ],
+        )
+
+    registry.register(
+        ToolSpec(
+            name="echo_tool",
+            description="Return an attachment",
+            parameters={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        ),
+        _echo,
+    )
+    provider = _FakeProvider()
+    tool_event_sender, tool_event_receiver = anyio.create_memory_object_stream(4)
+
+    _, attachments, *_ = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "make an image"}],
+        tool_registry=registry,
+        max_steps=3,
+        tool_event_sender=tool_event_sender,
+    )
+    await tool_event_sender.aclose()
+    tool_events = [event async for event in tool_event_receiver]
+
+    assert attachments[0]["data_base64"] == image_base64
+    assert provider.seen_messages is not None
+    tool_message = next(
+        message
+        for message in provider.seen_messages[1]
+        if message.get("role") == "tool"
+    )
+    assert image_base64 not in tool_message["content"]
+    assert "data_base64" not in tool_events[-1]["output"]["raw_output"]
+    assert tool_events[-1]["output"]["raw_output"]["files"] == [{}]
 
 
 @pytest.mark.asyncio

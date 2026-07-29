@@ -180,6 +180,18 @@ async def _normalize_web_scrape_answer_result(
     return result, additional_usage
 
 
+def _strip_inline_attachment_data(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_inline_attachment_data(item)
+            for key, item in value.items()
+            if key != "data_base64"
+        }
+    if isinstance(value, list):
+        return [_strip_inline_attachment_data(item) for item in value]
+    return value
+
+
 async def run_agentic_loop_langchain(
     *,
     provider: Any,
@@ -275,6 +287,9 @@ async def run_agentic_loop_langchain(
                 usage = _merge_chat_usage(usage, answer_usage)
             if result.attachments:
                 attachments.extend(result.attachments)
+                tool_output = _strip_inline_attachment_data(result.output)
+            else:
+                tool_output = result.output
             if call.name in {"web_search", "web_scrape"}:
                 result_sources = result.output.get("queries") or result.output.get("results")
                 if isinstance(result_sources, list):
@@ -293,7 +308,7 @@ async def run_agentic_loop_langchain(
                         "type": "code_execution",
                         "id": call.id,
                         "code": (call.arguments or {}).get("code", ""),
-                        "output": result.output,
+                        "output": tool_output,
                     }
                 )
             elif call.name == "download_attachments":
@@ -305,7 +320,7 @@ async def run_agentic_loop_langchain(
                         "type": "url_attachments",
                         "id": call.id,
                         "urls": urls if isinstance(urls, list) else [],
-                        "output": result.output,
+                        "output": tool_output,
                     }
                 )
             await _emit_tool_event(
@@ -316,10 +331,10 @@ async def run_agentic_loop_langchain(
                     "state": "end",
                     "input_preview": input_preview,
                     "output": {
-                        "status": "error" if result.output.get("error") else "ok",
-                        "result_preview": json.dumps(result.output, ensure_ascii=False)[:240],
-                        "raw_output": result.output,
-                        "error": result.output.get("error"),
+                        "status": "error" if tool_output.get("error") else "ok",
+                        "result_preview": json.dumps(tool_output, ensure_ascii=False)[:240],
+                        "raw_output": tool_output,
+                        "error": tool_output.get("error"),
                     },
                 }
             )
@@ -328,7 +343,7 @@ async def run_agentic_loop_langchain(
                     "role": "tool",
                     "tool_call_id": call.id,
                     "name": call.name,
-                    "content": json.dumps(result.output, ensure_ascii=False),
+                    "content": json.dumps(tool_output, ensure_ascii=False),
                 }
             )
 

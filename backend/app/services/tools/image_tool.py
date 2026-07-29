@@ -482,7 +482,6 @@ async def _build_image_result(
         return ToolResult(name=name, output={"error": "Image generation failed"})
     output = {
         "content_type": "image/png",
-        "data_base64": image_base64,
         "file_name": "generated.png",
     }
     if model_id:
@@ -522,7 +521,6 @@ def _extract_gemini_image(
                     data_base64 = base64.b64encode(data_base64).decode("ascii")
                 output = {
                     "content_type": mime_type,
-                    "data_base64": data_base64,
                     "file_name": "generated.png",
                 }
                 if model_id:
@@ -584,7 +582,6 @@ def _extract_openai_response_image(
         return ToolResult(name=name, output={"error": "Image generation failed"})
     output: dict[str, Any] = {
         "content_type": "image/png",
-        "data_base64": image_base64,
         "file_name": "generated.png",
         "image_count": 1,
     }
