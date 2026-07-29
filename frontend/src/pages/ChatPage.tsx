@@ -2167,9 +2167,6 @@ export const ChatPage = () => {
   }, [activeChatTitle, t])
 
   const isEmptyChat = !isMessagesLoading && visibleMessages.length === 0
-  const imageModel = selectableChatModels.find(
-    (model) => model.is_available !== false && isImageOutputModel(model)
-  )
   const activeOrgName = orgs.find((org) => org.id === orgId)?.name
   const profileLabel =
     currentUser?.display_name || currentUser?.username || currentUser?.email || t("me_settings")
@@ -2458,14 +2455,6 @@ export const ChatPage = () => {
           onDrop={handleComposerDrop}
           onWebSearchEnabledChange={setWebSearchEnabled}
           onCodeExecutionEnabledChange={setCodeExecutionEnabled}
-          onCreateImage={
-            imageModel
-              ? () => {
-                  setSelectedModel(imageModel.id)
-                  composerInputRef.current?.focus()
-                }
-              : undefined
-          }
           sendLabel={t("common_send")}
           stopLabel={t("common_stop")}
           welcomeTitle={welcomeTitle}

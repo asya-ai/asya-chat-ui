@@ -39,7 +39,6 @@ type ChatComposerProps = {
   onDrop: (event: React.DragEvent<HTMLDivElement>) => void
   onWebSearchEnabledChange: (enabled: boolean) => void
   onCodeExecutionEnabledChange: (enabled: boolean) => void
-  onCreateImage?: () => void
   sendLabel: string
   stopLabel: string
   welcomeTitle: string
@@ -76,7 +75,6 @@ export const ChatComposer = ({
   onDrop,
   onWebSearchEnabledChange,
   onCodeExecutionEnabledChange,
-  onCreateImage,
   sendLabel,
   stopLabel,
   welcomeTitle,
@@ -228,38 +226,34 @@ export const ChatComposer = ({
                 <Paperclip aria-hidden="true" className="size-4" />
               )}
             </Button>
-            {!centered ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className={toolToggleClass(webSearchEnabled)}
-                title={
-                  webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
-                }
-                disabled={loading || readOnly}
-                onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
-              >
-                <Globe aria-hidden="true" className="size-3.5" />
-                <span className="text-xs">{t("chat_web_search")}</span>
-              </Button>
-            ) : null}
-            {!centered ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className={toolToggleClass(codeExecutionEnabled)}
-                title={
-                  codeExecutionEnabled
-                    ? t("chat_code_execution_on")
-                    : t("chat_code_execution_off")
-                }
-                disabled={loading || readOnly}
-                onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
-              >
-                <SquareTerminal aria-hidden="true" className="size-3.5" />
-                <span className="text-xs">{t("org_code_execution")}</span>
-              </Button>
-            ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={toolToggleClass(webSearchEnabled)}
+              title={
+                webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
+              }
+              disabled={loading || readOnly}
+              onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
+            >
+              <Globe aria-hidden="true" className="size-3.5" />
+              <span className="text-xs">{t("chat_web_search")}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={toolToggleClass(codeExecutionEnabled)}
+              title={
+                codeExecutionEnabled
+                  ? t("chat_code_execution_on")
+                  : t("chat_code_execution_off")
+              }
+              disabled={loading || readOnly}
+              onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
+            >
+              <SquareTerminal aria-hidden="true" className="size-3.5" />
+              <span className="text-xs">{t("org_code_execution")}</span>
+            </Button>
           </div>
           <div className="shrink-0">
             {loading ? (
@@ -301,57 +295,6 @@ export const ChatComposer = ({
           </div>
         </div>
       </div>
-      {centered ? (
-        <div className="flex flex-wrap justify-center items-center gap-2 h-9">
-          <Button
-            variant="ghost"
-            className="px-4 w-33.5 h-9"
-            title={webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")}
-            disabled={loading || readOnly}
-            onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
-          >
-            <span
-              aria-hidden="true"
-              className="size-4 figma-icon"
-              style={{ maskImage: "url('/icon-web-search.svg')" }}
-            />
-            {t("chat_web_search")}
-          </Button>
-          {onCreateImage ? (
-            <Button
-              variant="ghost"
-              className="px-4 w-41 h-9"
-              disabled={loading || readOnly}
-              onClick={onCreateImage}
-            >
-              <span
-                aria-hidden="true"
-                className="size-4 figma-icon"
-                style={{ maskImage: "url('/icon-create-image.svg')" }}
-              />
-              {t("chat_create_image")}
-            </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            className="px-4 w-39.5 h-9"
-            title={
-              codeExecutionEnabled
-                ? t("chat_code_execution_on")
-                : t("chat_code_execution_off")
-            }
-            disabled={loading || readOnly}
-            onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
-          >
-            <span
-              aria-hidden="true"
-              className="size-4 figma-icon"
-              style={{ maskImage: "url('/icon-code-execution.svg')" }}
-            />
-            {t("org_code_execution")}
-          </Button>
-        </div>
-      ) : null}
     </div>
   )
 }
