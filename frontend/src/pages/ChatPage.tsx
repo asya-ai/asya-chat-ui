@@ -8,7 +8,6 @@ import {
   codeExecutionEnabledStore,
   modelStore,
   orgStore,
-  reasoningEffortStore,
   toolCallLogsVisibleStore,
   webSearchEnabledStore,
 } from "@/lib/storage"
@@ -97,14 +96,6 @@ export const ChatPage = () => {
   const [isUploadingAttachments, setIsUploadingAttachments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [isDragActive, setIsDragActive] = useState(false)
-  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() => {
-    const stored = reasoningEffortStore.get()
-    if (stored === "low" || stored === "medium" || stored === "high") {
-      return stored
-    }
-    if (stored === "none") return null
-    return "medium"
-  })
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
     const stored = webSearchEnabledStore.get()
     return stored == null ? true : stored === "1"
@@ -959,14 +950,6 @@ export const ChatPage = () => {
   }, [selectedModel])
 
   useEffect(() => {
-    if (!reasoningEffort) {
-      reasoningEffortStore.set("none")
-      return
-    }
-    reasoningEffortStore.set(reasoningEffort)
-  }, [reasoningEffort])
-
-  useEffect(() => {
     webSearchEnabledStore.set(webSearchEnabled)
   }, [webSearchEnabled])
 
@@ -1310,7 +1293,6 @@ export const ChatPage = () => {
           file_name: item.file_name,
           content_type: item.content_type,
         })),
-        reasoningEffort,
         webSearchEnabled,
         codeExecutionEnabled,
         locale,
@@ -1864,7 +1846,6 @@ export const ChatPage = () => {
         file_name: attachment.file_name,
         content_type: attachment.content_type,
       })),
-      reasoningEffort,
       webSearchEnabled,
       codeExecutionEnabled,
       locale,
@@ -1908,7 +1889,6 @@ export const ChatPage = () => {
     selectedModel,
     modelNameById,
     cancelEditMessage,
-    reasoningEffort,
     webSearchEnabled,
     codeExecutionEnabled,
     locale,
@@ -1996,7 +1976,6 @@ export const ChatPage = () => {
         file_name: attachment.file_name,
         content_type: attachment.content_type,
       })),
-      reasoningEffort,
       webSearchEnabled,
       codeExecutionEnabled,
       locale,
@@ -2032,7 +2011,6 @@ export const ChatPage = () => {
     stopGeneration,
     selectedModel,
     modelNameById,
-    reasoningEffort,
     webSearchEnabled,
     codeExecutionEnabled,
     locale,
@@ -2343,40 +2321,6 @@ export const ChatPage = () => {
                       <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
                     ) : null}
                     <span>{model.display_name}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={reasoningEffort ?? "default"}
-            onValueChange={(value) =>
-              setReasoningEffort(value === "default" ? null : value)
-            }
-          >
-            <SelectTrigger
-              className="hidden w-[130px] border-0 bg-transparent shadow-none sm:flex"
-              aria-label={t("chat_reasoning_effort")}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {[
-                ["default", t("chat_reasoning_default")],
-                ["low", t("chat_reasoning_low")],
-                ["medium", t("chat_reasoning_medium")],
-                ["high", t("chat_reasoning_high")],
-              ].map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="flex size-5 items-center justify-center">
-                      <span
-                        aria-hidden="true"
-                        className="figma-icon size-[14.1667px]"
-                        style={{ maskImage: "url('/icon-reasoning.svg')" }}
-                      />
-                    </span>
-                    <span>{label}</span>
                   </span>
                 </SelectItem>
               ))}

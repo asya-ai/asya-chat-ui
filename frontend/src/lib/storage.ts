@@ -3,7 +3,6 @@ const ORG_KEY = "chatui_org"
 const MODEL_KEY = "chatui_model"
 const LOCALE_KEY = "chatui_locale"
 const LOGIN_ORG_KEY = "chatui_login_org"
-const REASONING_EFFORT_KEY = "chatui_reasoning_effort"
 const WEB_SEARCH_ENABLED_KEY = "chatui_web_search_enabled"
 const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
 const TOOLCALL_LOGS_VISIBLE_KEY = "chatui_toolcall_logs_visible"
@@ -36,12 +35,6 @@ export const loginOrgStore = {
   get: () => localStorage.getItem(LOGIN_ORG_KEY),
   set: (org: string) => localStorage.setItem(LOGIN_ORG_KEY, org),
   clear: () => localStorage.removeItem(LOGIN_ORG_KEY),
-}
-
-export const reasoningEffortStore = {
-  get: () => localStorage.getItem(REASONING_EFFORT_KEY),
-  set: (effort: string) => localStorage.setItem(REASONING_EFFORT_KEY, effort),
-  clear: () => localStorage.removeItem(REASONING_EFFORT_KEY),
 }
 
 export const webSearchEnabledStore = {

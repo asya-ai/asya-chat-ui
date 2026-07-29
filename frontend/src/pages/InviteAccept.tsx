@@ -62,16 +62,7 @@ export const InviteAcceptPage = () => {
         </div>
         <Card className="bg-card">
           <CardHeader className="text-center">
-            <img
-              src="/logo_asya.png"
-              alt="asya.ai"
-              className="mx-auto h-10 w-32 object-contain dark:hidden"
-            />
-            <img
-              src="/logo_asya_light.png"
-              alt="asya.ai"
-              className="mx-auto hidden h-10 w-32 object-contain dark:block"
-            />
+            <img src="/favicon.svg" alt="Eldigen" className="mx-auto size-10 object-contain" />
             <CardTitle>{t("auth_accept_invite")}</CardTitle>
           </CardHeader>
           <CardContent>

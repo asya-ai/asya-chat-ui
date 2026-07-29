@@ -39,7 +39,7 @@ export const SettingsShell = ({ title, items, actions, children }: SettingsShell
       <Sidebar className="border-0 bg-sidebar p-2">
         <SidebarContent className="gap-3 px-0 py-2">
           <Link to="/chat" className="flex items-center gap-2 px-1.5 py-2">
-            <img src="/logo_chat.svg" alt="" className="size-9 object-contain" />
+            <img src="/favicon.svg" alt="Eldigen" className="size-9 object-contain" />
             <span className="font-heading text-4xl leading-9">Chat</span>
           </Link>
           <nav aria-label={t("settings_navigation")}>

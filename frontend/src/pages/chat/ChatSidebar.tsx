@@ -35,8 +35,8 @@ export const ChatSidebar = ({
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex size-11 shrink-0 items-center justify-center">
             <img
-              src="/logo_chat.svg"
-              alt=""
+              src="/favicon.svg"
+              alt="Eldigen"
               className="h-11 w-[39.286px] object-contain"
             />
           </span>

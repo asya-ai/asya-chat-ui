@@ -169,16 +169,7 @@ export const LoginPage = () => {
         <Card className="rounded-[var(--radius-card)] border-border bg-card shadow-none">
           <CardHeader>
             <div className="flex flex-col items-center gap-3 text-center">
-              <img
-                src="/logo_asya.png"
-                alt="asya.ai"
-                className="h-10 w-32 object-contain dark:hidden"
-              />
-              <img
-                src="/logo_asya_light.png"
-                alt="asya.ai"
-                className="hidden h-10 w-32 object-contain dark:block"
-              />
+              <img src="/favicon.svg" alt="Eldigen" className="size-10 object-contain" />
               <div className="flex flex-col gap-1">
                 <CardTitle className="font-heading text-4xl font-normal leading-10">
                   {t("auth_sign_in")}
