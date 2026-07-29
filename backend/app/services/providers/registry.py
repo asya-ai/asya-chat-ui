@@ -16,6 +16,7 @@ def get_provider(
     reasoning_effort: str | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
+    prompt_cache_enabled: bool = True,
     config: dict | None = None,
 ) -> ChatProvider:
     match provider:
@@ -26,6 +27,7 @@ def get_provider(
                 reasoning_effort=reasoning_effort,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
+                prompt_cache_enabled=prompt_cache_enabled,
             )
         case "azure":
             return AzureOpenAIProvider(
@@ -37,12 +39,15 @@ def get_provider(
             )
         case "gemini":
             return GeminiProvider(
-                api_key=api_key, prompt_cache_key=prompt_cache_key
+                api_key=api_key,
+                prompt_cache_key=prompt_cache_key,
+                prompt_cache_enabled=prompt_cache_enabled,
             )
         case "vertex":
             return VertexProvider(
                 api_key=api_key,
                 prompt_cache_key=prompt_cache_key,
+                prompt_cache_enabled=prompt_cache_enabled,
                 config=config,
             )
         case "groq":

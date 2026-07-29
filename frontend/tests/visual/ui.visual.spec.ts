@@ -195,6 +195,59 @@ for (const theme of themes) {
     await expect(page).toHaveScreenshot(`empty-chat-${theme}.png`, { fullPage: true })
   })
 
+  test(`incognito toggle persists in tab · ${theme}`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "Incognito control is desktop-only")
+    await applyTheme(page, theme)
+    await mockAuthenticatedApi(page)
+    await page.goto("/chat")
+
+    const toggle = page.getByRole("button", { name: "Enable Incognito" })
+    await expect(toggle).toHaveAttribute("aria-pressed", "false")
+    await toggle.click()
+    await expect(toggle).toHaveAttribute("aria-pressed", "true")
+
+    await page.reload()
+    await expect(page.getByRole("button", { name: "Enable Incognito" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+  })
+
+  test(`incognito chat creation sends privacy flag · ${theme}`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "Incognito control is desktop-only")
+    await applyTheme(page, theme)
+    await mockAuthenticatedApi(page)
+    let createPayload: Record<string, unknown> | null = null
+    await page.route("**/api/chats", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback()
+        return
+      }
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "incognito-chat",
+          title: "New chat",
+          model_id: "model-1",
+          is_incognito: true,
+          created_at: "2026-07-29T12:00:00.000Z",
+          last_activity_at: "2026-07-29T12:00:00.000Z",
+        }),
+      })
+    })
+    await page.routeWebSocket("**/api/chats/incognito-chat/ws", (webSocket) => {
+      webSocket.onMessage(() => webSocket.close())
+    })
+    await page.goto("/chat")
+    await page.getByRole("button", { name: "Enable Incognito" }).click()
+    await page.getByPlaceholder("Ask anything").fill("Keep this private.")
+    await page.getByRole("button", { name: "Send" }).click()
+
+    await expect.poll(() => createPayload).not.toBeNull()
+    expect(createPayload?.is_incognito).toBe(true)
+  })
+
   test(`non-empty chat · ${theme}`, async ({ page }) => {
     await applyTheme(page, theme)
     await mockAuthenticatedApi(page, {

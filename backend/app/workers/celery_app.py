@@ -20,6 +20,10 @@ celery_app.conf.update(
     task_soft_time_limit=60 * 15,
     worker_prefetch_multiplier=1,
     beat_schedule={
+        "cleanup-incognito-chats": {
+            "task": "chatui.cleanup_incognito_chats",
+            "schedule": 60 * 5,
+        },
         "cleanup-retained-data-daily": {
             "task": "chatui.cleanup_retained_data",
             "schedule": 60 * 60 * 24,

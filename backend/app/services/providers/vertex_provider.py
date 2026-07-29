@@ -115,10 +115,12 @@ class VertexProvider(GeminiProvider):
         *,
         api_key: str | None = None,
         prompt_cache_key: str | None = None,
+        prompt_cache_enabled: bool = True,
         config: dict | None = None,
     ) -> None:
         self.logger = logging.getLogger(__name__)
         self.prompt_cache_key = prompt_cache_key
+        self.prompt_cache_enabled = prompt_cache_enabled
 
         env_config = _parse_vertex_json(settings.gemini_vertex_json)
         merged_config: dict = {}

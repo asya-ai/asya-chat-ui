@@ -98,6 +98,7 @@ export type Chat = {
   model_id?: string | null
   agent_id?: string | null
   is_shared?: boolean
+  is_incognito?: boolean
   created_at: string
   last_activity_at: string
 }

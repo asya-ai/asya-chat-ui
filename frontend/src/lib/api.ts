@@ -492,7 +492,13 @@ export const chatApi = {
     })
     return apiFetch<Chat[]>(`/chats/search?${params.toString()}`)
   },
-  create: (payload: { org_id: string; model_id?: string; title?: string; agent_id?: string }) =>
+  create: (payload: {
+    org_id: string
+    model_id?: string
+    title?: string
+    agent_id?: string
+    is_incognito?: boolean
+  }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
   uploadAttachment: (
     chatId: string,

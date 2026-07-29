@@ -1943,6 +1943,7 @@ class ChatCreateRequest(BaseModel):
     model_id: str | None = None
     title: str | None = None
     agent_id: str | None = None
+    is_incognito: bool = False
 
 
 class ChatRead(BaseModel):
@@ -1951,6 +1952,7 @@ class ChatRead(BaseModel):
     model_id: str | None
     agent_id: str | None
     is_shared: bool = False
+    is_incognito: bool = False
     created_at: datetime
     last_activity_at: datetime
 
@@ -2241,6 +2243,8 @@ async def _stream_message_ws(
         status="done",
     )
     session.add(user_message)
+    chat.last_activity_at = datetime.utcnow()
+    session.add(chat)
     session.commit()
     session.refresh(user_message)
 
@@ -2569,6 +2573,7 @@ def create_chat(
         model_id=model_id,
         agent_id=agent_id,
         title=payload.title,
+        is_incognito=payload.is_incognito,
     )
     session.add(chat)
     session.commit()
@@ -2579,6 +2584,7 @@ def create_chat(
         model_id=str(chat.model_id) if chat.model_id else None,
         agent_id=str(chat.agent_id) if chat.agent_id else None,
         is_shared=bool(chat.share_token),
+        is_incognito=chat.is_incognito,
         created_at=chat.created_at,
         last_activity_at=chat.created_at,
     )
@@ -2606,6 +2612,7 @@ def list_chats(
             Chat.org_id == org_uuid,
             Chat.user_id == current_user.id,
             Chat.is_deleted.is_(False),
+            Chat.is_incognito.is_(False),
         )
     ).all()
     return [
@@ -2615,6 +2622,7 @@ def list_chats(
             model_id=str(chat.model_id) if chat.model_id else None,
             agent_id=str(chat.agent_id) if chat.agent_id else None,
             is_shared=bool(chat.share_token),
+            is_incognito=chat.is_incognito,
             created_at=chat.created_at,
             last_activity_at=chat.last_activity_at,
         )
@@ -2648,6 +2656,7 @@ def search_chats(
     base_chat_filters = [
         Chat.user_id == current_user.id,
         Chat.is_deleted.is_(False),
+        Chat.is_incognito.is_(False),
     ]
     if org_uuid:
         base_chat_filters.append(Chat.org_id == org_uuid)
@@ -2701,6 +2710,7 @@ def search_chats(
             model_id=str(chat.model_id) if chat.model_id else None,
             agent_id=str(chat.agent_id) if chat.agent_id else None,
             is_shared=bool(chat.share_token),
+            is_incognito=chat.is_incognito,
             created_at=chat.created_at,
             last_activity_at=chat.last_activity_at,
         )
@@ -3184,7 +3194,10 @@ def resolve_shared_chat(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token"
         )
     chat = session.exec(
-        select(Chat).where(Chat.share_token == token).where(Chat.is_deleted.is_(False))
+        select(Chat)
+        .where(Chat.share_token == token)
+        .where(Chat.is_deleted.is_(False))
+        .where(Chat.is_incognito.is_(False))
     ).first()
     if not chat:
         raise HTTPException(
@@ -3212,6 +3225,11 @@ def share_chat(
     if chat.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Cannot share this chat"
+        )
+    if chat.is_incognito:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incognito chats cannot be shared",
         )
     if not chat.share_token:
         chat.share_token = secrets.token_urlsafe(24)
@@ -3321,6 +3339,8 @@ async def create_message(
         status="done",
     )
     session.add(user_message)
+    chat.last_activity_at = datetime.utcnow()
+    session.add(chat)
     session.commit()
     session.refresh(user_message)
 
@@ -3517,15 +3537,18 @@ async def create_message(
             config = json.loads(provider_config.config_json)
         except json.JSONDecodeError:
             pass
-    prompt_cache_key = f"chat:{chat.id}"
+    prompt_cache_enabled = not chat.is_incognito
     provider = get_provider(
         model.provider,
         api_key=provider_config.api_key_override if provider_config else None,
         base_url=provider_config.base_url_override if provider_config else None,
         endpoint=provider_config.endpoint_override if provider_config else None,
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
-        prompt_cache_key=prompt_cache_key,
-        prompt_cache_retention=settings.openai_prompt_cache_retention,
+        prompt_cache_key=f"chat:{chat.id}" if prompt_cache_enabled else None,
+        prompt_cache_retention=(
+            settings.openai_prompt_cache_retention if prompt_cache_enabled else None
+        ),
+        prompt_cache_enabled=prompt_cache_enabled,
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
@@ -4423,15 +4446,18 @@ async def edit_message(
             config = json.loads(provider_config.config_json)
         except json.JSONDecodeError:
             pass
-    prompt_cache_key = f"chat:{chat.id}"
+    prompt_cache_enabled = not chat.is_incognito
     provider = get_provider(
         model.provider,
         api_key=provider_config.api_key_override if provider_config else None,
         base_url=provider_config.base_url_override if provider_config else None,
         endpoint=provider_config.endpoint_override if provider_config else None,
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
-        prompt_cache_key=prompt_cache_key,
-        prompt_cache_retention=settings.openai_prompt_cache_retention,
+        prompt_cache_key=f"chat:{chat.id}" if prompt_cache_enabled else None,
+        prompt_cache_retention=(
+            settings.openai_prompt_cache_retention if prompt_cache_enabled else None
+        ),
+        prompt_cache_enabled=prompt_cache_enabled,
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)

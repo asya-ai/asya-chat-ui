@@ -72,7 +72,12 @@ export const useModels = (orgId: string | null) =>
 export const useCreateChat = (orgId: string | null) => {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (payload: { model_id?: string; title?: string; agent_id?: string }) => {
+    mutationFn: (payload: {
+      model_id?: string
+      title?: string
+      agent_id?: string
+      is_incognito?: boolean
+    }) => {
       if (!orgId) {
         throw new Error("Missing org id")
       }
@@ -80,9 +85,11 @@ export const useCreateChat = (orgId: string | null) => {
     },
     onSuccess: (chat) => {
       if (!orgId) return
-      queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) =>
-        prev ? [chat, ...prev] : [chat]
-      )
+      if (!chat.is_incognito) {
+        queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) =>
+          prev ? [chat, ...prev] : [chat]
+        )
+      }
     },
   })
 }

@@ -104,6 +104,9 @@ export const ChatPage = () => {
     const stored = codeExecutionEnabledStore.get()
     return stored == null ? true : stored === "1"
   })
+  const [incognitoEnabled, setIncognitoEnabled] = useState(
+    () => window.sessionStorage.getItem("chatui_incognito_enabled") === "1"
+  )
   const [showToolCallLogs, setShowToolCallLogs] = useState<boolean>(() => {
     return toolCallLogsVisibleStore.get() === "1"
   })
@@ -894,6 +897,10 @@ export const ChatPage = () => {
   useEffect(() => {
     if (!chatId) return
     if (!(messagesError instanceof ApiError)) return
+    if (messagesError.status === 404) {
+      navigate("/chat", { replace: true })
+      return
+    }
     if (messagesError.status !== 403 || messagesError.detail !== "CHAT_NOT_SHARED") return
     navigate("/chat", {
       replace: true,
@@ -920,8 +927,16 @@ export const ChatPage = () => {
   }, [selectableChatModels, selectedModel])
 
   const activeChat = useMemo(
-    () => chats.find((item) => item.id === chatId) ?? null,
-    [chatId, chats]
+    () =>
+      chats.find((item) => item.id === chatId) ??
+      (chatId && !shareToken
+        ? {
+            id: chatId,
+            created_at: "",
+            last_activity_at: "",
+          }
+        : null),
+    [chatId, chats, shareToken]
   )
   const activeAgentId = activeAgentIdFromQuery ?? activeChat?.agent_id ?? null
   const isAgentMode = Boolean(activeAgentId)
@@ -956,6 +971,10 @@ export const ChatPage = () => {
   useEffect(() => {
     codeExecutionEnabledStore.set(codeExecutionEnabled)
   }, [codeExecutionEnabled])
+
+  useEffect(() => {
+    window.sessionStorage.setItem("chatui_incognito_enabled", incognitoEnabled ? "1" : "0")
+  }, [incognitoEnabled])
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -1108,6 +1127,7 @@ export const ChatPage = () => {
       model_id: selectedModel,
       title: t("chat_new_title"),
       agent_id: isAgentMode && activeAgentId ? activeAgentId : undefined,
+      is_incognito: incognitoEnabled,
     })
     navigate(
       isAgentMode && activeAgentId
@@ -2355,8 +2375,11 @@ export const ChatPage = () => {
           </div>
           <Button
             variant="ghost"
-            className="hidden h-9 px-4 md:inline-flex"
-            aria-disabled="true"
+            className={`hidden h-9 px-4 md:inline-flex ${
+              incognitoEnabled ? "bg-muted text-foreground" : ""
+            }`}
+            aria-pressed={incognitoEnabled}
+            onClick={() => setIncognitoEnabled((enabled) => !enabled)}
             title={t("chat_enable_incognito")}
           >
             <span

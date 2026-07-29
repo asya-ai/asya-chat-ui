@@ -237,6 +237,7 @@ class OpenAIProvider:
         reasoning_effort: str | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
+        prompt_cache_enabled: bool = True,
     ) -> None:
         self.chat_timeout_seconds = 120.0
         # /v1/responses calls (used for *-pro reasoning models) can legitimately
@@ -254,6 +255,8 @@ class OpenAIProvider:
         self.prompt_cache_key = prompt_cache_key
         self.prompt_cache_retention = (
             prompt_cache_retention or settings.openai_prompt_cache_retention
+            if prompt_cache_enabled
+            else None
         )
         self.logger = logging.getLogger(__name__)
         self._responses_only_models: set[str] = set()

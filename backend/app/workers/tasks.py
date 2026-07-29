@@ -500,7 +500,7 @@ async def _run_generation(task_id: UUID) -> None:
             except json.JSONDecodeError:
                 config = None
 
-        prompt_cache_key = f"chat:{chat.id}"
+        prompt_cache_enabled = not chat.is_incognito
         requested_reasoning_effort = (
             (task.metadata_json or {}).get("reasoning_effort")
             if isinstance(task.metadata_json, dict)
@@ -512,8 +512,11 @@ async def _run_generation(task_id: UUID) -> None:
             base_url=provider_config.base_url_override if provider_config else None,
             endpoint=provider_config.endpoint_override if provider_config else None,
             reasoning_effort=requested_reasoning_effort or model.reasoning_effort,
-            prompt_cache_key=prompt_cache_key,
-            prompt_cache_retention=settings.openai_prompt_cache_retention,
+            prompt_cache_key=f"chat:{chat.id}" if prompt_cache_enabled else None,
+            prompt_cache_retention=(
+                settings.openai_prompt_cache_retention if prompt_cache_enabled else None
+            ),
+            prompt_cache_enabled=prompt_cache_enabled,
             config=config,
         )
 
@@ -545,6 +548,9 @@ async def _run_generation(task_id: UUID) -> None:
             logger.info("Task=%s was claimed by another worker; skipping", task.id)
             await _maybe_close_provider(provider)
             return
+        chat.last_activity_at = datetime.utcnow()
+        session.add(chat)
+        session.commit()
         task = session.get(ChatGenerationTask, task.id) or task
 
         assistant_message = session.get(ChatMessage, task.assistant_message_id)
@@ -956,6 +962,8 @@ async def _run_generation(task_id: UUID) -> None:
                             assistant_content += chunk.content
                             assistant_message.content = assistant_content
                             session.add(assistant_message)
+                            chat.last_activity_at = datetime.utcnow()
+                            session.add(chat)
                             session.commit()
                             _append_event(
                                 session,
@@ -1149,6 +1157,17 @@ def _delete_expired_chat(session: Session, chat: Chat) -> None:
     message_ids = session.scalars(
         select(ChatMessage.id).where(ChatMessage.chat_id == chat.id)
     ).all()
+    session.exec(
+        update(UsageEvent)
+        .where(UsageEvent.chat_id == chat.id)
+        .values(chat_id=None)
+    )
+    if message_ids:
+        session.exec(
+            update(UsageEvent)
+            .where(UsageEvent.message_id.in_(message_ids))
+            .values(message_id=None)
+        )
     task_ids = session.scalars(
         select(ChatGenerationTask.id).where(ChatGenerationTask.chat_id == chat.id)
     ).all()
@@ -1166,6 +1185,22 @@ def _delete_expired_chat(session: Session, chat: Chat) -> None:
         )
         session.exec(delete(ChatMessage).where(ChatMessage.id.in_(message_ids)))
     session.delete(chat)
+
+
+@celery_app.task(name="chatui.cleanup_incognito_chats")
+def cleanup_incognito_chats() -> None:
+    """Permanently remove Incognito chats after 30 minutes of inactivity."""
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    with Session(engine) as session:
+        expired_chats = session.scalars(
+            select(Chat).where(
+                Chat.is_incognito.is_(True),
+                Chat.last_activity_at < cutoff,
+            )
+        ).all()
+        for chat in expired_chats:
+            _delete_expired_chat(session, chat)
+        session.commit()
 
 
 @celery_app.task(name="chatui.cleanup_retained_data")

@@ -29,7 +29,11 @@ _GEMINI_CACHED_CONTENT: dict[str, _GeminiCachedContentEntry] = {}
 
 class GeminiProvider:
     def __init__(
-        self, *, api_key: str | None = None, prompt_cache_key: str | None = None
+        self,
+        *,
+        api_key: str | None = None,
+        prompt_cache_key: str | None = None,
+        prompt_cache_enabled: bool = True,
     ) -> None:
         self.client = genai.Client(
             api_key=api_key or settings.gemini_api_key,
@@ -37,6 +41,7 @@ class GeminiProvider:
         )
         self.logger = logging.getLogger(__name__)
         self.prompt_cache_key = prompt_cache_key
+        self.prompt_cache_enabled = prompt_cache_enabled
 
     @staticmethod
     def _tools_fingerprint(tools: list | None) -> str:
@@ -120,7 +125,7 @@ class GeminiProvider:
         system_instruction: str | None = None,
         tools: list | None = None,
     ) -> tuple[list[dict], types.GenerateContentConfig | None]:
-        if not settings.gemini_cached_content_enabled:
+        if not self.prompt_cache_enabled or not settings.gemini_cached_content_enabled:
             return contents, None
         if len(contents) < 2:
             return contents, None

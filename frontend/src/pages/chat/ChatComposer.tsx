@@ -113,7 +113,7 @@ export const ChatComposer = ({
       <div
         className={cn(
           "flex flex-col justify-between bg-card border border-border rounded-2xl w-full",
-          centered ? "h-26 gap-0 p-0" : "gap-2 p-2",
+          centered ? "min-h-26 gap-0 p-0" : "gap-2 p-2",
           "shadow-none transition-[box-shadow,border-color]",
           "focus-within:border-primary/40 focus-within:shadow-[0_0_0_3px] focus-within:shadow-primary/30",
           isDragActive && "border-primary/50 shadow-[0_0_0_3px] shadow-primary/30"

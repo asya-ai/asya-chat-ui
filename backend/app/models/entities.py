@@ -210,6 +210,7 @@ class Chat(SQLModel, table=True):
     title: Optional[str] = Field(default=None)
     share_token: Optional[str] = Field(default=None, index=True, unique=True)
     is_deleted: bool = Field(default=False, index=True)
+    is_incognito: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
     last_activity_at: datetime = Field(
         default_factory=datetime.utcnow, nullable=False, index=True
