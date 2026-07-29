@@ -333,7 +333,7 @@ const MessageBubbleComponent = ({
         isUser ? "justify-end" : "justify-start"
       }`}
     >
-      <div className={`group ${isEditing ? "w-full" : "max-w-[88%]"}`}>
+      <div className={`group ${isEditing || !isUser ? "w-full" : "max-w-[88%]"}`}>
         <div
           className={`overflow-hidden rounded-lg p-2 text-sm leading-[18px] break-words whitespace-normal ${
             isUser

@@ -1,0 +1,212 @@
+# Copy .env.example to .env, set JWT_SECRET, POSTGRES_PASSWORD, and provider keys,
+# then run: docker compose -f docker-compose.prod.yml up -d
+# Set CHATUI_TAG to deploy a tag other than latest.
+
+x-backend-image: &backend-image asyaai/asya-chat-ui-backend:${CHATUI_TAG:-latest}
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chatui}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-chatui}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  migrate:
+    image: *backend-image
+    pull_policy: always
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    networks:
+      - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "uv run python app/db/wait_for_db.py && uv run alembic upgrade head"]
+    restart: "no"
+
+  backend:
+    image: *backend-image
+    pull_policy: always
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      FILES_BASE_DIR: /data/files
+      EXEC_HOST_FILES_DIR: /data/files
+      DOCKER_HOST: tcp://dind:2375
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - files-data:/data/files
+    networks:
+      - app
+      - executor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      scraper:
+        condition: service_healthy
+      dind:
+        condition: service_healthy
+      executor-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    image: *backend-image
+    pull_policy: always
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      FILES_BASE_DIR: /data/files
+      EXEC_HOST_FILES_DIR: /data/files
+      DOCKER_HOST: tcp://dind:2375
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - files-data:/data/files
+    networks:
+      - app
+      - executor
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      dind:
+        condition: service_healthy
+      executor-bootstrap:
+        condition: service_completed_successfully
+    command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "--concurrency=2", "--prefetch-multiplier=1"]
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+
+  beat:
+    image: *backend-image
+    pull_policy: always
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    networks:
+      - app
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "beat", "-l", "info"]
+    restart: unless-stopped
+
+  scraper:
+    image: asyaai/asya-chat-ui-scraper:${CHATUI_TAG:-latest}
+    pull_policy: always
+    environment:
+      SCRAPER_PORT: "3001"
+      SCRAPE_TEXT_LIMIT: ${SCRAPE_TEXT_LIMIT:-20000}
+    shm_size: "256mb"
+    networks:
+      - app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/healthz').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  redis:
+    image: redis:7
+    networks:
+      - app
+    restart: unless-stopped
+
+  dind:
+    image: docker:dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - dind-data:/var/lib/docker
+      - files-data:/data/files
+    networks:
+      - executor
+      - egress
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "docker info || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  executor-bootstrap:
+    image: docker:cli
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      EXECUTOR_IMAGE: asyaai/asya-chat-ui-executor:${CHATUI_TAG:-latest}
+    networks:
+      - executor
+    depends_on:
+      dind:
+        condition: service_healthy
+    command:
+      - sh
+      - -ec
+      - docker pull "$$EXECUTOR_IMAGE" && docker tag "$$EXECUTOR_IMAGE" chatui-python-exec:latest
+    restart: "no"
+
+  nginx:
+    image: asyaai/asya-chat-ui-web:${CHATUI_TAG:-latest}
+    pull_policy: always
+    ports:
+      - "${CHATUI_BIND_ADDRESS:-127.0.0.1}:${CHATUI_PORT:-8085}:80"
+    networks:
+      - app
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  files-data:
+  dind-data:
+
+networks:
+  app:
+  egress:
+  executor:
+    internal: true

@@ -27,6 +27,7 @@ dependencies = [
     "redis>=8.0.1",
     "sqlmodel>=0.0.39",
     "timezonefinder>=8.2.5",
+    "torch>=2.13.0",
     "uvicorn[standard]>=0.51.0",
     "xlrd>=2.0.2",
     "sentence-transformers>=5.6.0",
@@ -40,3 +41,11 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
