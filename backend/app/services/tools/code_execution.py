@@ -1,16 +1,19 @@
 import base64
 import logging
+import mimetypes
+import os
 import re
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 from uuid import UUID, uuid4
-import mimetypes
 
 import anyio
 import docker
 from docker.errors import APIError, ImageNotFound, NotFound
+from docker.types import Ulimit
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -203,6 +206,73 @@ def _prepare_run_dirs(chat_id: str) -> tuple[Path, Path, Path, Path, Path, Path]
     )
 
 
+def _read_safe_output_file(path: Path, outputs_root: Path) -> bytes | None:
+    """Read a regular file under outputs_root without following symlinks."""
+    try:
+        if path.parent.resolve() != outputs_root:
+            logger.warning("Rejecting output outside root: %s", path.name)
+            return None
+        st = path.lstat()
+    except OSError as exc:
+        logger.warning("Failed to stat output file %s: %s", path.name, exc)
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        logger.warning("Rejecting symlink output: %s", path.name)
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        logger.warning("Rejecting non-regular output: %s", path.name)
+        return None
+    if st.st_size > settings.attachments_max_file_bytes:
+        logger.warning(
+            "Output file too large %s (%s bytes)", path.name, st.st_size
+        )
+        return None
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        logger.warning("Failed to open output file %s: %s", path.name, exc)
+        return None
+    try:
+        st_open = os.fstat(fd)
+        if not stat.S_ISREG(st_open.st_mode):
+            logger.warning("Rejecting non-regular output after open: %s", path.name)
+            return None
+        if st_open.st_size > settings.attachments_max_file_bytes:
+            logger.warning(
+                "Output file too large %s (%s bytes)", path.name, st_open.st_size
+            )
+            return None
+        # Re-check path still resolves under root immediately before read (TOCTOU).
+        if path.parent.resolve() != outputs_root:
+            logger.warning("Rejecting output outside root after open: %s", path.name)
+            return None
+        chunks: list[bytes] = []
+        remaining = st_open.st_size
+        while remaining > 0:
+            chunk = os.read(fd, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        # Trailing bytes after a grow-during-read race: refuse oversized results.
+        if len(data) > settings.attachments_max_file_bytes:
+            logger.warning(
+                "Output file too large after read %s (%s bytes)", path.name, len(data)
+            )
+            return None
+        return data
+    except OSError as exc:
+        logger.warning("Failed to read output file %s: %s", path.name, exc)
+        return None
+    finally:
+        os.close(fd)
+
+
 def _collect_outputs(
     outputs_dir: Path, max_files: int | None = None
 ) -> tuple[list[dict], list[dict]]:
@@ -212,20 +282,16 @@ def _collect_outputs(
     total_attachment_bytes = 0
     if not outputs_dir.exists():
         return attachments, output_items
+    try:
+        outputs_root = outputs_dir.resolve()
+    except OSError as exc:
+        logger.warning("Failed to resolve outputs dir %s: %s", outputs_dir, exc)
+        return attachments, output_items
     for path in sorted(outputs_dir.iterdir()):
         if len(attachments) >= max_files:
             break
-        if not path.is_file():
-            continue
-        try:
-            data = path.read_bytes()
-        except Exception as exc:
-            logger.warning("Failed to read output file %s: %s", path.name, exc)
-            continue
-        if len(data) > settings.attachments_max_file_bytes:
-            logger.warning(
-                "Output file too large %s (%s bytes)", path.name, len(data)
-            )
+        data = _read_safe_output_file(path, outputs_root)
+        if data is None:
             continue
         if total_attachment_bytes + len(data) > settings.attachments_max_total_bytes:
             logger.warning(
@@ -312,6 +378,30 @@ def _run_container(
     exit_code = None
 
     def _start_container():
+        # memswap_limit == mem_limit disables swap (memory+swap total equals RAM).
+        memory_limit = settings.exec_memory_limit
+        ulimits = [
+            Ulimit(
+                name="nofile",
+                soft=settings.exec_ulimit_nofile,
+                hard=settings.exec_ulimit_nofile,
+            ),
+            Ulimit(
+                name="nproc",
+                soft=settings.exec_ulimit_nproc,
+                hard=settings.exec_ulimit_nproc,
+            ),
+            Ulimit(
+                name="fsize",
+                soft=settings.exec_ulimit_fsize_bytes,
+                hard=settings.exec_ulimit_fsize_bytes,
+            ),
+            Ulimit(
+                name="cpu",
+                soft=max(1, timeout_seconds),
+                hard=max(1, timeout_seconds),
+            ),
+        ]
         return client.containers.run(
             settings.exec_docker_image,
             command=["python", "/workspace/main.py"],
@@ -319,18 +409,26 @@ def _run_container(
             working_dir="/workspace",
             network_mode=network_mode,
             nano_cpus=max(1, int(settings.exec_cpu_limit * 1e9)),
-            mem_limit=settings.exec_memory_limit,
+            mem_limit=memory_limit,
+            memswap_limit=memory_limit,
+            pids_limit=max(1, settings.exec_pids_limit),
+            ulimits=ulimits,
             labels=labels,
             user="65534:65534",
             read_only=True,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
             environment={"MPLCONFIGDIR": "/tmp/matplotlib", "HOME": "/tmp"},
+            tmpfs={
+                "/tmp": (
+                    f"rw,nosuid,nodev,size={settings.exec_tmpfs_size},"
+                    "mode=1777"
+                ),
+            },
             volumes={
                 str(host_inputs_dir): {"bind": "/inputs", "mode": "ro"},
                 str(host_work_dir): {"bind": "/workspace", "mode": "rw"},
                 str(host_outputs_dir): {"bind": "/outputs", "mode": "rw"},
-                "/tmp": {"bind": "/tmp", "mode": "rw"},  # Needed for some python ops
             },
         )
 

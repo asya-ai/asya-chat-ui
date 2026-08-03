@@ -159,9 +159,10 @@ docker compose exec dind docker build -t chatui-python-exec:latest /executor
 - Code execution runs in isolated containers with:
   - dropped capabilities
   - read-only root filesystem
-  - cpu/memory limits
+  - cpu/memory/pids/ulimit caps and a private sized `/tmp` tmpfs
   - timeout and output-size caps
-  - import allowlist enforcement
+  - symlink-safe output collection (regular files only)
+  - import allowlist guidance for models (enforcement is the sandbox)
 - Auth uses JWT with periodic token refresh through response header.
 - Provider access can be disabled globally per org and overridden per org config.
 

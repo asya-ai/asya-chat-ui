@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import os
+import stat
 from uuid import UUID, uuid4
 
 from app.models import ChatMessageAttachment
@@ -72,3 +74,46 @@ def test_collect_outputs_keeps_large_files_as_attachments(monkeypatch, tmp_path)
         }
     ]
     assert output_items == []
+
+
+def test_collect_outputs_rejects_symlinks(tmp_path) -> None:
+    target = tmp_path.parent / f"secret-{tmp_path.name}.txt"
+    target.write_text("should-not-leak", encoding="utf-8")
+    try:
+        link = tmp_path / "symlink-collector-test.txt"
+        link.symlink_to(target)
+        (tmp_path / "ok.txt").write_bytes(b"safe")
+
+        attachments, output_items = _collect_outputs(tmp_path)
+
+        assert [item["file_name"] for item in attachments] == ["ok.txt"]
+        assert attachments[0]["data_base64"] == base64.b64encode(b"safe").decode("ascii")
+        assert [item["file_name"] for item in output_items] == ["ok.txt"]
+    finally:
+        target.unlink(missing_ok=True)
+
+
+def test_collect_outputs_rejects_symlink_to_outside(tmp_path) -> None:
+    outside = tmp_path.parent / f"outside-{tmp_path.name}.txt"
+    outside.write_text("host-secret", encoding="utf-8")
+    try:
+        link = tmp_path / "escape.txt"
+        link.symlink_to(outside)
+
+        attachments, output_items = _collect_outputs(tmp_path)
+
+        assert attachments == []
+        assert output_items == []
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+def test_collect_outputs_rejects_fifo(tmp_path) -> None:
+    fifo = tmp_path / "pipe.fifo"
+    os.mkfifo(fifo)
+    assert stat.S_ISFIFO(fifo.lstat().st_mode)
+    (tmp_path / "ok.txt").write_bytes(b"ok")
+
+    attachments, _output_items = _collect_outputs(tmp_path)
+
+    assert [item["file_name"] for item in attachments] == ["ok.txt"]
