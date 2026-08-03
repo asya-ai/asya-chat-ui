@@ -29,6 +29,7 @@ TEXT_EXTENSIONS = {
 
 def _trim_text(value: str) -> str:
     cleaned = re.sub(r"\r\n?", "\n", value)
+    cleaned = cleaned.replace("\x00", "")
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     if len(cleaned) > MAX_EXTRACTED_CHARS:
         return cleaned[:MAX_EXTRACTED_CHARS]
@@ -153,5 +154,14 @@ def extract_text_from_file(
             f"('{ext}x') and upload again."
         )
 
-    # Last resort for unknown formats: treat as text if decodable.
-    return _trim_text(_decode_text_bytes(data))
+    if mime.startswith(("image/", "audio/", "video/")):
+        raise ValueError(
+            f"Files with content type '{content_type}' cannot be indexed as text. "
+            "Upload a text-based document instead."
+        )
+
+    # Unknown file types are only safe to accept when they are valid UTF-8 text.
+    try:
+        return _trim_text(data.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("Unsupported binary file format. Upload a text-based document instead.") from exc

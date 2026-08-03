@@ -31,7 +31,7 @@ class Settings(BaseSettings):
         default=250000, validation_alias="EXEC_MAX_OUTPUT_FILE_BYTES"
     )
     attachments_max_files: int = Field(
-        default=10, validation_alias="ATTACHMENTS_MAX_FILES"
+        default=50, validation_alias="ATTACHMENTS_MAX_FILES"
     )
     attachments_max_file_bytes: int = Field(
         default=20_000_000, validation_alias="ATTACHMENTS_MAX_FILE_BYTES"
