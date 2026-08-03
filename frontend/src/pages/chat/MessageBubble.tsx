@@ -453,7 +453,9 @@ const MessageBubbleComponent = ({
           ) : toolCallEvent ? (
             <div className="space-y-1 py-1 text-xs">
               <div className="opacity-80">
-                {toolCallEvent.input_preview || t("chat_running_tool_call")}
+                {toolCallEvent.action_summary ||
+                  toolCallEvent.input_preview ||
+                  t("chat_running_tool_call")}
               </div>
               {toolCallEvent.output?.result_preview ? (
                 <div className="text-muted-foreground">
@@ -670,17 +672,38 @@ const MessageBubbleComponent = ({
                     </div>
                   </div>
                 ) : (
-                  <div
-                    className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="figma-icon size-3.5 animate-spin opacity-[0.79]"
-                      style={{ maskImage: "url('/icon-thinking.svg')" }}
-                    />
-                    <span>{t("chat_thinking")}</span>
+                  <div className="space-y-2 py-2" role="status" aria-live="polite">
+                    <div
+                      className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                        style={{ maskImage: "url('/icon-thinking.svg')" }}
+                      />
+                      <span>{t("chat_thinking")}</span>
+                    </div>
+                    {thinkingLabels.length > 0 ? (
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        {thinkingLabels.slice(-3).map((label, index, visible) => {
+                          const fadeStep = visible.length - 1 - index
+                          const opacity =
+                            fadeStep === 0 ? 1 : fadeStep === 1 ? 0.55 : 0.28
+                          return (
+                            <div
+                              key={`${label}-${thinkingLabels.length - visible.length + index}`}
+                              className="flex items-start gap-1.5 leading-5 transition-opacity duration-300"
+                              style={{ opacity }}
+                            >
+                              <span aria-hidden="true" className="select-none opacity-50">
+                                ›
+                              </span>
+                              <span className="min-w-0 wrap-break-word">{label}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 )
               ) : (

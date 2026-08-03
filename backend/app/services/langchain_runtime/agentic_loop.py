@@ -7,6 +7,7 @@ import anyio
 from json_repair import loads as repair_json_loads
 
 from app.services.providers.base import ChatUsage
+from app.services.tools.previews import tool_call_action_summary
 from app.services.tools.registry import ToolResult, ToolRegistry
 from app.services.langchain_runtime.tool_adapters import LangChainToolExecutor
 
@@ -219,13 +220,17 @@ async def run_agentic_loop_langchain(
 
     for step in range(max_steps):
         await _emit_activity(f"Step {step + 1}/{max_steps}", "start")
+        thinking_label = "Thinking"
+        await _emit_activity(thinking_label, "start")
         response = await provider.chat_with_tools(model_name, messages, tool_specs)
         usage = _merge_chat_usage(usage, response.usage)
         tool_calls = response.tool_calls or []
         if not tool_calls:
+            await _emit_activity(thinking_label, "end")
             await _emit_activity("Answering", "start")
             return response.content or "", attachments, sources, image_usages, usage
 
+        await _emit_activity(thinking_label, "end")
         messages.append(
             {
                 "role": "assistant",
@@ -241,40 +246,49 @@ async def run_agentic_loop_langchain(
                 ],
             }
         )
-        for call in tool_calls:
-            input_preview = json.dumps(call.arguments, ensure_ascii=False)[:200]
-            if call.name == "code_execution":
+
+        emit_lock = anyio.Lock()
+
+        async def _run_one_tool_call(call: Any) -> tuple[Any, ToolResult, dict[str, Any], ChatUsage | None]:
+            call_arguments = call.arguments if isinstance(call.arguments, dict) else {}
+            input_preview = json.dumps(call_arguments, ensure_ascii=False)[:200]
+            action_summary = tool_call_action_summary(call.name, call_arguments)
+            async with emit_lock:
+                await _emit_activity(action_summary, "start")
+                if call.name == "code_execution":
+                    await _emit_tool_event(
+                        {
+                            "type": "code_execution",
+                            "id": call.id,
+                            "code": call_arguments.get("code", ""),
+                            "output": {},
+                        }
+                    )
+                elif call.name == "download_attachments":
+                    urls = call_arguments.get("urls") or call_arguments.get("url")
+                    if isinstance(urls, str):
+                        urls = [urls]
+                    await _emit_tool_event(
+                        {
+                            "type": "url_attachments",
+                            "id": call.id,
+                            "urls": urls if isinstance(urls, list) else [],
+                            "output": {},
+                        }
+                    )
                 await _emit_tool_event(
                     {
-                        "type": "code_execution",
-                        "id": call.id,
-                        "code": (call.arguments or {}).get("code", ""),
+                        "type": "tool_call",
+                        "id": f"call:{call.id}",
+                        "tool_name": call.name,
+                        "state": "start",
+                        "input_preview": input_preview,
+                        "action_summary": action_summary,
                         "output": {},
                     }
                 )
-            elif call.name == "download_attachments":
-                urls = (call.arguments or {}).get("urls") or (call.arguments or {}).get("url")
-                if isinstance(urls, str):
-                    urls = [urls]
-                await _emit_tool_event(
-                    {
-                        "type": "url_attachments",
-                        "id": call.id,
-                        "urls": urls if isinstance(urls, list) else [],
-                        "output": {},
-                    }
-                )
-            await _emit_tool_event(
-                {
-                    "type": "tool_call",
-                    "id": f"call:{call.id}",
-                    "tool_name": call.name,
-                    "state": "start",
-                    "input_preview": input_preview,
-                    "output": {},
-                }
-            )
             result: ToolResult = await executor.execute(call.name, call.arguments)
+            answer_usage: ChatUsage | None = None
             if (
                 call.name == "web_scrape"
                 and str((call.arguments or {}).get("output") or "").strip().lower() == "answer"
@@ -284,60 +298,79 @@ async def run_agentic_loop_langchain(
                     model_name=model_name,
                     result=result,
                 )
-                usage = _merge_chat_usage(usage, answer_usage)
             if result.attachments:
-                attachments.extend(result.attachments)
                 tool_output = _strip_inline_attachment_data(result.output)
             else:
                 tool_output = result.output
+            async with emit_lock:
+                if call.name == "code_execution":
+                    await _emit_tool_event(
+                        {
+                            "type": "code_execution",
+                            "id": call.id,
+                            "code": (call.arguments or {}).get("code", ""),
+                            "output": tool_output,
+                        }
+                    )
+                elif call.name == "download_attachments":
+                    urls = (call.arguments or {}).get("urls") or (call.arguments or {}).get("url")
+                    if isinstance(urls, str):
+                        urls = [urls]
+                    await _emit_tool_event(
+                        {
+                            "type": "url_attachments",
+                            "id": call.id,
+                            "urls": urls if isinstance(urls, list) else [],
+                            "output": tool_output,
+                        }
+                    )
+                await _emit_tool_event(
+                    {
+                        "type": "tool_call",
+                        "id": f"call:{call.id}",
+                        "tool_name": call.name,
+                        "state": "end",
+                        "input_preview": input_preview,
+                        "action_summary": action_summary,
+                        "output": {
+                            "status": "error" if tool_output.get("error") else "ok",
+                            "result_preview": json.dumps(tool_output, ensure_ascii=False)[:240],
+                            "raw_output": tool_output,
+                            "error": tool_output.get("error"),
+                        },
+                    }
+                )
+            return call, result, tool_output, answer_usage
+
+        call_results: list[tuple[Any, ToolResult, dict[str, Any], ChatUsage | None] | None] = [
+            None
+        ] * len(tool_calls)
+
+        async def _store_tool_result(index: int, call: Any) -> None:
+            call_results[index] = await _run_one_tool_call(call)
+
+        async with anyio.create_task_group() as tg:
+            for index, call in enumerate(tool_calls):
+                tg.start_soon(_store_tool_result, index, call)
+
+        for item in call_results:
+            assert item is not None
+            call, result, tool_output, answer_usage = item
+            usage = _merge_chat_usage(usage, answer_usage)
+            if result.attachments:
+                attachments.extend(result.attachments)
             if call.name in {"web_search", "web_scrape"}:
                 result_sources = result.output.get("queries") or result.output.get("results")
                 if isinstance(result_sources, list):
-                    for item in result_sources:
-                        if isinstance(item, dict):
+                    for source_item in result_sources:
+                        if isinstance(source_item, dict):
                             sources.append(
                                 {
-                                    "title": item.get("title") or item.get("query"),
-                                    "url": item.get("url"),
-                                    "snippet": item.get("snippet") or item.get("answer"),
+                                    "title": source_item.get("title") or source_item.get("query"),
+                                    "url": source_item.get("url"),
+                                    "snippet": source_item.get("snippet") or source_item.get("answer"),
                                 }
                             )
-            if call.name == "code_execution":
-                await _emit_tool_event(
-                    {
-                        "type": "code_execution",
-                        "id": call.id,
-                        "code": (call.arguments or {}).get("code", ""),
-                        "output": tool_output,
-                    }
-                )
-            elif call.name == "download_attachments":
-                urls = (call.arguments or {}).get("urls") or (call.arguments or {}).get("url")
-                if isinstance(urls, str):
-                    urls = [urls]
-                await _emit_tool_event(
-                    {
-                        "type": "url_attachments",
-                        "id": call.id,
-                        "urls": urls if isinstance(urls, list) else [],
-                        "output": tool_output,
-                    }
-                )
-            await _emit_tool_event(
-                {
-                    "type": "tool_call",
-                    "id": f"call:{call.id}",
-                    "tool_name": call.name,
-                    "state": "end",
-                    "input_preview": input_preview,
-                    "output": {
-                        "status": "error" if tool_output.get("error") else "ok",
-                        "result_preview": json.dumps(tool_output, ensure_ascii=False)[:240],
-                        "raw_output": tool_output,
-                        "error": tool_output.get("error"),
-                    },
-                }
-            )
             messages.append(
                 {
                     "role": "tool",

@@ -167,6 +167,7 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
     assert usage is not None
     assert tool_events[-1]["state"] == "end"
     assert tool_events[-1]["input_preview"] == '{"text": "hello"}'
+    assert tool_events[-1]["action_summary"] == "Running echo tool"
 
 
 @pytest.mark.asyncio
@@ -265,6 +266,91 @@ async def test_agentic_loop_preserves_thought_signature_in_tool_roundtrip():
         msg for msg in second_call_messages if msg.get("role") == "assistant" and msg.get("tool_calls")
     )
     assert assistant_tool_message["tool_calls"][0]["thought_signature"] == "sig-abc123"
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_runs_multiple_tool_calls_in_parallel():
+    registry = ToolRegistry()
+    started = anyio.Event()
+    release = anyio.Event()
+    active = 0
+    max_active = 0
+    lock = anyio.Lock()
+
+    async def _slow_echo(args: dict) -> ToolResult:
+        nonlocal active, max_active
+        async with lock:
+            active += 1
+            max_active = max(max_active, active)
+            if active >= 2:
+                started.set()
+        await release.wait()
+        async with lock:
+            active -= 1
+        return ToolResult(name="echo_tool", output={"echo": args.get("text")})
+
+    registry.register(
+        ToolSpec(
+            name="echo_tool",
+            description="Echo text",
+            parameters={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        ),
+        _slow_echo,
+    )
+
+    @dataclass
+    class _ParallelProvider:
+        calls: int = 0
+        seen_messages: list[list[dict]] | None = None
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            if self.seen_messages is None:
+                self.seen_messages = []
+            self.seen_messages.append(messages.copy())
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(),
+                    tool_calls=[
+                        ChatToolCall(id="tool-1", name="echo_tool", arguments={"text": "one"}),
+                        ChatToolCall(id="tool-2", name="echo_tool", arguments={"text": "two"}),
+                    ],
+                )
+            return ChatResponse(content="done", usage=_usage(), tool_calls=[])
+
+    provider = _ParallelProvider()
+    results: list[str] = []
+
+    async def _run() -> None:
+        content, *_ = await run_agentic_loop_langchain(
+            provider=provider,
+            model_name="fake-model",
+            messages=[{"role": "user", "content": "run both"}],
+            tool_registry=registry,
+            max_steps=3,
+        )
+        results.append(content)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_run)
+        with anyio.fail_after(2):
+            await started.wait()
+        release.set()
+
+    assert results == ["done"]
+    assert max_active >= 2
+    assert provider.seen_messages is not None
+    tool_messages = [
+        message
+        for message in provider.seen_messages[1]
+        if message.get("role") == "tool"
+    ]
+    assert [message["tool_call_id"] for message in tool_messages] == ["tool-1", "tool-2"]
 
 
 @pytest.mark.asyncio

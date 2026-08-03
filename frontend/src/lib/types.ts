@@ -190,6 +190,7 @@ export type ToolCallToolEvent = {
   tool_name: string
   state?: "start" | "end" | string
   input_preview?: string | null
+  action_summary?: string | null
   output?: {
     status?: "ok" | "error" | string
     result_preview?: string | null

@@ -588,6 +588,14 @@ def _build_tool_registry(
                 parameters={
                     "type": "object",
                     "properties": {
+                        "purpose": {
+                            "type": "string",
+                            "description": (
+                                "Short human-readable purpose of running this code "
+                                "(e.g. 'Summarize sales CSV by region'). "
+                                "Do not list imports or paste code here."
+                            ),
+                        },
                         "code": {
                             "type": "string",
                             "description": "Python code to execute",
@@ -597,7 +605,7 @@ def _build_tool_registry(
                             "description": "Execution language (python only)",
                         },
                     },
-                    "required": ["code"],
+                    "required": ["purpose", "code"],
                 },
             ),
             _exec_handler,
@@ -961,6 +969,9 @@ def _tool_call_input_preview(name: str, arguments: dict[str, Any]) -> str:
             return f"{target}; range: {page_from or 1}..{page_to or page_from or 1}"
         return f"{target}; page selection missing"
     if name == "code_execution":
+        purpose = str(arguments.get("purpose") or "").strip()
+        if purpose:
+            return f"purpose: {purpose[:160]}"
         language = str(arguments.get("language") or "python").strip() or "python"
         code = str(arguments.get("code") or "").strip()
         first_line = code.splitlines()[0][:120] if code else ""

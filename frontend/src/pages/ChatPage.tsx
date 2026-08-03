@@ -513,19 +513,35 @@ export const ChatPage = () => {
             if (!matchesAssistant(msg)) return msg
             const current = msg.thinking_steps ?? []
             if (activity.state === "start") {
-              const withoutSteps = isStep
-                ? current.filter((label) => !/^Step \d+\/\d+$/.test(label))
-                : current
-              const next = Array.from(new Set([...withoutSteps, activity.label]))
-              return { ...msg, thinking_steps: next }
+              if (isStep) {
+                const withoutSteps = current.filter(
+                  (label) => !/^Step \d+\/\d+$/.test(label)
+                )
+                return {
+                  ...msg,
+                  thinking_steps: [...withoutSteps, activity.label],
+                }
+              }
+              // Keep a chronological action log (allow repeats for distinct runs).
+              return {
+                ...msg,
+                thinking_steps: [...current, activity.label],
+              }
             }
-            if (isStep) {
-              return msg
+            // Non-debug thinking UI keeps completed actions visible until the
+            // generation finishes; only clear ephemeral "Thinking" waits.
+            if (activity.label === "Thinking") {
+              const lastThinkingIndex = current.lastIndexOf("Thinking")
+              if (lastThinkingIndex < 0) return msg
+              return {
+                ...msg,
+                thinking_steps: [
+                  ...current.slice(0, lastThinkingIndex),
+                  ...current.slice(lastThinkingIndex + 1),
+                ],
+              }
             }
-            return {
-              ...msg,
-              thinking_steps: current.filter((label) => label !== activity.label),
-            }
+            return msg
           })
         )
         return
@@ -2054,7 +2070,7 @@ export const ChatPage = () => {
         (msg.model_name ? msg.model_name.toLowerCase().includes("image") : false)
       const activeThinking = msg.thinking_steps ?? []
       const nonStepThinking = activeThinking.filter(
-        (label) => !/^Step \d+\/\d+$/.test(label)
+        (label) => !/^Step \d+\/\d+$/.test(label) && label !== "Thinking"
       )
       const stepLabel =
         activeThinking.find((label) => /^Step \d+\/\d+$/.test(label)) ?? null
@@ -2072,7 +2088,7 @@ export const ChatPage = () => {
           ? nonStepThinking
           : isImageMessage
             ? [t("chat_generating_image")]
-            : [t("chat_thinking")]
+            : []
       const isEditing = editingMessageId === msg.id
       return (
         <MessageBubble
