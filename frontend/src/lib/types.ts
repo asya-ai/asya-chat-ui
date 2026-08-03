@@ -54,6 +54,12 @@ export type OrgAuthSettingsUpdate = {
   oidc_auto_create_users?: boolean
 }
 
+export type AttachmentLimits = {
+  max_files: number
+  max_file_bytes: number
+  max_total_bytes: number
+}
+
 export type ApiKey = {
   id: string
   name: string

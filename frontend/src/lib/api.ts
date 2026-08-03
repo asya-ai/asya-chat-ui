@@ -3,6 +3,7 @@ import type {
   Chat,
   ChatMessage,
   ChatModel,
+  AttachmentLimits,
   ChatGenerationEvent,
   ChatGenerationTask,
   ChatMessageAttachmentInput,
@@ -229,6 +230,10 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
     return {} as T
   }
   return response.json() as Promise<T>
+}
+
+export const configApi = {
+  attachmentLimits: () => apiFetch<AttachmentLimits>("/config/attachment-limits"),
 }
 
 export const authApi = {

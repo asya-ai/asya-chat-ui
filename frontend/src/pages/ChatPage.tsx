@@ -3,7 +3,7 @@ import type { CSSProperties } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, agentApi, authApi, chatApi } from "@/lib/api"
+import { ApiError, agentApi, chatApi, configApi } from "@/lib/api"
 import {
   codeExecutionEnabledStore,
   modelStore,
@@ -39,6 +39,7 @@ import {
   useChats,
   useCreateChat,
   useDeleteChat,
+  useMe,
   useModels,
   useOrgsMine,
 } from "@/hooks/use-chat-query"
@@ -47,9 +48,11 @@ import {
   readFilesAsAttachments,
 } from "@/lib/file-utils"
 
-const ATTACHMENTS_MAX_FILES = 10
-const ATTACHMENTS_MAX_FILE_BYTES = 20_000_000
-const ATTACHMENTS_MAX_TOTAL_BYTES = 50_000_000
+const DEFAULT_ATTACHMENT_LIMITS = {
+  max_files: 50,
+  max_file_bytes: 20_000_000,
+  max_total_bytes: 50_000_000,
+}
 
 const estimateBase64Bytes = (value: string): number => {
   if (!value) return 0
@@ -66,6 +69,7 @@ const extractAttachmentIdFromContentUrl = (url?: string): string | undefined => 
 export const ChatPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
+  const [attachmentLimits, setAttachmentLimits] = useState(DEFAULT_ATTACHMENT_LIMITS)
   const { chatId, shareToken: shareTokenParam } = useParams()
   const activeAgentIdFromQuery = useMemo(
     () => new URLSearchParams(location.search).get("agent"),
@@ -96,6 +100,9 @@ export const ChatPage = () => {
   const [isUploadingAttachments, setIsUploadingAttachments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [isDragActive, setIsDragActive] = useState(false)
+  const ATTACHMENTS_MAX_FILES = attachmentLimits.max_files
+  const ATTACHMENTS_MAX_FILE_BYTES = attachmentLimits.max_file_bytes
+  const ATTACHMENTS_MAX_TOTAL_BYTES = attachmentLimits.max_total_bytes
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
     const stored = webSearchEnabledStore.get()
     return stored == null ? true : stored === "1"
@@ -114,12 +121,6 @@ export const ChatPage = () => {
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true)
-  const [currentUser, setCurrentUser] = useState<{
-    email: string
-    username: string | null
-    display_name: string | null
-    avatar_url: string | null
-  } | null>(null)
   const [chatSearchQuery, setChatSearchQuery] = useState("")
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
@@ -137,6 +138,7 @@ export const ChatPage = () => {
   const isHistoryView = location.pathname === "/history"
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => oneDark, [])
 
+  const { data: currentUser } = useMe()
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
   const { data: models = [] } = useModels(orgId)
   const { data: chats = [], refetch: refetchChats } = useChats(orgId)
@@ -150,10 +152,12 @@ export const ChatPage = () => {
   const deleteChatMutation = useDeleteChat(orgId)
 
   useEffect(() => {
-    authApi
-      .me()
-      .then(setCurrentUser)
-      .catch(() => setCurrentUser(null))
+    configApi
+      .attachmentLimits()
+      .then(setAttachmentLimits)
+      .catch(() => {
+        // Keep backend defaults when limits cannot be loaded.
+      })
   }, [])
 
   useEffect(() => {
@@ -2167,9 +2171,10 @@ export const ChatPage = () => {
 
   const isEmptyChat = !isMessagesLoading && visibleMessages.length === 0
   const activeOrgName = orgs.find((org) => org.id === orgId)?.name
-  const profileLabel =
-    currentUser?.display_name || currentUser?.username || currentUser?.email || t("me_settings")
-  const profileFirstName = profileLabel.trim().split(/\s+/)[0]
+  const profileLabel = currentUser
+    ? currentUser.display_name || currentUser.username || currentUser.email || t("me_settings")
+    : null
+  const profileFirstName = profileLabel?.trim().split(/\s+/)[0] ?? ""
   const welcomeTitle =
     currentUser?.display_name || currentUser?.username
       ? t("chat_welcome_named").replace("{name}", profileFirstName)
@@ -2188,11 +2193,15 @@ export const ChatPage = () => {
         />
       ) : (
         <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-secondary text-sm font-semibold">
-          {profileLabel.slice(0, 1).toUpperCase()}
+          {profileLabel ? profileLabel.slice(0, 1).toUpperCase() : null}
         </span>
       )}
       <span className="min-w-0">
-        <span className="block truncate text-sm font-semibold leading-4">{profileLabel}</span>
+        {profileLabel ? (
+          <span className="block truncate text-sm font-semibold leading-4">{profileLabel}</span>
+        ) : (
+          <span className="block h-4 w-24 animate-pulse rounded bg-secondary" />
+        )}
         {activeOrgName ? (
           <span className="block truncate text-xs font-medium leading-4 text-muted-foreground">
             {activeOrgName}

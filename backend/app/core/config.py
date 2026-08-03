@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     exec_memory_limit: str = Field(
         default="512m", validation_alias="EXEC_MEMORY_LIMIT"
     )
+    exec_pids_limit: int = Field(default=64, validation_alias="EXEC_PIDS_LIMIT")
+    exec_tmpfs_size: str = Field(default="64m", validation_alias="EXEC_TMPFS_SIZE")
+    exec_ulimit_nofile: int = Field(
+        default=256, validation_alias="EXEC_ULIMIT_NOFILE"
+    )
+    exec_ulimit_fsize_bytes: int = Field(
+        default=50_000_000, validation_alias="EXEC_ULIMIT_FSIZE_BYTES"
+    )
+    exec_ulimit_nproc: int = Field(
+        default=64, validation_alias="EXEC_ULIMIT_NPROC"
+    )
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_base_url: str = Field(
         default="https://api.openai.com/v1", validation_alias="OPENAI_BASE_URL"

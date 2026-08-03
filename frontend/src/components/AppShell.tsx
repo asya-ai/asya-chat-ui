@@ -1,12 +1,11 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { Menu, PanelLeftOpen } from "lucide-react"
 
-import { authApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
 import { orgStore } from "@/lib/storage"
-import { useOrgsMine } from "@/hooks/use-chat-query"
+import { useMe, useOrgsMine } from "@/hooks/use-chat-query"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
@@ -20,24 +19,13 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
   const navigate = useNavigate()
   const { t } = useI18n()
   const { data: orgs = [] } = useOrgsMine()
+  const { data: currentUser } = useMe()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [desktopOpen, setDesktopOpen] = useState(true)
-  const [currentUser, setCurrentUser] = useState<{
-    email: string
-    username: string | null
-    display_name: string | null
-    avatar_url: string | null
-  } | null>(null)
 
-  useEffect(() => {
-    authApi
-      .me()
-      .then(setCurrentUser)
-      .catch(() => setCurrentUser(null))
-  }, [])
-
-  const profileLabel =
-    currentUser?.display_name || currentUser?.username || currentUser?.email || t("me_settings")
+  const profileLabel = currentUser
+    ? currentUser.display_name || currentUser.username || currentUser.email || t("me_settings")
+    : null
   const activeOrgName = orgs.find((org) => org.id === orgStore.get())?.name
   const footer = (
     <Button
@@ -53,11 +41,15 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
         />
       ) : (
         <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-secondary text-sm font-semibold">
-          {profileLabel.slice(0, 1).toUpperCase()}
+          {profileLabel ? profileLabel.slice(0, 1).toUpperCase() : null}
         </span>
       )}
       <span className="min-w-0">
-        <span className="block truncate text-sm font-semibold leading-4">{profileLabel}</span>
+        {profileLabel ? (
+          <span className="block truncate text-sm font-semibold leading-4">{profileLabel}</span>
+        ) : (
+          <span className="block h-4 w-24 animate-pulse rounded bg-secondary" />
+        )}
         {activeOrgName ? (
           <span className="block truncate text-xs font-medium leading-4 text-muted-foreground">
             {activeOrgName}

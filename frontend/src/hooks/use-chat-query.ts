@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
-import { chatApi, modelApi, orgApi } from "@/lib/api"
+import { authApi, chatApi, modelApi, orgApi } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import type { Chat, ChatMessage } from "@/lib/types"
 
 const chatKeys = {
@@ -16,6 +17,20 @@ const modelKeys = {
 
 const orgKeys = {
   mine: ["orgs", "mine"] as const,
+}
+
+const meKeys = {
+  me: ["auth", "me"] as const,
+}
+
+export const useMe = () => {
+  const { token } = useAuth()
+  return useQuery({
+    queryKey: [...meKeys.me, token],
+    queryFn: () => authApi.me(),
+    enabled: Boolean(token),
+    staleTime: 60_000,
+  })
 }
 
 export const useOrgsMine = () =>
