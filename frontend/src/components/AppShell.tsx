@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { Menu, PanelLeftOpen } from "lucide-react"
 
 import { useI18n } from "@/lib/i18n-context"

@@ -3,7 +3,8 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 import re
 
 from passlib.context import CryptContext
@@ -58,7 +59,7 @@ def decode_access_token_claims(token: str) -> dict[str, Any]:
             token, settings.secret_key, algorithms=[settings.jwt_algorithm]
         )
         return payload
-    except (JWTError, ValueError) as exc:
+    except (InvalidTokenError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import type { FormEvent } from "react"
-import { useNavigate, useSearchParams, Link } from "react-router-dom"
+import { useNavigate, useSearchParams, Link } from "react-router"
 
 import { authApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"

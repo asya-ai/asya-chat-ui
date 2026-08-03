@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { FolderOpen, Plus, Search } from "lucide-react"
 
 import { agentApi } from "@/lib/api"

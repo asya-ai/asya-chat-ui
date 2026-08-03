@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react"
-import { Link } from "react-router-dom"
+import { Link } from "react-router"
 import { useI18n } from "@/lib/i18n-context"
 
 import {

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type SetStateAction } from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router"
 
 import { authApi, orgApi, usageApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"

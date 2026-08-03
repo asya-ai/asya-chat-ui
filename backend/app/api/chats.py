@@ -16,7 +16,8 @@ from json_repair import loads as repair_json_loads
 from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel, ValidationError, field_validator, model_validator
 from sqlmodel import Session, select
 from PIL import ExifTags, Image
@@ -128,7 +129,7 @@ def _decode_attachment_access_token(token: str) -> UUID:
         if not attachment_id:
             raise ValueError("Missing attachment id")
         return UUID(str(attachment_id))
-    except (JWTError, ValueError) as exc:
+    except (InvalidTokenError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid attachment token",

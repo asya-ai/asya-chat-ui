@@ -8,7 +8,9 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 import httpx
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWK
+from jwt.exceptions import InvalidTokenError
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -599,7 +601,7 @@ async def oidc_callback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO response")
     try:
         state_payload = _decode_oidc_state(state)
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO state") from exc
 
     org_id = state_payload.get("org_id")
@@ -719,7 +721,7 @@ async def oidc_callback(
 
     claims = jwt.decode(
         id_token,
-        key,
+        PyJWK.from_dict(key).key,
         algorithms=[header.get("alg", "RS256")],
         audience=oidc_client_id,
         issuer=config_issuer,

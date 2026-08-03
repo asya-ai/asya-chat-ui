@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router"
 
 import { authApi, modelApi, orgApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
