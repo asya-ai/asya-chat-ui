@@ -28,7 +28,11 @@ from app.api.chats import (
     _run_agentic_loop,
     _truncate_messages,
 )
-from app.services.model_capabilities import ensure_model_capabilities, supports_image_input
+from app.services.model_capabilities import (
+    ensure_model_capabilities,
+    persist_responses_api_discovery,
+    supports_image_input,
+)
 from app.core.config import settings
 from app.db.session import engine
 from app.models.entities import (
@@ -58,6 +62,7 @@ from app.services.langchain_runtime import (
     chat_with_langchain,
     retrieve_agent_chunks,
 )
+from app.services.generation_event_bus import publish_generation_event
 from app.services.providers.base import ChatUsage
 from app.services.providers.registry import get_provider
 from app.services.tools.image_tool import ImageToolContext, edit_image, generate_image
@@ -73,6 +78,48 @@ class GenerationCancelledError(Exception):
     pass
 
 
+def _persist_generation_event(
+    session: Session,
+    task_id: UUID,
+    sequence_ref: list[int],
+    event_type: str,
+    payload: dict | None,
+) -> None:
+    sequence_ref[0] += 1
+    sequence = sequence_ref[0]
+    event = ChatGenerationEvent(
+        task_id=task_id,
+        event_type=event_type,
+        payload_json=payload,
+        sequence=sequence,
+    )
+    session.add(event)
+    try:
+        session.commit()
+    except Exception:
+        # If another DB operation poisoned the transaction, recover and
+        # retry once so streaming events don't crash the whole generation.
+        session.rollback()
+        session.add(event)
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.warning(
+                "Failed to persist %s event for task=%s",
+                event_type,
+                task_id,
+                exc_info=True,
+            )
+            return
+    publish_generation_event(
+        task_id,
+        sequence=sequence,
+        event_type=event_type,
+        payload=payload,
+    )
+
+
 class _DbEventSender:
     def __init__(self, session: Session, task_id: UUID, sequence_ref: list[int]) -> None:
         self._session = session
@@ -80,30 +127,9 @@ class _DbEventSender:
         self._sequence_ref = sequence_ref
 
     async def send(self, payload: dict) -> None:
-        self._sequence_ref[0] += 1
-        event = ChatGenerationEvent(
-            task_id=self._task_id,
-            event_type="activity",
-            payload_json=payload,
-            sequence=self._sequence_ref[0],
+        _persist_generation_event(
+            self._session, self._task_id, self._sequence_ref, "activity", payload
         )
-        self._session.add(event)
-        try:
-            self._session.commit()
-        except Exception:
-            # If another DB operation poisoned the transaction, recover and
-            # retry once so streaming events don't crash the whole generation.
-            self._session.rollback()
-            self._session.add(event)
-            try:
-                self._session.commit()
-            except Exception:
-                self._session.rollback()
-                logger.warning(
-                    "Failed to persist activity event for task=%s",
-                    self._task_id,
-                    exc_info=True,
-                )
 
 
 class _DbToolEventSender:
@@ -113,28 +139,48 @@ class _DbToolEventSender:
         self._sequence_ref = sequence_ref
 
     async def send(self, payload: dict) -> None:
-        self._sequence_ref[0] += 1
-        event = ChatGenerationEvent(
-            task_id=self._task_id,
-            event_type="tool_event",
-            payload_json=payload,
-            sequence=self._sequence_ref[0],
+        _persist_generation_event(
+            self._session, self._task_id, self._sequence_ref, "tool_event", payload
         )
-        self._session.add(event)
-        try:
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            self._session.add(event)
-            try:
-                self._session.commit()
-            except Exception:
-                self._session.rollback()
-                logger.warning(
-                    "Failed to persist tool event for task=%s",
-                    self._task_id,
-                    exc_info=True,
-                )
+
+
+class _DbDeltaSender:
+    def __init__(
+        self,
+        session: Session,
+        task_id: UUID,
+        sequence_ref: list[int],
+        *,
+        assistant_message: ChatMessage | None = None,
+        chat: Chat | None = None,
+    ) -> None:
+        self._session = session
+        self._task_id = task_id
+        self._sequence_ref = sequence_ref
+        self._assistant_message = assistant_message
+        self._chat = chat
+        self._content = ""
+        self.emitted = False
+
+    async def send(self, payload: dict) -> None:
+        delta = payload.get("delta") if isinstance(payload, dict) else None
+        if not delta:
+            return
+        self.emitted = True
+        self._content += str(delta)
+        if self._assistant_message is not None:
+            self._assistant_message.content = self._content
+            self._session.add(self._assistant_message)
+            if self._chat is not None:
+                self._chat.last_activity_at = datetime.utcnow()
+                self._session.add(self._chat)
+        _persist_generation_event(
+            self._session,
+            self._task_id,
+            self._sequence_ref,
+            "delta",
+            {"delta": delta},
+        )
 
 
 def _build_provider_messages(
@@ -232,16 +278,7 @@ def _append_event(
     event_type: str,
     payload: dict | None,
 ) -> None:
-    sequence_ref[0] += 1
-    session.add(
-        ChatGenerationEvent(
-            task_id=task_id,
-            event_type=event_type,
-            payload_json=payload,
-            sequence=sequence_ref[0],
-        )
-    )
-    session.commit()
+    _persist_generation_event(session, task_id, sequence_ref, event_type, payload)
 
 
 def _to_int_scalar(value: Any, default: int = 0) -> int:
@@ -517,6 +554,7 @@ async def _run_generation(task_id: UUID) -> None:
                 settings.openai_prompt_cache_retention if prompt_cache_enabled else None
             ),
             prompt_cache_enabled=prompt_cache_enabled,
+            prefer_responses_api=model.uses_responses_api is True,
             config=config,
         )
 
@@ -852,6 +890,24 @@ async def _run_generation(task_id: UUID) -> None:
                     model=model,
                     history=history + [assistant_message],
                 )
+                if image_result.attachments:
+                    _append_event(
+                        session,
+                        task.id,
+                        sequence_ref,
+                        "tool_event",
+                        {
+                            "type": "tool_call",
+                            "id": f"image:{assistant_message.id}",
+                            "tool_name": "generate_image",
+                            "state": "end",
+                            "action_summary": "Generating image",
+                            "output": {
+                                "status": "ok",
+                                "attachments": image_result.attachments,
+                            },
+                        },
+                    )
                 _append_event(
                     session,
                     task.id,
@@ -894,6 +950,13 @@ async def _run_generation(task_id: UUID) -> None:
             elif tool_registry and hasattr(provider, "chat_with_tools"):
                 activity_sender = _DbEventSender(session, task.id, sequence_ref)
                 tool_event_sender = _DbToolEventSender(session, task.id, sequence_ref)
+                delta_sender = _DbDeltaSender(
+                    session,
+                    task.id,
+                    sequence_ref,
+                    assistant_message=assistant_message,
+                    chat=chat,
+                )
                 content, tool_attachments, tool_sources, image_usages, last_usage = (
                     await _run_agentic_loop(
                         provider=provider,
@@ -903,6 +966,7 @@ async def _run_generation(task_id: UUID) -> None:
                         pending_attachments=pending_tool_attachments,
                         activity_sender=activity_sender,
                         tool_event_sender=tool_event_sender,
+                        delta_sender=delta_sender,
                     )
                 )
                 _ensure_task_not_cancelled(session, task.id)
@@ -946,13 +1010,14 @@ async def _run_generation(task_id: UUID) -> None:
                         ]
                     )
                     session.commit()
-                _append_event(
-                    session,
-                    task.id,
-                    sequence_ref,
-                    "delta",
-                    {"delta": content},
-                )
+                if not delta_sender.emitted:
+                    _append_event(
+                        session,
+                        task.id,
+                        sequence_ref,
+                        "delta",
+                        {"delta": content},
+                    )
             else:
                 if hasattr(provider, "chat_stream"):
                     assistant_content = ""
@@ -1091,12 +1156,34 @@ async def _run_generation(task_id: UUID) -> None:
                 {"error": str(exc)},
             )
         finally:
+            try:
+                persist_responses_api_discovery(session, model, provider)
+            except Exception:
+                logger.debug(
+                    "Failed to persist uses_responses_api for model=%s",
+                    getattr(model, "id", None),
+                    exc_info=True,
+                )
             await _maybe_close_provider(provider)
+
+
+# Reuse one event loop per Celery worker process. asyncio.run() creates and
+# closes a loop per task; OpenAI's httpx wrapper then schedules aclose() on the
+# *next* running loop during GC, which raises "Event loop is closed".
+_worker_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _run_coro(coro: Any) -> Any:
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        _worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_worker_loop)
+    return _worker_loop.run_until_complete(coro)
 
 
 @celery_app.task(name="chatui.generate_chat_response")
 def generate_chat_response(task_id: str) -> None:
-    asyncio.run(_run_generation(UUID(task_id)))
+    _run_coro(_run_generation(UUID(task_id)))
 
 
 @celery_app.task(name="chatui.reindex_agent_source")

@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Eraser, MoreHorizontal, Search } from "lucide-react"
+import { MoreHorizontal, Search } from "lucide-react"
 
 type HistoryPanelProps = {
   chats: Chat[]
@@ -19,7 +19,6 @@ type HistoryPanelProps = {
   leadingAction: ReactNode
   labels: {
     title: string
-    clearAll: string
     search: string
     empty: string
     untitled: string
@@ -30,7 +29,6 @@ type HistoryPanelProps = {
   }
   onQueryChange: (value: string) => void
   onSelectChat: (chat: Chat) => void
-  onClearAll: () => void
   onDeleteChat: (chat: Chat) => void
   onToggleShareChat: (chat: Chat) => void
   formatDate: (value: string) => string
@@ -43,46 +41,15 @@ export const HistoryPanel = ({
   labels,
   onQueryChange,
   onSelectChat,
-  onClearAll,
   onDeleteChat,
   onToggleShareChat,
   formatDate,
 }: HistoryPanelProps) => (
   <>
-    <div className="flex h-15 shrink-0 items-center justify-between gap-3 px-3 py-2.5">
+    <div className="flex h-15 shrink-0 items-center gap-3 px-3 py-2.5">
       <div className="flex min-w-0 items-center gap-1.5">
         {leadingAction}
         <h1 className="truncate font-heading text-4xl leading-10">{labels.title}</h1>
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        <Button
-          variant="secondary"
-          className="hidden h-9 px-4 sm:inline-flex"
-          disabled={chats.length === 0}
-          onClick={onClearAll}
-        >
-          <Eraser aria-hidden="true" />
-          {labels.clearAll}
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={labels.actions}>
-              <MoreHorizontal aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuGroup>
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={chats.length === 0}
-                onClick={onClearAll}
-              >
-                <Eraser aria-hidden="true" />
-                {labels.clearAll}
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
     </div>
 

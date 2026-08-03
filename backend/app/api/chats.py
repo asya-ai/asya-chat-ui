@@ -46,6 +46,7 @@ from app.models import (
 from app.services.org_service import require_org_member, require_provider_enabled
 from app.services.model_capabilities import (
     ensure_model_capabilities,
+    persist_responses_api_discovery,
     supports_image_input,
     supports_image_output,
 )
@@ -83,6 +84,7 @@ from app.services.tools.web_tools import (
     web_scrape,
     web_search,
 )
+from app.services.generation_event_bus import iter_generation_notifications
 from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -677,7 +679,9 @@ def _build_tool_registry(
                 name="search_past_chats",
                 description=(
                     "Search the user's past chat conversations by keyword. "
-                    "Returns matching chat titles, chat IDs, and message previews. "
+                    "Returns matching chat titles, chat IDs, created_at, last_activity_at "
+                    "(last message / last modified), and message previews. "
+                    "Results are ordered by most recently active chat first. "
                     "Results are shown as references the user can click to navigate to. "
                     "You can link to a found chat using /chat/{chat_id} in your response. "
                     "Use when the user references a previous conversation or you need context from earlier chats."
@@ -1271,6 +1275,7 @@ async def _maybe_update_chat_title(
                     api_key=provider_config.api_key_override if provider_config else None,
                     base_url=provider_config.base_url_override if provider_config else None,
                     endpoint=provider_config.endpoint_override if provider_config else None,
+                    prefer_responses_api=fallback.uses_responses_api is True,
                     config=config,
                 )
                 title_model = fallback
@@ -1325,6 +1330,7 @@ async def _maybe_update_chat_title(
             chat.title = title
         session.add(chat)
         session.commit()
+        persist_responses_api_discovery(session, title_model, title_provider)
     except Exception:
         logger.warning(
             "Failed to generate chat title for chat_id=%s model=%s",
@@ -1375,7 +1381,24 @@ def _get_user_from_token(session: Session, token: str) -> User:
 
 
 async def _ws_send_event(websocket: WebSocket, payload: dict) -> None:
-    await websocket.send_json(payload)
+    try:
+        await websocket.send_json(payload)
+    except WebSocketDisconnect:
+        raise
+    except RuntimeError as exc:
+        # Client already closed; Starlette raises this after a close frame.
+        if "close message has been sent" in str(exc):
+            raise WebSocketDisconnect() from exc
+        raise
+
+
+async def _ws_try_send_event(websocket: WebSocket, payload: dict) -> bool:
+    """Send a WS payload; return False if the client already disconnected."""
+    try:
+        await _ws_send_event(websocket, payload)
+        return True
+    except WebSocketDisconnect:
+        return False
 
 
 def _format_model_error(exc: Exception) -> str:
@@ -1394,6 +1417,147 @@ def _enqueue_generation_task(task_id: UUID) -> None:
     )
 
 
+def _is_timeline_action_label(label: str) -> bool:
+    if re.match(r"^Step \d+/\d+$", label):
+        return False
+    return label not in {"Thinking", "Answering"}
+
+
+def _append_stream_text_part(parts: list[dict[str, Any]], delta: str) -> None:
+    if not delta:
+        return
+    if parts and parts[-1].get("type") == "text":
+        parts[-1]["text"] = f"{parts[-1].get('text', '')}{delta}"
+    else:
+        parts.append({"type": "text", "text": delta})
+
+
+def _attach_stream_action_attachments(
+    parts: list[dict[str, Any]],
+    label: str,
+    attachments: list[dict[str, Any]],
+) -> None:
+    if not attachments:
+        return
+    for index in range(len(parts) - 1, -1, -1):
+        part = parts[index]
+        if part.get("type") != "action" or part.get("label") != label:
+            continue
+        existing = part.get("attachments")
+        if isinstance(existing, list) and existing:
+            part["attachments"] = [*existing, *attachments]
+        else:
+            part["attachments"] = attachments
+        return
+    parts.append({"type": "action", "label": label, "attachments": attachments})
+
+
+def _normalize_timeline_attachments(
+    raw_attachments: Any,
+    message_attachments: list["ChatMessageAttachmentRead"] | None = None,
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_attachments, list):
+        return []
+    by_name = {
+        item.file_name: item
+        for item in (message_attachments or [])
+        if item.file_name
+    }
+    normalized: list[dict[str, Any]] = []
+    for item in raw_attachments:
+        if not isinstance(item, dict):
+            continue
+        file_name = str(item.get("file_name") or "").strip()
+        content_type = str(item.get("content_type") or "").strip() or "application/octet-stream"
+        matched = by_name.get(file_name) if file_name else None
+        entry: dict[str, Any] = {
+            "file_name": file_name or (matched.file_name if matched else "attachment"),
+            "content_type": matched.content_type if matched else content_type,
+        }
+        if matched:
+            entry["id"] = matched.id
+            if matched.content_url:
+                entry["content_url"] = matched.content_url
+        data_base64 = item.get("data_base64")
+        if isinstance(data_base64, str) and data_base64 and "content_url" not in entry:
+            entry["data_base64"] = data_base64
+        if entry.get("content_url") or entry.get("data_base64"):
+            normalized.append(entry)
+    return normalized
+
+
+def _build_stream_parts_from_events(
+    events: list[ChatGenerationEvent],
+    *,
+    message_content: str = "",
+    message_attachments: list["ChatMessageAttachmentRead"] | None = None,
+) -> tuple[list[dict[str, Any]] | None, list[str]]:
+    """Rebuild interleaved timeline + action labels from persisted generation events."""
+    parts: list[dict[str, Any]] = []
+    thinking_steps: list[str] = []
+    for event in events:
+        payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+        if event.event_type == "delta":
+            delta = payload.get("delta")
+            if isinstance(delta, str) and delta:
+                _append_stream_text_part(parts, delta)
+            continue
+        if event.event_type == "activity":
+            label = payload.get("label")
+            state = payload.get("state")
+            if not isinstance(label, str) or not label:
+                continue
+            if state == "start":
+                if re.match(r"^Step \d+/\d+$", label):
+                    thinking_steps = [
+                        item for item in thinking_steps if not re.match(r"^Step \d+/\d+$", item)
+                    ]
+                    thinking_steps.append(label)
+                else:
+                    thinking_steps.append(label)
+                    if _is_timeline_action_label(label):
+                        parts.append({"type": "action", "label": label})
+            continue
+        if event.event_type != "tool_event":
+            continue
+        if payload.get("type") != "tool_call" or payload.get("state") != "end":
+            continue
+        output = payload.get("output")
+        raw_attachments = output.get("attachments") if isinstance(output, dict) else None
+        attachments = _normalize_timeline_attachments(raw_attachments, message_attachments)
+        if not attachments:
+            continue
+        label = payload.get("action_summary")
+        if not isinstance(label, str) or not label.strip():
+            tool_name = payload.get("tool_name")
+            if tool_name == "generate_image":
+                label = "Generating image"
+            elif tool_name == "edit_image":
+                label = "Editing image"
+            else:
+                label = "Attachment"
+        _attach_stream_action_attachments(parts, label, attachments)
+
+    parts_text = "".join(
+        str(part.get("text") or "") for part in parts if part.get("type") == "text"
+    )
+    content = message_content or ""
+    if content and parts_text != content:
+        if not parts_text:
+            parts.insert(0, {"type": "text", "text": content})
+        elif content.startswith(parts_text):
+            remainder = content[len(parts_text) :]
+            if remainder:
+                _append_stream_text_part(parts, remainder)
+        elif not any(part.get("type") == "action" for part in parts):
+            parts = [{"type": "text", "text": content}]
+
+    thinking_steps = [
+        label for label in thinking_steps if _is_timeline_action_label(label)
+    ]
+    return (parts or None, thinking_steps)
+
+
 def _event_payload_from_record(event: ChatGenerationEvent) -> dict:
     payload = event.payload_json or {}
     if event.event_type == "activity":
@@ -1404,59 +1568,202 @@ def _event_payload_from_record(event: ChatGenerationEvent) -> dict:
     return payload
 
 
+def _event_payload_from_notification(
+    task_id: UUID, notification: dict[str, Any]
+) -> dict | None:
+    event_type = notification.get("event_type")
+    if not isinstance(event_type, str):
+        return None
+    payload = notification.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    if event_type == "activity":
+        payload = {"activity": payload}
+    elif event_type == "tool_event":
+        payload = {"tool_event": payload}
+    else:
+        payload = dict(payload)
+    payload.setdefault("task_id", str(task_id))
+    return payload
+
+
+def _fetch_generation_events_after(
+    session: Session, task_id: UUID, after_sequence: int
+) -> list[ChatGenerationEvent]:
+    return session.exec(
+        select(ChatGenerationEvent)
+        .where(ChatGenerationEvent.task_id == task_id)
+        .where(ChatGenerationEvent.sequence > after_sequence)
+        .order_by(ChatGenerationEvent.sequence)
+    ).all()
+
+
+def _task_is_terminal(session: Session, task_id: UUID) -> bool:
+    task = session.exec(
+        select(ChatGenerationTask).where(ChatGenerationTask.id == task_id)
+    ).first()
+    return bool(
+        task
+        and task.status
+        in {
+            GenerationStatus.completed,
+            GenerationStatus.failed,
+            GenerationStatus.cancelled,
+        }
+    )
+
+
 async def _stream_task_events_ws(
     websocket: WebSocket, task_id: UUID, *, after_sequence: int = 0
 ) -> None:
     last_sequence = after_sequence
-    while True:
-        with Session(engine) as stream_session:
-            events = stream_session.exec(
-                select(ChatGenerationEvent)
-                .where(ChatGenerationEvent.task_id == task_id)
-                .where(ChatGenerationEvent.sequence > last_sequence)
-                .order_by(ChatGenerationEvent.sequence)
-            ).all()
-            for event in events:
-                last_sequence = event.sequence
-                await _ws_send_event(websocket, _event_payload_from_record(event))
+    # Initial catch-up from DB, then prefer Redis pub/sub with periodic DB fallback.
+    with Session(engine) as stream_session:
+        events = _fetch_generation_events_after(stream_session, task_id, last_sequence)
+        for event in events:
+            last_sequence = event.sequence
+            await _ws_send_event(websocket, _event_payload_from_record(event))
+        if _task_is_terminal(stream_session, task_id) and not events:
+            return
 
-            task = stream_session.exec(
-                select(ChatGenerationTask).where(ChatGenerationTask.id == task_id)
-            ).first()
-            if (
-                task
-                and task.status in {GenerationStatus.completed, GenerationStatus.failed, GenerationStatus.cancelled}
-                and not events
-            ):
-                return
-        await anyio.sleep(0.5)
+    try:
+        async for notification in iter_generation_notifications(task_id):
+            if notification is not None:
+                sequence = notification.get("sequence")
+                if isinstance(sequence, int) and sequence > last_sequence:
+                    # Prefer contiguous notify payloads; fall back to DB on gaps.
+                    if sequence == last_sequence + 1:
+                        payload = _event_payload_from_notification(task_id, notification)
+                        if payload is not None:
+                            last_sequence = sequence
+                            await _ws_send_event(websocket, payload)
+                            if notification.get("event_type") in {"done", "error"}:
+                                with Session(engine) as stream_session:
+                                    events = _fetch_generation_events_after(
+                                        stream_session, task_id, last_sequence
+                                    )
+                                    for event in events:
+                                        last_sequence = event.sequence
+                                        await _ws_send_event(
+                                            websocket, _event_payload_from_record(event)
+                                        )
+                                return
+                            continue
+                    with Session(engine) as stream_session:
+                        events = _fetch_generation_events_after(
+                            stream_session, task_id, last_sequence
+                        )
+                        for event in events:
+                            last_sequence = event.sequence
+                            await _ws_send_event(
+                                websocket, _event_payload_from_record(event)
+                            )
+                        if notification.get("event_type") in {"done", "error"}:
+                            return
+                continue
+
+            with Session(engine) as stream_session:
+                events = _fetch_generation_events_after(
+                    stream_session, task_id, last_sequence
+                )
+                for event in events:
+                    last_sequence = event.sequence
+                    await _ws_send_event(websocket, _event_payload_from_record(event))
+                if _task_is_terminal(stream_session, task_id) and not events:
+                    return
+    except WebSocketDisconnect:
+        raise
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "Generation pub/sub unavailable; falling back to DB poll task=%s",
+            task_id,
+            exc_info=True,
+        )
+        while True:
+            with Session(engine) as stream_session:
+                events = _fetch_generation_events_after(
+                    stream_session, task_id, last_sequence
+                )
+                for event in events:
+                    last_sequence = event.sequence
+                    await _ws_send_event(websocket, _event_payload_from_record(event))
+                if _task_is_terminal(stream_session, task_id) and not events:
+                    return
+            await anyio.sleep(0.5)
 
 
 async def _stream_task_events_sse(task_id: UUID, *, after_sequence: int = 0):
     last_sequence = after_sequence
-    while True:
-        with Session(engine) as stream_session:
-            events = stream_session.exec(
-                select(ChatGenerationEvent)
-                .where(ChatGenerationEvent.task_id == task_id)
-                .where(ChatGenerationEvent.sequence > last_sequence)
-                .order_by(ChatGenerationEvent.sequence)
-            ).all()
-            for event in events:
-                last_sequence = event.sequence
-                payload = _event_payload_from_record(event)
-                yield f"data: {json.dumps(payload)}\n\n"
+    with Session(engine) as stream_session:
+        events = _fetch_generation_events_after(stream_session, task_id, last_sequence)
+        for event in events:
+            last_sequence = event.sequence
+            payload = _event_payload_from_record(event)
+            yield f"data: {json.dumps(payload)}\n\n"
+        if _task_is_terminal(stream_session, task_id) and not events:
+            return
 
-            task = stream_session.exec(
-                select(ChatGenerationTask).where(ChatGenerationTask.id == task_id)
-            ).first()
-            if (
-                task
-                and task.status in {GenerationStatus.completed, GenerationStatus.failed, GenerationStatus.cancelled}
-                and not events
-            ):
-                return
-        await anyio.sleep(0.5)
+    try:
+        async for notification in iter_generation_notifications(task_id):
+            if notification is not None:
+                sequence = notification.get("sequence")
+                if isinstance(sequence, int) and sequence > last_sequence:
+                    if sequence == last_sequence + 1:
+                        payload = _event_payload_from_notification(task_id, notification)
+                        if payload is not None:
+                            last_sequence = sequence
+                            yield f"data: {json.dumps(payload)}\n\n"
+                            if notification.get("event_type") in {"done", "error"}:
+                                with Session(engine) as stream_session:
+                                    events = _fetch_generation_events_after(
+                                        stream_session, task_id, last_sequence
+                                    )
+                                    for event in events:
+                                        last_sequence = event.sequence
+                                        payload = _event_payload_from_record(event)
+                                        yield f"data: {json.dumps(payload)}\n\n"
+                                return
+                            continue
+                    with Session(engine) as stream_session:
+                        events = _fetch_generation_events_after(
+                            stream_session, task_id, last_sequence
+                        )
+                        for event in events:
+                            last_sequence = event.sequence
+                            payload = _event_payload_from_record(event)
+                            yield f"data: {json.dumps(payload)}\n\n"
+                        if notification.get("event_type") in {"done", "error"}:
+                            return
+                continue
+
+            with Session(engine) as stream_session:
+                events = _fetch_generation_events_after(
+                    stream_session, task_id, last_sequence
+                )
+                for event in events:
+                    last_sequence = event.sequence
+                    payload = _event_payload_from_record(event)
+                    yield f"data: {json.dumps(payload)}\n\n"
+                if _task_is_terminal(stream_session, task_id) and not events:
+                    return
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "Generation pub/sub unavailable; falling back to DB poll task=%s",
+            task_id,
+            exc_info=True,
+        )
+        while True:
+            with Session(engine) as stream_session:
+                events = _fetch_generation_events_after(
+                    stream_session, task_id, last_sequence
+                )
+                for event in events:
+                    last_sequence = event.sequence
+                    payload = _event_payload_from_record(event)
+                    yield f"data: {json.dumps(payload)}\n\n"
+                if _task_is_terminal(stream_session, task_id) and not events:
+                    return
+            await anyio.sleep(0.5)
 
 
 async def _run_agentic_loop(
@@ -1468,6 +1775,7 @@ async def _run_agentic_loop(
     pending_attachments: list[dict[str, Any]] | None = None,
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
+    delta_sender: anyio.abc.ObjectSendStream | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     from app.services.langchain_runtime import run_agentic_loop_langchain
 
@@ -1479,6 +1787,7 @@ async def _run_agentic_loop(
         max_steps=MAX_TOOL_STEPS,
         activity_sender=activity_sender,
         tool_event_sender=tool_event_sender,
+        delta_sender=delta_sender,
     )
 
     tool_specs = tool_registry.list_specs()
@@ -2068,6 +2377,8 @@ class ChatMessageRead(BaseModel):
     model_name: str | None = None
     attachments: list[ChatMessageAttachmentRead] | None = None
     sources: list[dict] | None = None
+    thinking_steps: list[str] | None = None
+    stream_parts: list[dict[str, Any]] | None = None
     tool_event: dict | None = None
     activity_event: dict | None = None
     task_id: str | None = None
@@ -2819,20 +3130,31 @@ def list_messages(
             )
         )
     tool_events_by_assistant: dict[UUID, list[ChatGenerationEvent]] = {}
+    timeline_events_by_assistant: dict[UUID, list[ChatGenerationEvent]] = {}
     if task_by_id:
-        tool_events = session.exec(
+        generation_events = session.exec(
             select(ChatGenerationEvent)
             .where(ChatGenerationEvent.task_id.in_(list(task_by_id.keys())))
-            .where(ChatGenerationEvent.event_type == "tool_event")
+            .where(
+                ChatGenerationEvent.event_type.in_(
+                    ["tool_event", "activity", "delta"]
+                )
+            )
             .order_by(ChatGenerationEvent.sequence, ChatGenerationEvent.created_at)
         ).all()
-        for event in tool_events:
+        for event in generation_events:
             task = task_by_id.get(event.task_id)
             if not task:
                 continue
             if not isinstance(event.payload_json, dict):
                 continue
-            tool_events_by_assistant.setdefault(task.assistant_message_id, []).append(event)
+            timeline_events_by_assistant.setdefault(
+                task.assistant_message_id, []
+            ).append(event)
+            if event.event_type == "tool_event":
+                tool_events_by_assistant.setdefault(
+                    task.assistant_message_id, []
+                ).append(event)
     view_events = session.exec(
         select(ChatViewEvent)
         .where(ChatViewEvent.chat_id == chat.id)
@@ -2841,6 +3163,17 @@ def list_messages(
 
     results: list[ChatMessageRead] = []
     for message in messages:
+        message_attachments = attachments_by_message.get(message.id)
+        stream_parts = None
+        thinking_steps = None
+        if message.role == "assistant":
+            timeline_events = timeline_events_by_assistant.get(message.id, [])
+            if timeline_events:
+                stream_parts, thinking_steps = _build_stream_parts_from_events(
+                    timeline_events,
+                    message_content=message.content or "",
+                    message_attachments=message_attachments,
+                )
         results.append(
             ChatMessageRead(
                 id=str(message.id),
@@ -2849,8 +3182,10 @@ def list_messages(
                 created_at=message.created_at,
                 model_id=str(message.model_id) if message.model_id else None,
                 model_name=model_map.get(message.model_id),
-                attachments=attachments_by_message.get(message.id),
+                attachments=message_attachments,
                 sources=message.sources,
+                thinking_steps=thinking_steps or None,
+                stream_parts=stream_parts,
                 task_id=str(task_map[message.id].id) if message.id in task_map else None,
                 generation_status=task_map[message.id].status.value
                 if message.id in task_map
@@ -3560,6 +3895,7 @@ async def create_message(
             settings.openai_prompt_cache_retention if prompt_cache_enabled else None
         ),
         prompt_cache_enabled=prompt_cache_enabled,
+        prefer_responses_api=model.uses_responses_api is True,
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
@@ -3736,6 +4072,13 @@ async def create_message(
         ]
     if payload.stream:
         async def event_stream():
+            try:
+                async for chunk in _create_message_event_stream():
+                    yield chunk
+            finally:
+                persist_responses_api_discovery(session, model, provider)
+
+        async def _create_message_event_stream():
             assistant_content = ""
             usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
 
@@ -3974,6 +4317,7 @@ async def create_message(
     )
     session.add(usage_event)
     session.commit()
+    persist_responses_api_discovery(session, model, provider)
     await _maybe_update_chat_title(
         session=session,
         chat=chat,
@@ -4125,19 +4469,27 @@ async def chat_ws(websocket: WebSocket, chat_id: str) -> None:
     except WebSocketDisconnect:
         return
     except HTTPException as exc:
-        await _ws_send_event(
+        if not await _ws_try_send_event(
             websocket, {"error": exc.detail, "status": exc.status_code}
-        )
-        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
-            await websocket.close(code=4401)
-        elif exc.status_code == status.HTTP_403_FORBIDDEN:
-            await websocket.close(code=4403)
-        else:
-            await websocket.close(code=4400)
+        ):
+            return
+        try:
+            if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+                await websocket.close(code=4401)
+            elif exc.status_code == status.HTTP_403_FORBIDDEN:
+                await websocket.close(code=4403)
+            else:
+                await websocket.close(code=4400)
+        except (WebSocketDisconnect, RuntimeError):
+            return
     except Exception:
         logger.exception("Websocket error")
-        await _ws_send_event(websocket, {"error": "Websocket error"})
-        await websocket.close(code=1011)
+        if not await _ws_try_send_event(websocket, {"error": "Websocket error"}):
+            return
+        try:
+            await websocket.close(code=1011)
+        except (WebSocketDisconnect, RuntimeError):
+            return
 
 
 @router.patch("/{chat_id}/messages/{message_id}", response_model=ChatMessageEditResponse)
@@ -4469,6 +4821,7 @@ async def edit_message(
             settings.openai_prompt_cache_retention if prompt_cache_enabled else None
         ),
         prompt_cache_enabled=prompt_cache_enabled,
+        prefer_responses_api=model.uses_responses_api is True,
         config=config,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
@@ -4673,6 +5026,7 @@ async def edit_message(
             )
             for item in tool_attachments
         ]
+    persist_responses_api_discovery(session, model, provider)
     return ChatMessageEditResponse(
         user_message=ChatMessageRead(
             id=str(new_message.id),

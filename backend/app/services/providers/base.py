@@ -26,6 +26,8 @@ class ChatResponse:
 class ChatStreamChunk:
     content: str | None = None
     usage: ChatUsage | None = None
+    tool_calls: list["ChatToolCall"] | None = None
+    finish_reason: str | None = None
 
 
 class ChatProvider(Protocol):

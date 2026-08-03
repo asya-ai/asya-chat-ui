@@ -98,6 +98,7 @@ async def search_past_chats(
             Chat.id,
             Chat.title,
             Chat.created_at,
+            Chat.last_activity_at,
             (title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)).label(
                 "rank"
             ),
@@ -106,13 +107,14 @@ async def search_past_chats(
         .where(*base_chat_filters)
         .where(title_match | (message_rank_subq.c.message_rank.is_not(None)))
         .order_by(
-            (title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)).desc()
+            Chat.last_activity_at.desc(),
+            (title_rank * 2.0 + func.coalesce(message_rank_subq.c.message_rank, 0.0)).desc(),
         )
         .limit(capped_limit)
     ).all()
 
     results = []
-    for chat_id, title, created_at, _rank in chats:
+    for chat_id, title, created_at, last_activity_at, _rank in chats:
         messages = session.exec(
             select(ChatMessage.role, ChatMessage.content)
             .where(ChatMessage.chat_id == chat_id, ChatMessage.is_current.is_(True))
@@ -130,6 +132,9 @@ async def search_past_chats(
             "chat_id": str(chat_id),
             "chat_title": title or "(untitled)",
             "created_at": created_at.isoformat() if created_at else None,
+            "last_activity_at": (
+                last_activity_at.isoformat() if last_activity_at else None
+            ),
             "messages_preview": "\n".join(snippet_lines),
         })
 

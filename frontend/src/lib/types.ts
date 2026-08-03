@@ -79,6 +79,7 @@ export type ChatModel = {
   context_length?: number | null
   supports_image_input?: boolean | null
   supports_image_output?: boolean | null
+  uses_responses_api?: boolean | null
   reasoning_effort?: string | null
   is_available?: boolean
 }
@@ -119,6 +120,7 @@ export type ChatMessage = {
   attachments?: ChatMessageAttachmentLike[] | null
   sources?: SourceItem[] | null
   thinking_steps?: string[] | null
+  stream_parts?: AssistantStreamPart[] | null
   tool_event?: ToolEvent | null
   activity_event?: {
     type?: "chat_view" | string
@@ -196,6 +198,7 @@ export type ToolCallToolEvent = {
     result_preview?: string | null
     error?: string | null
     raw_output?: unknown
+    attachments?: ChatMessageAttachmentLike[] | null
   } | null
 }
 
@@ -254,6 +257,10 @@ export type ChatMessageAttachmentInput = {
 export type ChatMessageAttachmentLike =
   | ChatMessageAttachment
   | ChatMessageAttachmentInput
+
+export type AssistantStreamPart =
+  | { type: "text"; text: string }
+  | { type: "action"; label: string; attachments?: ChatMessageAttachmentLike[] }
 
 export type UsageSlice = {
   key: string

@@ -39,5 +39,13 @@ async def test_search_past_chats_excludes_the_active_conversation():
     assert result.output["results"] == []
     assert session.statement is not None
     compiled = session.statement.compile(dialect=postgresql.dialect())
-    assert "chats.id !=" in str(compiled)
+    sql = str(compiled)
+    assert "chats.id !=" in sql
     assert current_chat_id in compiled.params.values()
+    assert "chats.last_activity_at" in sql
+    assert "ORDER BY" in sql.upper()
+    # Most recently active chats first (not creation time).
+    order_idx = sql.upper().index("ORDER BY")
+    order_clause = sql[order_idx:].upper()
+    assert "LAST_ACTIVITY_AT" in order_clause
+    assert order_clause.index("LAST_ACTIVITY_AT") < order_clause.index("DESC")

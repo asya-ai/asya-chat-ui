@@ -17,6 +17,7 @@ def get_provider(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     prompt_cache_enabled: bool = True,
+    prefer_responses_api: bool = False,
     config: dict | None = None,
 ) -> ChatProvider:
     match provider:
@@ -28,6 +29,7 @@ def get_provider(
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 prompt_cache_enabled=prompt_cache_enabled,
+                prefer_responses_api=prefer_responses_api,
             )
         case "azure":
             return AzureOpenAIProvider(
@@ -69,6 +71,7 @@ def get_provider(
                 reasoning_effort=reasoning_effort,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
+                prefer_responses_api=prefer_responses_api,
             )
         case _:
             raise ValueError(f"Unsupported provider: {provider}")

@@ -11,6 +11,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { Copy, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
+import type { ActionInfoLevel } from "@/lib/storage"
 import type { ChatMessage, ChatMessageAttachmentInput } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { Button } from "@/components/ui/button"
@@ -24,7 +25,7 @@ type MessageBubbleProps = {
   thinkingLabels: string[]
   currentStepLabel: string | null
   currentToolLabel: string | null
-  showToolCallLogs: boolean
+  actionInfoLevel: ActionInfoLevel
   actionsEnabled: boolean
   isEditing: boolean
   isEditDragActive: boolean
@@ -262,7 +263,7 @@ const MessageBubbleComponent = ({
   thinkingLabels,
   currentStepLabel,
   currentToolLabel,
-  showToolCallLogs,
+  actionInfoLevel,
   actionsEnabled,
   isEditing,
   isEditDragActive,
@@ -306,6 +307,224 @@ const MessageBubbleComponent = ({
   )
   const canCopyMessage = Boolean(msg.content.trim())
   const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
+  const streamParts = msg.stream_parts ?? []
+  const streamTextLength = streamParts.reduce(
+    (total, part) => total + (part.type === "text" ? part.text.length : 0),
+    0
+  )
+  const hasActionParts = streamParts.some((part) => part.type === "action")
+  // Prefer the interleaved timeline when it has actions or covers persisted text.
+  // Partial text-only timelines still fall back so refresh races don't hide history.
+  const hasStreamParts =
+    streamParts.length > 0 &&
+    (hasActionParts ||
+      content.trim().length === 0 ||
+      streamTextLength >= content.trim().length)
+  const markdownComponents = useMemo(
+    () => ({
+      p({ children, node, ...rest }: any) {
+        void node
+        return (
+          <p className={isUser ? "m-0 leading-5" : "my-2.5 leading-6"} {...rest}>
+            {children}
+          </p>
+        )
+      },
+      ul({ children, node, ...rest }: any) {
+        void node
+        return (
+          <ul className="space-y-2 my-2.5 pl-6 list-disc" {...rest}>
+            {children}
+          </ul>
+        )
+      },
+      ol({ children, node, ...rest }: any) {
+        void node
+        return (
+          <ol className="space-y-2 my-2.5 pl-6 list-decimal" {...rest}>
+            {children}
+          </ol>
+        )
+      },
+      li({ children, node, ...rest }: any) {
+        void node
+        return (
+          <li className="leading-6" {...rest}>
+            {children}
+          </li>
+        )
+      },
+      a({ children, node, ...rest }: any) {
+        void node
+        return (
+          <a
+            {...rest}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 break-all"
+          >
+            {children}
+          </a>
+        )
+      },
+      hr({ node, ...rest }: any) {
+        void node
+        return <hr className="my-3 border-muted-foreground/30" {...rest} />
+      },
+      h1({ children, node, ...rest }: any) {
+        void node
+        return (
+          <h1 className="mt-4 mb-2 font-semibold text-xl" {...rest}>
+            {children}
+          </h1>
+        )
+      },
+      h2({ children, node, ...rest }: any) {
+        void node
+        return (
+          <h2 className="mt-3 mb-2 font-semibold text-lg" {...rest}>
+            {children}
+          </h2>
+        )
+      },
+      h3({ children, node, ...rest }: any) {
+        void node
+        return (
+          <h3 className="mt-3 mb-2 font-semibold text-base" {...rest}>
+            {children}
+          </h3>
+        )
+      },
+      h4({ children, node, ...rest }: any) {
+        void node
+        return (
+          <h4 className="mt-3 mb-2 font-semibold text-base" {...rest}>
+            {children}
+          </h4>
+        )
+      },
+      h5({ children, node, ...rest }: any) {
+        void node
+        return (
+          <h5 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
+            {children}
+          </h5>
+        )
+      },
+      h6({ children, node, ...rest }: any) {
+        void node
+        return (
+          <h6 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
+            {children}
+          </h6>
+        )
+      },
+      table({ children, node, ...rest }: any) {
+        void node
+        return (
+          <div className="my-3 overflow-x-auto">
+            <table className="w-full border-collapse text-sm" {...rest}>
+              {children}
+            </table>
+          </div>
+        )
+      },
+      thead({ children, node, ...rest }: any) {
+        void node
+        return (
+          <thead className="border-b border-border" {...rest}>
+            {children}
+          </thead>
+        )
+      },
+      th({ children, node, ...rest }: any) {
+        void node
+        return (
+          <th className="px-3 py-2 text-left font-medium" {...rest}>
+            {children}
+          </th>
+        )
+      },
+      td({ children, node, ...rest }: any) {
+        void node
+        return (
+          <td className="px-3 py-2 align-top" {...rest}>
+            {children}
+          </td>
+        )
+      },
+      code(props: any) {
+        const { className, children, ref: refProp, ...rest } = props
+        void refProp
+        const match = /language-(\w+)/.exec(className || "")
+        const codeContent = String(children).replace(/\n$/, "")
+        const mermaidChart = isBlockCode(codeContent, className)
+          ? toMermaidChart(codeContent, match?.[1] ?? null)
+          : null
+        if (mermaidChart) {
+          return (
+            <MermaidDiagram
+              chart={mermaidChart}
+              copyLabel={t("chat_copy_mermaid")}
+              renderFailedLabel={t("chat_mermaid_render_failed")}
+            />
+          )
+        }
+        if (isBlockCode(codeContent, className)) {
+          return (
+            <div className={codeBlockClassName}>
+              <CopyTextButton
+                text={codeContent}
+                label={t("chat_copy_code")}
+                className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
+              />
+              {match ? (
+                <SyntaxHighlighter
+                  {...rest}
+                  style={codeTheme}
+                  language={match[1]}
+                  PreTag="div"
+                  customStyle={{
+                    margin: 0,
+                    padding: "1rem",
+                    paddingTop: "2.5rem",
+                    background: "transparent",
+                  }}
+                  codeTagProps={{
+                    className: "font-mono text-[13px]",
+                  }}
+                >
+                  {codeContent}
+                </SyntaxHighlighter>
+              ) : (
+                <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
+                  <code className={className} {...rest}>
+                    {codeContent}
+                  </code>
+                </pre>
+              )}
+            </div>
+          )
+        }
+        return (
+          <code className={className} {...rest}>
+            {children}
+          </code>
+        )
+      },
+    }),
+    [codeTheme, isUser, t]
+  )
+  const renderMarkdown = (markdown: string, key?: string) => (
+    <ReactMarkdown
+      key={key}
+      remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={markdownComponents}
+    >
+      {normalizeMathContent(markdown)}
+    </ReactMarkdown>
+  )
   const attachmentSrc = (attachment: {
     content_type: string
     data_base64?: string
@@ -323,6 +542,23 @@ const MessageBubbleComponent = ({
   }) => {
     return attachmentSrc(attachment)
   }
+  const attachmentIdentity = (attachment: {
+    file_name?: string | null
+    content_type?: string | null
+    data_base64?: string | null
+    content_url?: string | null
+  }) =>
+    attachment.data_base64 ||
+    attachment.content_url ||
+    `${attachment.file_name ?? ""}:${attachment.content_type ?? ""}`
+  const timelineAttachmentKeys = new Set(
+    streamParts.flatMap((part) =>
+      part.type === "action" ? (part.attachments ?? []).map(attachmentIdentity) : []
+    )
+  )
+  const bottomAttachments = (msg.attachments ?? []).filter(
+    (attachment) => !timelineAttachmentKeys.has(attachmentIdentity(attachment))
+  )
 
   const handleEditPickFiles = () => {
     editFileInputRef.current?.click()
@@ -635,292 +871,293 @@ const MessageBubbleComponent = ({
             </div>
           ) : (
             <>
-              {isThinking ? (
-                showToolCallLogs ? (
-                  <div className="space-y-2 py-2" role="status" aria-live="polite">
-                    {currentStepLabel || currentToolLabel ? (
-                      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
-                        {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
-                      </div>
-                    ) : null}
-                    <div className="flex items-center gap-1">
-                      <span
-                        aria-hidden="true"
-                        className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                        style={{ animationDelay: "0ms" }}
-                      />
-                      <span
-                        aria-hidden="true"
-                        className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                        style={{ animationDelay: "150ms" }}
-                      />
-                      <span
-                        aria-hidden="true"
-                        className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                        style={{ animationDelay: "300ms" }}
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {thinkingLabels.map((label) => (
-                        <span
-                          key={label}
-                          className="px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide"
-                        >
-                          {label}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2 py-2" role="status" aria-live="polite">
-                    <div
-                      className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="figma-icon size-3.5 animate-spin opacity-[0.79]"
-                        style={{ maskImage: "url('/icon-thinking.svg')" }}
-                      />
-                      <span>{t("chat_thinking")}</span>
-                    </div>
-                    {thinkingLabels.length > 0 ? (
-                      <div className="space-y-1 text-xs text-muted-foreground">
-                        {thinkingLabels.slice(-3).map((label, index, visible) => {
-                          const fadeStep = visible.length - 1 - index
-                          const opacity =
-                            fadeStep === 0 ? 1 : fadeStep === 1 ? 0.55 : 0.28
-                          return (
-                            <div
-                              key={`${label}-${thinkingLabels.length - visible.length + index}`}
-                              className="flex items-start gap-1.5 leading-5 transition-opacity duration-300"
-                              style={{ opacity }}
-                            >
-                              <span aria-hidden="true" className="select-none opacity-50">
-                                ›
-                              </span>
-                              <span className="min-w-0 wrap-break-word">{label}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              ) : (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-                  rehypePlugins={[rehypeKatex]}
-                  components={{
-                    p({ children, node, ...rest }) {
-                      void node
+              {hasStreamParts ? (
+                <div className="space-y-2">
+                  {streamParts.map((part, index) => {
+                    if (part.type === "text") {
+                      if (!part.text.trim()) return null
+                      return renderMarkdown(part.text, `text-${index}`)
+                    }
+                    const actionAttachments = part.attachments ?? []
+                    if (actionInfoLevel === "none") {
+                      if (actionAttachments.length === 0) return null
                       return (
-                        <p className={isUser ? "m-0 leading-5" : "my-2.5 leading-6"} {...rest}>
-                          {children}
-                        </p>
-                      )
-                    },
-                    ul({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <ul className="space-y-2 my-2.5 pl-6 list-disc" {...rest}>
-                          {children}
-                        </ul>
-                      )
-                    },
-                    ol({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <ol className="space-y-2 my-2.5 pl-6 list-decimal" {...rest}>
-                          {children}
-                        </ol>
-                      )
-                    },
-                    li({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <li className="leading-6" {...rest}>
-                          {children}
-                        </li>
-                      )
-                    },
-                    a({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <a
-                          {...rest}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline underline-offset-2 break-all"
-                        >
-                          {children}
-                        </a>
-                      )
-                    },
-                    hr({ node, ...rest }) {
-                      void node
-                      return <hr className="my-3 border-muted-foreground/30" {...rest} />
-                    },
-                    h1({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <h1 className="mt-4 mb-2 font-semibold text-xl" {...rest}>
-                          {children}
-                        </h1>
-                      )
-                    },
-                    h2({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <h2 className="mt-3 mb-2 font-semibold text-lg" {...rest}>
-                          {children}
-                        </h2>
-                      )
-                    },
-                    h3({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <h3 className="mt-3 mb-2 font-semibold text-base" {...rest}>
-                          {children}
-                        </h3>
-                      )
-                    },
-                    h4({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <h4 className="mt-3 mb-2 font-semibold text-base" {...rest}>
-                          {children}
-                        </h4>
-                      )
-                    },
-                    h5({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <h5 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
-                          {children}
-                        </h5>
-                      )
-                    },
-                    h6({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <h6 className="mt-3 mb-2 font-semibold text-sm" {...rest}>
-                          {children}
-                        </h6>
-                      )
-                    },
-                    table({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <div className="my-3 overflow-x-auto">
-                          <table className="border border-muted-foreground/30 w-full text-sm" {...rest}>
-                            {children}
-                          </table>
+                        <div key={`action-${index}`} className="space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {actionAttachments.map((attachment, attachmentIndex) => {
+                              const isImage = (attachment.content_type ?? "").startsWith(
+                                "image/"
+                              )
+                              if (isImage) {
+                                return (
+                                  <Button
+                                    key={`${attachment.file_name}-${attachmentIndex}`}
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                                    onClick={() =>
+                                      onPreviewAttachment({
+                                        file_name: attachment.file_name,
+                                        content_type: attachment.content_type,
+                                        data_base64: attachment.data_base64,
+                                        content_url: attachment.content_url,
+                                      })
+                                    }
+                                  >
+                                    <img
+                                      src={attachmentSrc(attachment)}
+                                      alt={attachment.file_name}
+                                      className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
+                                    />
+                                  </Button>
+                                )
+                              }
+                              return (
+                                <a
+                                  key={`${attachment.file_name}-${attachmentIndex}`}
+                                  className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                                  href={attachmentHref(attachment)}
+                                  download={attachment.file_name}
+                                >
+                                  {attachment.file_name}
+                                </a>
+                              )
+                            })}
+                          </div>
                         </div>
                       )
-                    },
-                    thead({ children, node, ...rest }) {
-                      void node
+                    }
+                    if (actionInfoLevel === "detailed") {
                       return (
-                        <thead className="bg-muted/40 text-foreground" {...rest}>
-                          {children}
-                        </thead>
+                        <div key={`action-${index}`} className="space-y-2">
+                          <span className="inline-flex px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide">
+                            {part.label}
+                          </span>
+                          {actionAttachments.length > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                              {actionAttachments.map((attachment, attachmentIndex) => {
+                                const isImage = (attachment.content_type ?? "").startsWith(
+                                  "image/"
+                                )
+                                if (isImage) {
+                                  return (
+                                    <Button
+                                      key={`${attachment.file_name}-${attachmentIndex}`}
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                                      onClick={() =>
+                                        onPreviewAttachment({
+                                          file_name: attachment.file_name,
+                                          content_type: attachment.content_type,
+                                          data_base64: attachment.data_base64,
+                                          content_url: attachment.content_url,
+                                        })
+                                      }
+                                    >
+                                      <img
+                                        src={attachmentSrc(attachment)}
+                                        alt={attachment.file_name}
+                                        className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
+                                      />
+                                    </Button>
+                                  )
+                                }
+                                return (
+                                  <a
+                                    key={`${attachment.file_name}-${attachmentIndex}`}
+                                    className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                                    href={attachmentHref(attachment)}
+                                    download={attachment.file_name}
+                                  >
+                                    {attachment.file_name}
+                                  </a>
+                                )
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
                       )
-                    },
-                    tbody({ children, node, ...rest }) {
-                      void node
-                      return <tbody {...rest}>{children}</tbody>
-                    },
-                    tr({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <tr className="border-muted-foreground/30 border-t" {...rest}>
-                          {children}
-                        </tr>
-                      )
-                    },
-                    th({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <th className="px-3 py-2 font-semibold text-left" {...rest}>
-                          {children}
-                        </th>
-                      )
-                    },
-                    td({ children, node, ...rest }) {
-                      void node
-                      return (
-                        <td className="px-3 py-2 align-top" {...rest}>
-                          {children}
-                        </td>
-                      )
-                    },
-                    code(props) {
-                      const { className, children, ref: refProp, ...rest } = props
-                      void refProp
-                      const match = /language-(\w+)/.exec(className || "")
-                      const content = String(children).replace(/\n$/, "")
-                      const mermaidChart = isBlockCode(content, className)
-                        ? toMermaidChart(content, match?.[1] ?? null)
-                        : null
-                      if (mermaidChart) {
-                        return (
-                          <MermaidDiagram
-                            chart={mermaidChart}
-                            copyLabel={t("chat_copy_mermaid")}
-                            renderFailedLabel={t("chat_mermaid_render_failed")}
-                          />
-                        )
-                      }
-                      if (isBlockCode(content, className)) {
-                        return (
-                          <div className={codeBlockClassName}>
-                            <CopyTextButton
-                              text={content}
-                              label={t("chat_copy_code")}
-                              className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
-                            />
-                            {match ? (
-                              <SyntaxHighlighter
-                                {...rest}
-                                style={codeTheme}
-                                language={match[1]}
-                                PreTag="div"
-                                customStyle={{
-                                  margin: 0,
-                                  padding: "1rem",
-                                  paddingTop: "2.5rem",
-                                  background: "transparent",
-                                }}
-                                codeTagProps={{
-                                  className: "font-mono text-[13px]",
-                                }}
-                              >
-                                {content}
-                              </SyntaxHighlighter>
-                            ) : (
-                              <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
-                                <code className={className} {...rest}>
-                                  {content}
-                                </code>
-                              </pre>
-                            )}
+                    }
+                    return (
+                      <div key={`action-${index}`} className="space-y-2">
+                        <div className="flex items-start gap-1.5 text-xs text-muted-foreground leading-5">
+                          <span aria-hidden="true" className="select-none opacity-50">
+                            ›
+                          </span>
+                          <span className="min-w-0 wrap-break-word">{part.label}</span>
+                        </div>
+                        {actionAttachments.length > 0 ? (
+                          <div className="flex flex-wrap gap-2 pl-3">
+                            {actionAttachments.map((attachment, attachmentIndex) => {
+                              const isImage = (attachment.content_type ?? "").startsWith(
+                                "image/"
+                              )
+                              if (isImage) {
+                                return (
+                                  <Button
+                                    key={`${attachment.file_name}-${attachmentIndex}`}
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                                    onClick={() =>
+                                      onPreviewAttachment({
+                                        file_name: attachment.file_name,
+                                        content_type: attachment.content_type,
+                                        data_base64: attachment.data_base64,
+                                        content_url: attachment.content_url,
+                                      })
+                                    }
+                                  >
+                                    <img
+                                      src={attachmentSrc(attachment)}
+                                      alt={attachment.file_name}
+                                      className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
+                                    />
+                                  </Button>
+                                )
+                              }
+                              return (
+                                <a
+                                  key={`${attachment.file_name}-${attachmentIndex}`}
+                                  className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                                  href={attachmentHref(attachment)}
+                                  download={attachment.file_name}
+                                >
+                                  {attachment.file_name}
+                                </a>
+                              )
+                            })}
                           </div>
-                        )
-                      }
-                      return (
-                        <code className={className} {...rest}>
-                          {children}
-                        </code>
-                      )
-                    },
-                  }}
-                >
-                  {content}
-                </ReactMarkdown>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                  {isThinking ? (
+                    actionInfoLevel === "detailed" ? (
+                      <div className="flex items-center gap-1 py-1" role="status" aria-live="polite">
+                        <span
+                          aria-hidden="true"
+                          className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                          style={{ animationDelay: "0ms" }}
+                        />
+                        <span
+                          aria-hidden="true"
+                          className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                          style={{ animationDelay: "150ms" }}
+                        />
+                        <span
+                          aria-hidden="true"
+                          className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                          style={{ animationDelay: "300ms" }}
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                          style={{ maskImage: "url('/icon-thinking.svg')" }}
+                        />
+                        <span>{t("chat_thinking")}</span>
+                      </div>
+                    )
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  {content.trim().length > 0 ? renderMarkdown(content) : null}
+                  {isThinking || thinkingLabels.length > 0 ? (
+                    actionInfoLevel === "detailed" ? (
+                      <div className="space-y-2 py-2" role="status" aria-live="polite">
+                        {currentStepLabel || currentToolLabel ? (
+                          <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                            {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
+                          </div>
+                        ) : null}
+                        {isThinking ? (
+                          <div className="flex items-center gap-1">
+                            <span
+                              aria-hidden="true"
+                              className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                              style={{ animationDelay: "0ms" }}
+                            />
+                            <span
+                              aria-hidden="true"
+                              className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                              style={{ animationDelay: "150ms" }}
+                            />
+                            <span
+                              aria-hidden="true"
+                              className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
+                              style={{ animationDelay: "300ms" }}
+                            />
+                          </div>
+                        ) : null}
+                        <div className="flex flex-wrap gap-2">
+                          {thinkingLabels.map((label, index) => (
+                            <span
+                              key={`${label}-${index}`}
+                              className="px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide"
+                            >
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : actionInfoLevel === "short" ? (
+                      <div className="space-y-2 py-2" role="status" aria-live="polite">
+                        {isThinking ? (
+                          <div className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground">
+                            <span
+                              aria-hidden="true"
+                              className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                              style={{ maskImage: "url('/icon-thinking.svg')" }}
+                            />
+                            <span>{t("chat_thinking")}</span>
+                          </div>
+                        ) : null}
+                        {thinkingLabels.length > 0 ? (
+                          <div className="space-y-1 text-xs text-muted-foreground">
+                            {thinkingLabels.map((label, index) => (
+                              <div
+                                key={`${label}-${index}`}
+                                className="flex items-start gap-1.5 leading-5"
+                              >
+                                <span aria-hidden="true" className="select-none opacity-50">
+                                  ›
+                                </span>
+                                <span className="min-w-0 wrap-break-word">{label}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : isThinking ? (
+                      <div className="space-y-2 py-2" role="status" aria-live="polite">
+                        <div className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground">
+                          <span
+                            aria-hidden="true"
+                            className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                            style={{ maskImage: "url('/icon-thinking.svg')" }}
+                          />
+                          <span>{t("chat_thinking")}</span>
+                        </div>
+                      </div>
+                    ) : null
+                  ) : null}
+                </>
               )}
-              {msg.attachments && msg.attachments.length > 0 ? (
+                            {bottomAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2 mt-3">
-                  {msg.attachments.map((attachment, index) => {
+                  {bottomAttachments.map((attachment, index) => {
                     const isImage = (attachment.content_type ?? "").startsWith("image/")
                     if (isImage) {
                       return (
@@ -1063,7 +1300,7 @@ export const MessageBubble = memo(
     if (prev.isThinking !== next.isThinking) return false
     if (prev.currentStepLabel !== next.currentStepLabel) return false
     if (prev.currentToolLabel !== next.currentToolLabel) return false
-    if (prev.showToolCallLogs !== next.showToolCallLogs) return false
+    if (prev.actionInfoLevel !== next.actionInfoLevel) return false
     if (prev.actionsEnabled !== next.actionsEnabled) return false
     if (prev.isEditing !== next.isEditing) return false
     if (prev.codeTheme !== next.codeTheme) return false

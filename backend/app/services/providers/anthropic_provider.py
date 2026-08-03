@@ -198,6 +198,47 @@ class AnthropicProvider:
             finish_reason=getattr(result, "stop_reason", None),
         )
 
+    async def chat_stream_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[ChatToolSpec],
+        tool_choice: object | None = None,
+    ):
+        system = _extract_system(messages)
+        payload = {
+            "model": model,
+            "messages": _to_anthropic_messages(messages),
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "tools": _tool_payload(tools),
+        }
+        if system:
+            payload["system"] = system
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+        async with self.client.messages.stream(**payload) as stream:
+            async for text in stream.text_stream:
+                if text:
+                    yield ChatStreamChunk(content=text)
+            final = await stream.get_final_message()
+        tool_calls: list[ChatToolCall] = []
+        for block in final.content or []:
+            if getattr(block, "type", None) == "tool_use":
+                tool_calls.append(
+                    ChatToolCall(
+                        id=getattr(block, "id", ""),
+                        name=getattr(block, "name", ""),
+                        arguments=getattr(block, "input", {}) or {},
+                    )
+                )
+        if tool_calls:
+            yield ChatStreamChunk(finish_reason="tool_calls")
+        yield ChatStreamChunk(
+            usage=_usage_from_anthropic(getattr(final, "usage", None)),
+            tool_calls=tool_calls or None,
+            finish_reason=getattr(final, "stop_reason", None),
+        )
+
     async def chat_stream(self, model: str, messages: list[dict]):
         system = _extract_system(messages)
         payload = {

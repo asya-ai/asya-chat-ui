@@ -255,6 +255,46 @@ class GeminiProvider:
         return part
 
     @staticmethod
+    def _model_parts_for_assistant_tool_message(message: dict) -> list[dict]:
+        """Keep preamble text with tool calls so later turns still see narration."""
+        parts: list[dict] = []
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            parts.append({"text": content})
+        elif isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "text":
+                    continue
+                text = item.get("text")
+                if text:
+                    parts.append({"text": text})
+        for call in message.get("tool_calls") or []:
+            if isinstance(call, dict):
+                parts.append(GeminiProvider._build_function_call_part(call))
+        return parts
+
+    @staticmethod
+    def _extract_response_text(response: object) -> str:
+        """Collect visible text even when the response also contains function calls."""
+        text_parts: list[str] = []
+        for candidate in getattr(response, "candidates", None) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                if getattr(part, "thought", None):
+                    continue
+                if getattr(part, "function_call", None):
+                    continue
+                text = getattr(part, "text", None)
+                if text:
+                    text_parts.append(text)
+        if text_parts:
+            return "".join(text_parts)
+        try:
+            return getattr(response, "text", None) or ""
+        except Exception:
+            return ""
+
+    @staticmethod
     def _extract_system_instruction(messages: list[dict]) -> str | None:
         parts: list[str] = []
         for msg in messages:
@@ -319,44 +359,161 @@ class GeminiProvider:
             thinking_tokens=thinking_tokens,
         )
 
+    def _contents_from_messages(self, messages: list[dict]) -> list[dict]:
+        contents: list[dict] = []
+        for message in messages:
+            role = message.get("role")
+            if role == "system":
+                continue
+            if role == "assistant":
+                role = "model"
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                parts = self._model_parts_for_assistant_tool_message(message)
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+                continue
+            if role == "tool":
+                fn_response_part = {
+                    "function_response": {
+                        "name": message.get("name"),
+                        "response": {"content": message.get("content", "")},
+                        "id": message.get("tool_call_id"),
+                    }
+                }
+                if (
+                    contents
+                    and contents[-1].get("role") == "user"
+                    and contents[-1].get("parts")
+                    and all("function_response" in p for p in contents[-1]["parts"])
+                ):
+                    contents[-1]["parts"].append(fn_response_part)
+                else:
+                    contents.append({"role": "user", "parts": [fn_response_part]})
+                continue
+            content = message.get("content")
+            if content is None:
+                continue
+            if isinstance(content, list):
+                parts: list[dict] = []
+                for part in content:
+                    if part.get("type") == "text":
+                        text = part.get("text")
+                        if text:
+                            parts.append({"text": text})
+                    elif part.get("type") == "image_url":
+                        url = part.get("image_url", {}).get("url", "")
+                        if url.startswith("data:") and ";base64," in url:
+                            header, data = url.split(";base64,", 1)
+                            mime_type = header.replace("data:", "")
+                            if data:
+                                parts.append(
+                                    {
+                                        "inline_data": {
+                                            "mime_type": mime_type,
+                                            "data": data,
+                                        }
+                                    }
+                                )
+                if parts:
+                    contents.append({"role": role, "parts": parts})
+            elif isinstance(content, str):
+                contents.append({"role": role, "parts": [{"text": content}]})
+        return contents
+
+    def _tool_calls_from_response(self, response: object) -> list[ChatToolCall]:
+        tool_calls: list[ChatToolCall] = []
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                function_call = getattr(part, "function_call", None)
+                if not function_call:
+                    continue
+                thought_signature = self._extract_thought_signature(part, function_call)
+                if not thought_signature:
+                    self.logger.info(
+                        "Gemini tool call missing thought_signature for %s",
+                        getattr(function_call, "name", ""),
+                    )
+                tool_calls.append(
+                    ChatToolCall(
+                        id=(
+                            getattr(function_call, "id", None)
+                            or getattr(function_call, "name", "")
+                        ),
+                        name=function_call.name,
+                        arguments=function_call.args or {},
+                        thought_signature=thought_signature,
+                    )
+                )
+        return tool_calls
+
+    def _tool_declarations(self, tools: list[ChatToolSpec]) -> list:
+        return [
+            types.Tool(
+                function_declarations=[
+                    types.FunctionDeclaration(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=tool.parameters,
+                    )
+                ]
+            )
+            for tool in tools
+        ]
+
+    async def _generate_content_stream_with_cache_fallback(
+        self,
+        *,
+        model: str,
+        contents: list[dict],
+        system_instruction: str | None,
+        tools: list | None = None,
+    ):
+        contents_to_send, cache_config = self._maybe_cached_content_config(
+            model,
+            contents,
+            system_instruction=system_instruction,
+            tools=tools,
+        )
+        config = self._build_config(
+            system_instruction=system_instruction,
+            cache_config=cache_config,
+            tools=tools,
+        )
+        try:
+            stream = await self.client.aio.models.generate_content_stream(
+                model=model,
+                contents=contents_to_send,
+                config=config,
+            )
+            async for chunk in stream:
+                yield chunk
+            return
+        except Exception as exc:
+            if not (cache_config and getattr(cache_config, "cached_content", None)):
+                raise
+            self.logger.error(
+                "Gemini generate_content_stream rejected cached_content, retrying without cache: %s",
+                exc,
+                exc_info=True,
+            )
+            fallback_config = self._build_config(
+                system_instruction=system_instruction,
+                tools=tools,
+            )
+            stream = await self.client.aio.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=fallback_config,
+            )
+            async for chunk in stream:
+                yield chunk
+
     async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
         def _run() -> ChatResponse:
             system_instruction = self._extract_system_instruction(messages)
-            contents: list[dict] = []
-            for message in messages:
-                role = message.get("role")
-                if role == "system":
-                    continue
-                if role == "assistant":
-                    role = "model"
-                content = message.get("content")
-                if content is None:
-                    continue
-                if isinstance(content, list):
-                    parts: list[dict] = []
-                    for part in content:
-                        if part.get("type") == "text":
-                            text = part.get("text")
-                            if text:
-                                parts.append({"text": text})
-                        elif part.get("type") == "image_url":
-                            url = part.get("image_url", {}).get("url", "")
-                            if url.startswith("data:") and ";base64," in url:
-                                header, data = url.split(";base64,", 1)
-                                mime_type = header.replace("data:", "")
-                                if data:
-                                    parts.append(
-                                        {
-                                            "inline_data": {
-                                                "mime_type": mime_type,
-                                                "data": data,
-                                            }
-                                        }
-                                    )
-                    if parts:
-                        contents.append({"role": role, "parts": parts})
-                elif isinstance(content, str):
-                    contents.append({"role": role, "parts": [{"text": content}]})
+            contents = self._contents_from_messages(messages)
             contents_to_send, cache_config = self._maybe_cached_content_config(
                 model,
                 contents,
@@ -389,7 +546,7 @@ class GeminiProvider:
                     )
                 else:
                     raise
-            text = getattr(response, "text", "") or ""
+            text = self._extract_response_text(response)
             usage = getattr(response, "usage_metadata", None)
             return ChatResponse(
                 content=text,
@@ -399,9 +556,23 @@ class GeminiProvider:
         return await anyio.to_thread.run_sync(_run)
 
     async def chat_stream(self, model: str, messages: list[dict]):
-        response = await self.chat(model, messages)
-        yield ChatStreamChunk(content=response.content)
-        yield ChatStreamChunk(usage=response.usage)
+        system_instruction = self._extract_system_instruction(messages)
+        contents = self._contents_from_messages(messages)
+        usage_sent = False
+        async for chunk in self._generate_content_stream_with_cache_fallback(
+            model=model,
+            contents=contents,
+            system_instruction=system_instruction,
+        ):
+            text = self._extract_response_text(chunk)
+            if text:
+                yield ChatStreamChunk(content=text)
+            usage = getattr(chunk, "usage_metadata", None)
+            if usage is not None:
+                usage_sent = True
+                yield ChatStreamChunk(usage=self._usage_from_metadata(usage))
+        if not usage_sent:
+            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
 
     async def chat_with_tools(
         self,
@@ -412,82 +583,8 @@ class GeminiProvider:
     ) -> ChatResponse:
         def _run() -> ChatResponse:
             system_instruction = self._extract_system_instruction(messages)
-            contents: list[dict] = []
-            for message in messages:
-                role = message.get("role")
-                if role == "system":
-                    continue
-                if role == "assistant":
-                    role = "model"
-                tool_calls = message.get("tool_calls")
-                if tool_calls:
-                    parts = []
-                    for call in tool_calls:
-                        parts.append(self._build_function_call_part(call))
-                    contents.append({"role": "model", "parts": parts})
-                    continue
-                if role == "tool":
-                    fn_response_part = {
-                        "function_response": {
-                            "name": message.get("name"),
-                            "response": {"content": message.get("content", "")},
-                            "id": message.get("tool_call_id"),
-                        }
-                    }
-                    if (
-                        contents
-                        and contents[-1].get("role") == "user"
-                        and contents[-1].get("parts")
-                        and all(
-                            "function_response" in p
-                            for p in contents[-1]["parts"]
-                        )
-                    ):
-                        contents[-1]["parts"].append(fn_response_part)
-                    else:
-                        contents.append({"role": "user", "parts": [fn_response_part]})
-                    continue
-                content = message.get("content")
-                if content is None:
-                    continue
-                if isinstance(content, list):
-                    parts: list[dict] = []
-                    for part in content:
-                        if part.get("type") == "text":
-                            text = part.get("text")
-                            if text:
-                                parts.append({"text": text})
-                        elif part.get("type") == "image_url":
-                            url = part.get("image_url", {}).get("url", "")
-                            if url.startswith("data:") and ";base64," in url:
-                                header, data = url.split(";base64,", 1)
-                                mime_type = header.replace("data:", "")
-                                if data:
-                                    parts.append(
-                                        {
-                                            "inline_data": {
-                                                "mime_type": mime_type,
-                                                "data": data,
-                                            }
-                                        }
-                                    )
-                    if parts:
-                        contents.append({"role": role, "parts": parts})
-                elif isinstance(content, str):
-                    contents.append({"role": role, "parts": [{"text": content}]})
-
-            tool_declarations = [
-                types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(
-                            name=tool.name,
-                            description=tool.description,
-                            parameters=tool.parameters,
-                        )
-                    ]
-                )
-                for tool in tools
-            ]
+            contents = self._contents_from_messages(messages)
+            tool_declarations = self._tool_declarations(tools)
             contents_to_send, cache_config = self._maybe_cached_content_config(
                 model,
                 contents,
@@ -523,32 +620,8 @@ class GeminiProvider:
                     )
                 else:
                     raise
-            text = getattr(response, "text", "") or ""
-            tool_calls: list[ChatToolCall] = []
-            for candidate in getattr(response, "candidates", []) or []:
-                content = getattr(candidate, "content", None)
-                for part in getattr(content, "parts", []) or []:
-                    function_call = getattr(part, "function_call", None)
-                    if function_call:
-                        thought_signature = self._extract_thought_signature(
-                            part, function_call
-                        )
-                        if not thought_signature:
-                            self.logger.info(
-                                "Gemini tool call missing thought_signature for %s",
-                                getattr(function_call, "name", ""),
-                            )
-                        tool_calls.append(
-                            ChatToolCall(
-                                id=(
-                                    getattr(function_call, "id", None)
-                                    or getattr(function_call, "name", "")
-                                ),
-                                name=function_call.name,
-                                arguments=function_call.args or {},
-                                thought_signature=thought_signature,
-                            )
-                        )
+            text = self._extract_response_text(response)
+            tool_calls = self._tool_calls_from_response(response)
             usage = getattr(response, "usage_metadata", None)
             return ChatResponse(
                 content=text,
@@ -558,6 +631,49 @@ class GeminiProvider:
             )
 
         return await anyio.to_thread.run_sync(_run)
+
+    async def chat_stream_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[ChatToolSpec],
+        tool_choice: object | None = None,
+    ):
+        _ = tool_choice
+        system_instruction = self._extract_system_instruction(messages)
+        contents = self._contents_from_messages(messages)
+        tool_declarations = self._tool_declarations(tools)
+        pending_tool_calls: dict[str, ChatToolCall] = {}
+        signaled_tool_calls = False
+        usage_sent = False
+
+        async for chunk in self._generate_content_stream_with_cache_fallback(
+            model=model,
+            contents=contents,
+            system_instruction=system_instruction,
+            tools=tool_declarations,
+        ):
+            text = self._extract_response_text(chunk)
+            if text:
+                yield ChatStreamChunk(content=text)
+            for call in self._tool_calls_from_response(chunk):
+                key = f"{call.id}:{call.name}"
+                if key not in pending_tool_calls and not signaled_tool_calls:
+                    signaled_tool_calls = True
+                    yield ChatStreamChunk(finish_reason="tool_calls")
+                pending_tool_calls[key] = call
+            usage = getattr(chunk, "usage_metadata", None)
+            if usage is not None:
+                usage_sent = True
+                yield ChatStreamChunk(usage=self._usage_from_metadata(usage))
+
+        if not usage_sent:
+            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+        tool_calls = list(pending_tool_calls.values())
+        yield ChatStreamChunk(
+            tool_calls=tool_calls or None,
+            finish_reason="tool_calls" if tool_calls else "stop",
+        )
 
     async def chat_grounded(self, model: str, messages: list[dict]) -> ChatResponse:
         def _run() -> ChatResponse:

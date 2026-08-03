@@ -32,6 +32,7 @@ class ModelCreateRequest(BaseModel):
     context_length: int | None = None
     supports_image_input: bool | None = None
     supports_image_output: bool | None = None
+    uses_responses_api: bool | None = None
     reasoning_effort: str | None = None
 
 
@@ -45,6 +46,7 @@ class ModelRead(BaseModel):
     context_length: int | None = None
     supports_image_input: bool | None = None
     supports_image_output: bool | None = None
+    uses_responses_api: bool | None = None
     reasoning_effort: str | None = None
     is_available: bool = True
 
@@ -52,6 +54,7 @@ class ModelRead(BaseModel):
 class ModelUpdateRequest(BaseModel):
     display_name: str | None = None
     reasoning_effort: str | None = None
+    uses_responses_api: bool | None = None
 
 
 class ModelOrderUpdateRequest(BaseModel):
@@ -228,6 +231,7 @@ def create_model(
         context_length=context_length,
         supports_image_input=supports_image_input_value,
         supports_image_output=supports_image_output_value,
+        uses_responses_api=payload.uses_responses_api,
         reasoning_effort=_normalize_reasoning_effort(payload.reasoning_effort),
     )
     session.add(model)
@@ -258,6 +262,7 @@ def create_model(
         context_length=model.context_length,
         supports_image_input=model.supports_image_input,
         supports_image_output=model.supports_image_output,
+        uses_responses_api=model.uses_responses_api,
         reasoning_effort=model.reasoning_effort,
     )
 
@@ -293,6 +298,7 @@ def list_models(
                 context_length=model.context_length,
                 supports_image_input=model.supports_image_input,
                 supports_image_output=model.supports_image_output,
+                uses_responses_api=model.uses_responses_api,
                 reasoning_effort=model.reasoning_effort,
             )
             for model in models
@@ -337,6 +343,7 @@ def list_models(
             context_length=model.context_length,
             supports_image_input=model.supports_image_input,
             supports_image_output=model.supports_image_output,
+            uses_responses_api=model.uses_responses_api,
             reasoning_effort=model.reasoning_effort,
             is_available=model.provider not in disabled_providers,
         )
@@ -442,6 +449,7 @@ def update_model_order(
             context_length=model.context_length,
             supports_image_input=model.supports_image_input,
             supports_image_output=model.supports_image_output,
+            uses_responses_api=model.uses_responses_api,
             reasoning_effort=model.reasoning_effort,
         )
         for model in ordered
@@ -463,6 +471,8 @@ def update_model(
         model.display_name = payload.display_name.strip() or model.display_name
     if payload.reasoning_effort is not None:
         model.reasoning_effort = _normalize_reasoning_effort(payload.reasoning_effort)
+    if payload.uses_responses_api is not None:
+        model.uses_responses_api = payload.uses_responses_api
     session.add(model)
     session.commit()
     session.refresh(model)
@@ -476,6 +486,7 @@ def update_model(
         context_length=model.context_length,
         supports_image_input=model.supports_image_input,
         supports_image_output=model.supports_image_output,
+        uses_responses_api=model.uses_responses_api,
         reasoning_effort=model.reasoning_effort,
     )
 
@@ -555,6 +566,7 @@ def set_org_models(
             context_length=model.context_length,
             supports_image_input=model.supports_image_input,
             supports_image_output=model.supports_image_output,
+            uses_responses_api=model.uses_responses_api,
             reasoning_effort=model.reasoning_effort,
         )
         for model in models

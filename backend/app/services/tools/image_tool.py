@@ -198,30 +198,35 @@ async def generate_image(
                 else settings.openai_base_url,
             )
         try:
-            result = await client.images.generate(
-                model=model.model_name,
-                prompt=prompt,
-                size="1024x1024",
-                response_format="b64_json",
+            request_kwargs: dict[str, Any] = {
+                "model": model.model_name,
+                "prompt": prompt,
+                "size": "1024x1024",
+            }
+            # gpt-image-* rejects response_format; only older DALL·E accepts it.
+            if (model.model_name or "").strip().lower().startswith("dall-e"):
+                request_kwargs["response_format"] = "b64_json"
+            try:
+                result = await client.images.generate(**request_kwargs)
+            except BadRequestError as exc:
+                if "response_format" in str(exc) and "response_format" in request_kwargs:
+                    logger.info(
+                        "Image API does not support response_format; retrying without it"
+                    )
+                    request_kwargs.pop("response_format", None)
+                    result = await client.images.generate(**request_kwargs)
+                else:
+                    raise
+            return await _build_image_result(
+                "generate_image",
+                result,
+                model_id=str(model.id),
+                image_width=1024,
+                image_height=1024,
+                image_format="png",
             )
-        except BadRequestError as exc:
-            if "response_format" in str(exc):
-                logger.info("Image API does not support response_format; retrying without it")
-                result = await client.images.generate(
-                    model=model.model_name,
-                    prompt=prompt,
-                    size="1024x1024",
-                )
-            else:
-                raise
-        return await _build_image_result(
-            "generate_image",
-            result,
-            model_id=str(model.id),
-            image_width=1024,
-            image_height=1024,
-            image_format="png",
-        )
+        finally:
+            await client.close()
 
     if model.provider == "gemini":
         provider_config = require_provider_enabled(session, context.org_id, model.provider)
@@ -368,67 +373,74 @@ async def edit_image(
                 if provider_config
                 else settings.openai_base_url,
             )
-        image_bytes = base64.b64decode(image_base64)
-        image_file = io.BytesIO(image_bytes)
-        image_file.name = "image.png"
-        mask_file = None
-        if mask_base64:
-            mask_bytes = base64.b64decode(mask_base64)
-            mask_file = io.BytesIO(mask_bytes)
-            mask_file.name = "mask.png"
-        request_kwargs: dict[str, Any] = {
-            "model": model.model_name,
-            "image": image_file,
-            "prompt": prompt,
-        }
-        if (model.model_name or "").strip().lower() == "dall-e-2":
-            request_kwargs["response_format"] = "b64_json"
-        # OpenAI image edit expects mask to be omitted entirely when unused.
-        if mask_file is not None:
-            request_kwargs["mask"] = mask_file
         try:
-            result = await client.images.edit(**request_kwargs)
-        except BadRequestError as exc:
-            if "response_format" in str(exc):
-                logger.info("Image edit API does not support response_format; retrying without it")
-                request_kwargs.pop("response_format", None)
-                image_file.seek(0)
-                if mask_file is not None:
-                    mask_file.seek(0)
+            image_bytes = base64.b64decode(image_base64)
+            image_file = io.BytesIO(image_bytes)
+            image_file.name = "image.png"
+            mask_file = None
+            if mask_base64:
+                mask_bytes = base64.b64decode(mask_base64)
+                mask_file = io.BytesIO(mask_bytes)
+                mask_file.name = "mask.png"
+            request_kwargs: dict[str, Any] = {
+                "model": model.model_name,
+                "image": image_file,
+                "prompt": prompt,
+            }
+            if (model.model_name or "").strip().lower() == "dall-e-2":
+                request_kwargs["response_format"] = "b64_json"
+            # OpenAI image edit expects mask to be omitted entirely when unused.
+            if mask_file is not None:
+                request_kwargs["mask"] = mask_file
+            try:
                 result = await client.images.edit(**request_kwargs)
-            elif "Value must be 'dall-e-2'" in str(exc):
-                fallback = _get_edit_compatible_image_model(
-                    session,
-                    context.org_id,
-                    provider=model.provider,
-                    exclude_model_id=model.id,
-                )
-                if fallback:
+            except BadRequestError as exc:
+                if "response_format" in str(exc):
                     logger.info(
-                        "images.edit fallback org_id=%s from=%s to=%s",
-                        context.org_id,
-                        model.model_name,
-                        fallback.model_name,
+                        "Image edit API does not support response_format; retrying without it"
                     )
-                    request_kwargs["model"] = fallback.model_name
+                    request_kwargs.pop("response_format", None)
                     image_file.seek(0)
                     if mask_file is not None:
                         mask_file.seek(0)
                     result = await client.images.edit(**request_kwargs)
-                    model = fallback
-                else:
-                    return ToolResult(
-                        name="edit_image",
-                        output={
-                            "error": (
-                                f"Image edit failed: model '{model.model_name}' is not accepted by image edits API. "
-                                "Use an enabled image edit model."
-                            )
-                        },
+                elif "Value must be 'dall-e-2'" in str(exc):
+                    fallback = _get_edit_compatible_image_model(
+                        session,
+                        context.org_id,
+                        provider=model.provider,
+                        exclude_model_id=model.id,
                     )
-            else:
-                raise
-        return await _build_image_result("edit_image", result, model_id=str(model.id))
+                    if fallback:
+                        logger.info(
+                            "images.edit fallback org_id=%s from=%s to=%s",
+                            context.org_id,
+                            model.model_name,
+                            fallback.model_name,
+                        )
+                        request_kwargs["model"] = fallback.model_name
+                        image_file.seek(0)
+                        if mask_file is not None:
+                            mask_file.seek(0)
+                        result = await client.images.edit(**request_kwargs)
+                        model = fallback
+                    else:
+                        return ToolResult(
+                            name="edit_image",
+                            output={
+                                "error": (
+                                    f"Image edit failed: model '{model.model_name}' is not accepted by image edits API. "
+                                    "Use an enabled image edit model."
+                                )
+                            },
+                        )
+                else:
+                    raise
+            return await _build_image_result(
+                "edit_image", result, model_id=str(model.id)
+            )
+        finally:
+            await client.close()
 
     if model.provider == "gemini":
         provider_config = require_provider_enabled(session, context.org_id, model.provider)

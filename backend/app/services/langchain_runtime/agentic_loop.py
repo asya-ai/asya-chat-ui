@@ -202,6 +202,7 @@ async def run_agentic_loop_langchain(
     max_steps: int,
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
+    delta_sender: anyio.abc.ObjectSendStream | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     executor = LangChainToolExecutor(tool_registry)
     tool_specs = executor.list_specs()
@@ -218,23 +219,60 @@ async def run_agentic_loop_langchain(
         if tool_event_sender:
             await tool_event_sender.send(payload)
 
+    emitted_text_parts: list[str] = []
+
+    async def _emit_delta(text: str) -> None:
+        if not text:
+            return
+        emitted_text_parts.append(text)
+        if delta_sender:
+            await delta_sender.send({"delta": text})
+
+    async def _call_model() -> tuple[str, list[Any], ChatUsage | None]:
+        if hasattr(provider, "chat_stream_with_tools"):
+            content_parts: list[str] = []
+            tool_calls: list[Any] = []
+            step_usage: ChatUsage | None = None
+            async for chunk in provider.chat_stream_with_tools(
+                model_name, messages, tool_specs
+            ):
+                if chunk.tool_calls:
+                    tool_calls = list(chunk.tool_calls)
+                if chunk.content:
+                    content_parts.append(chunk.content)
+                    await _emit_delta(chunk.content)
+                if chunk.usage:
+                    step_usage = chunk.usage
+            return "".join(content_parts), tool_calls, step_usage
+
+        response = await provider.chat_with_tools(model_name, messages, tool_specs)
+        content = response.content or ""
+        tool_calls = list(response.tool_calls or [])
+        if content:
+            await _emit_delta(content)
+        return content, tool_calls, response.usage
+
+    def _visible_content(fallback: str) -> str:
+        if emitted_text_parts:
+            return "".join(emitted_text_parts)
+        return fallback
+
     for step in range(max_steps):
         await _emit_activity(f"Step {step + 1}/{max_steps}", "start")
         thinking_label = "Thinking"
         await _emit_activity(thinking_label, "start")
-        response = await provider.chat_with_tools(model_name, messages, tool_specs)
-        usage = _merge_chat_usage(usage, response.usage)
-        tool_calls = response.tool_calls or []
+        content, tool_calls, step_usage = await _call_model()
+        usage = _merge_chat_usage(usage, step_usage)
         if not tool_calls:
             await _emit_activity(thinking_label, "end")
             await _emit_activity("Answering", "start")
-            return response.content or "", attachments, sources, image_usages, usage
+            return _visible_content(content), attachments, sources, image_usages, usage
 
         await _emit_activity(thinking_label, "end")
         messages.append(
             {
                 "role": "assistant",
-                "content": response.content or "",
+                "content": content,
                 "tool_calls": [
                     {
                         "id": call.id,
@@ -337,6 +375,16 @@ async def run_agentic_loop_langchain(
                             "result_preview": json.dumps(tool_output, ensure_ascii=False)[:240],
                             "raw_output": tool_output,
                             "error": tool_output.get("error"),
+                            "attachments": [
+                                {
+                                    "file_name": item.get("file_name"),
+                                    "content_type": item.get("content_type"),
+                                    "data_base64": item.get("data_base64"),
+                                }
+                                for item in (result.attachments or [])
+                                if isinstance(item, dict) and item.get("data_base64")
+                            ]
+                            or None,
                         },
                     }
                 )

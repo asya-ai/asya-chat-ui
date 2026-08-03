@@ -163,6 +163,9 @@ class ChatModel(SQLModel, table=True):
     context_length: Optional[int] = Field(default=None)
     supports_image_input: Optional[bool] = Field(default=None)
     supports_image_output: Optional[bool] = Field(default=None)
+    # OpenAI: True => use /v1/responses instead of /v1/chat/completions.
+    # Learned automatically when chat.completions rejects the model.
+    uses_responses_api: Optional[bool] = Field(default=None)
     reasoning_effort: Optional[str] = Field(default=None)
 
     chats: List["Chat"] = Relationship(back_populates="model")

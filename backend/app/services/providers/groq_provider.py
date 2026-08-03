@@ -211,3 +211,130 @@ class GroqProvider:
                 )
         if not usage_sent:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+
+    async def chat_stream_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[ChatToolSpec],
+        tool_choice: object | None = None,
+    ):
+        normalized_messages = []
+        for message in messages:
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                normalized_messages.append(
+                    {
+                        **{k: v for k, v in message.items() if k != "tool_calls"},
+                        "tool_calls": [
+                            {
+                                "id": call.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": call.get("name"),
+                                    "arguments": json.dumps(call.get("arguments", {})),
+                                },
+                            }
+                            for call in tool_calls
+                        ],
+                    }
+                )
+            else:
+                normalized_messages.append(message)
+        payload = {
+            "model": model,
+            "messages": normalized_messages,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ],
+            "tool_choice": tool_choice or "auto",
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        self._apply_prompt_cache(payload)
+        try:
+            stream = await self.client.chat.completions.create(**payload)
+        except Exception as exc:
+            if self._strip_prompt_cache(payload):
+                self.logger.error(
+                    "groq chat.completions rejected prompt_cache params, retrying without them: %s",
+                    exc,
+                    exc_info=True,
+                )
+                stream = await self.client.chat.completions.create(**payload)
+            else:
+                raise
+
+        pending_tool_calls: dict[int, dict[str, str]] = {}
+        finish_reason: str | None = None
+        usage_sent = False
+        signaled_tool_calls = False
+        async for event in stream:
+            if event.choices:
+                choice = event.choices[0]
+                finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                delta = choice.delta
+                tool_deltas = getattr(delta, "tool_calls", None) or []
+                if tool_deltas and not signaled_tool_calls:
+                    signaled_tool_calls = True
+                    yield ChatStreamChunk(finish_reason="tool_calls")
+                if delta and delta.content:
+                    yield ChatStreamChunk(content=delta.content)
+                for call in tool_deltas:
+                    index = getattr(call, "index", 0) or 0
+                    entry = pending_tool_calls.setdefault(
+                        index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    if call.id:
+                        entry["id"] = call.id
+                    function = getattr(call, "function", None)
+                    if function is not None:
+                        if function.name:
+                            entry["name"] = function.name
+                        if function.arguments:
+                            entry["arguments"] += function.arguments
+            if event.usage:
+                usage_sent = True
+                yield ChatStreamChunk(
+                    usage=ChatUsage(
+                        prompt_tokens=event.usage.prompt_tokens or 0,
+                        completion_tokens=event.usage.completion_tokens or 0,
+                        total_tokens=event.usage.total_tokens or 0,
+                        input_tokens=event.usage.prompt_tokens or 0,
+                        output_tokens=event.usage.completion_tokens or 0,
+                        cached_tokens=0,
+                        thinking_tokens=0,
+                    )
+                )
+
+        tool_calls: list[ChatToolCall] = []
+        for index in sorted(pending_tool_calls):
+            entry = pending_tool_calls[index]
+            arguments: dict = {}
+            if entry["arguments"]:
+                try:
+                    parsed_arguments = repair_json_loads(entry["arguments"])
+                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                except Exception:
+                    arguments = {}
+            tool_calls.append(
+                ChatToolCall(
+                    id=entry["id"] or f"call_{index}",
+                    name=entry["name"],
+                    arguments=arguments,
+                )
+            )
+        if not usage_sent:
+            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+        yield ChatStreamChunk(
+            tool_calls=tool_calls or None,
+            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
+        )

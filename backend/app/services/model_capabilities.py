@@ -206,3 +206,17 @@ def supports_image_input(model: ChatModel) -> bool:
 
 def supports_image_output(model: ChatModel) -> bool:
     return model.supports_image_output is True
+
+
+def persist_responses_api_discovery(session: Session, model: ChatModel, provider: object) -> bool:
+    """If the provider learned the model needs /v1/responses, store it on ChatModel."""
+    consume = getattr(provider, "consume_responses_api_discovery", None)
+    if not callable(consume) or not consume():
+        return False
+    if model.uses_responses_api is True:
+        return False
+    model.uses_responses_api = True
+    session.add(model)
+    session.commit()
+    session.refresh(model)
+    return True

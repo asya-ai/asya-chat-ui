@@ -5,11 +5,12 @@ import { useQueryClient } from "@tanstack/react-query"
 
 import { ApiError, agentApi, chatApi, configApi } from "@/lib/api"
 import {
+  actionInfoLevelStore,
   codeExecutionEnabledStore,
   modelStore,
   orgStore,
-  toolCallLogsVisibleStore,
   webSearchEnabledStore,
+  type ActionInfoLevel,
 } from "@/lib/storage"
 import type {
   Chat,
@@ -66,6 +67,80 @@ const extractAttachmentIdFromContentUrl = (url?: string): string | undefined => 
   return match?.[1]
 }
 
+const isTimelineActionLabel = (label: string): boolean =>
+  !/^Step \d+\/\d+$/.test(label) && label !== "Thinking" && label !== "Answering"
+
+const appendStreamText = (
+  parts: ChatMessage["stream_parts"],
+  delta: string
+): NonNullable<ChatMessage["stream_parts"]> => {
+  const next = [...(parts ?? [])]
+  const last = next[next.length - 1]
+  if (last?.type === "text") {
+    next[next.length - 1] = { type: "text", text: last.text + delta }
+  } else {
+    next.push({ type: "text", text: delta })
+  }
+  return next
+}
+
+const appendStreamAction = (
+  parts: ChatMessage["stream_parts"],
+  label: string
+): NonNullable<ChatMessage["stream_parts"]> => [...(parts ?? []), { type: "action", label }]
+
+const attachStreamActionAttachments = (
+  parts: ChatMessage["stream_parts"],
+  label: string,
+  attachments: NonNullable<ChatMessage["attachments"]>
+): NonNullable<ChatMessage["stream_parts"]> => {
+  const next = [...(parts ?? [])]
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    const part = next[i]
+    if (part.type === "action" && part.label === label && !part.attachments?.length) {
+      next[i] = { ...part, attachments }
+      return next
+    }
+  }
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    const part = next[i]
+    if (part.type === "action" && part.label === label) {
+      next[i] = {
+        ...part,
+        attachments: [...(part.attachments ?? []), ...attachments],
+      }
+      return next
+    }
+  }
+  next.push({ type: "action", label, attachments })
+  return next
+}
+
+const attachmentIdentity = (attachment: {
+  file_name?: string | null
+  content_type?: string | null
+  data_base64?: string | null
+  content_url?: string | null
+}) =>
+  attachment.data_base64 ||
+  attachment.content_url ||
+  `${attachment.file_name ?? ""}:${attachment.content_type ?? ""}`
+
+const mergeMessageAttachments = (
+  existing: ChatMessage["attachments"],
+  incoming: NonNullable<ChatMessage["attachments"]>
+): NonNullable<ChatMessage["attachments"]> => {
+  const merged = [...(existing ?? [])]
+  const seen = new Set(merged.map(attachmentIdentity))
+  for (const item of incoming) {
+    const key = attachmentIdentity(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(item)
+  }
+  return merged
+}
+
 export const ChatPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -114,9 +189,9 @@ export const ChatPage = () => {
   const [incognitoEnabled, setIncognitoEnabled] = useState(
     () => window.sessionStorage.getItem("chatui_incognito_enabled") === "1"
   )
-  const [showToolCallLogs, setShowToolCallLogs] = useState<boolean>(() => {
-    return toolCallLogsVisibleStore.get() === "1"
-  })
+  const [actionInfoLevel, setActionInfoLevel] = useState<ActionInfoLevel>(() =>
+    actionInfoLevelStore.get()
+  )
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -125,8 +200,6 @@ export const ChatPage = () => {
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
-  const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false)
-  const [clearingHistory, setClearingHistory] = useState(false)
   const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState<boolean | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -280,7 +353,7 @@ export const ChatPage = () => {
             ? {
                 ...msg,
                 generation_status: "cancelled",
-                thinking_steps: [],
+                thinking_steps: msg.thinking_steps ?? [],
                 content:
                   msg.content && msg.content.trim().length > 0
                     ? msg.content
@@ -390,11 +463,30 @@ export const ChatPage = () => {
 
   const applyStreamEvent = useCallback(
     (targetChatId: string, assistantId: string, event: Record<string, unknown>) => {
-      const matchesAssistant = (msg: ChatMessage) =>
-        msg.id === assistantId ||
-        ("task_id" in event && msg.task_id === event.task_id) ||
-        ("message_id" in event && msg.id === event.message_id) ||
-        ("assistant_message_id" in event && msg.id === event.assistant_message_id)
+      const matchesAssistant = (msg: ChatMessage) => {
+        // Never match tool/event bubbles that share a task_id with the assistant.
+        if (msg.role !== "assistant") return false
+        if (msg.id === assistantId) return true
+        if (
+          typeof event.message_id === "string" &&
+          event.message_id &&
+          msg.id === event.message_id
+        ) {
+          return true
+        }
+        if (
+          typeof event.assistant_message_id === "string" &&
+          event.assistant_message_id &&
+          msg.id === event.assistant_message_id
+        ) {
+          return true
+        }
+        return (
+          typeof event.task_id === "string" &&
+          Boolean(event.task_id) &&
+          msg.task_id === event.task_id
+        )
+      }
 
       if ("done" in event && event.done === true) {
         const messageId = typeof event.message_id === "string" ? event.message_id : null
@@ -415,7 +507,7 @@ export const ChatPage = () => {
                     msg.attachments,
                   sources:
                     (event.sources as ChatMessage["sources"]) ?? msg.sources,
-                  thinking_steps: [],
+                  thinking_steps: msg.thinking_steps ?? [],
                   generation_status: "completed",
                 }
               : msg
@@ -431,7 +523,7 @@ export const ChatPage = () => {
               ? {
                   ...msg,
                   content: errorText,
-                  thinking_steps: [],
+                  thinking_steps: msg.thinking_steps ?? [],
                   generation_status: "failed",
                 }
               : msg
@@ -440,16 +532,24 @@ export const ChatPage = () => {
         return
       }
       if ("delta" in event && typeof event.delta === "string") {
+        const delta = event.delta as string
         updateChatMessagesFor(targetChatId, (prev) =>
-          prev.map((msg) =>
-            matchesAssistant(msg)
-              ? {
-                  ...msg,
-                  content: msg.content + event.delta,
-                  generation_status: "streaming",
-                }
-              : msg
-          )
+          prev.map((msg) => {
+            if (!matchesAssistant(msg)) return msg
+            // If timeline was never built (e.g. resume raced ahead of message load),
+            // seed from persisted content so new deltas don't hide history.
+            const seed =
+              !msg.stream_parts?.length && msg.content ? msg.content : null
+            const seededParts = seed
+              ? ([{ type: "text", text: seed }] as NonNullable<ChatMessage["stream_parts"]>)
+              : msg.stream_parts
+            return {
+              ...msg,
+              content: seed ? seed + delta : msg.content + delta,
+              stream_parts: appendStreamText(seededParts, delta),
+              generation_status: "streaming",
+            }
+          })
         )
         return
       }
@@ -526,6 +626,9 @@ export const ChatPage = () => {
               return {
                 ...msg,
                 thinking_steps: [...current, activity.label],
+                stream_parts: isTimelineActionLabel(activity.label)
+                  ? appendStreamAction(msg.stream_parts, activity.label)
+                  : msg.stream_parts,
               }
             }
             // Non-debug thinking UI keeps completed actions visible until the
@@ -553,6 +656,37 @@ export const ChatPage = () => {
             toolEvent,
             typeof event.task_id === "string" ? event.task_id : null
           )
+          if (
+            toolEvent.type === "tool_call" &&
+            toolEvent.state === "end" &&
+            Array.isArray(toolEvent.output?.attachments) &&
+            toolEvent.output.attachments.length > 0
+          ) {
+            const attachments = toolEvent.output.attachments
+            const label =
+              (typeof toolEvent.action_summary === "string" &&
+              toolEvent.action_summary.trim()
+                ? toolEvent.action_summary
+                : null) ||
+              (toolEvent.tool_name === "generate_image" ? "Generating image" : null)
+            if (label) {
+              updateChatMessagesFor(targetChatId, (prev) =>
+                prev.map((msg) =>
+                  matchesAssistant(msg)
+                    ? {
+                        ...msg,
+                        stream_parts: attachStreamActionAttachments(
+                          msg.stream_parts,
+                          label,
+                          attachments
+                        ),
+                        attachments: mergeMessageAttachments(msg.attachments, attachments),
+                      }
+                    : msg
+                )
+              )
+            }
+          }
         }
         return
       }
@@ -587,17 +721,58 @@ export const ChatPage = () => {
     async (targetChatId: string, taskId: string, assistantId: string) => {
       const after = taskCursorRef.current[taskId] ?? 0
       const events = await chatApi.listGenerationEvents(targetChatId, taskId, after)
-      if (events.length > 0) {
-        taskCursorRef.current[taskId] = events[events.length - 1].sequence
-        events.forEach((event) => {
-          const normalized = normalizeTaskEvent(event)
-          if (normalized) {
-            applyStreamEvent(targetChatId, assistantId, normalized as Record<string, unknown>)
-          }
-        })
+      // Another resume/fetch may have advanced the cursor while we were in-flight.
+      // Ignore stale full replays so activity labels don't double.
+      const currentAfter = taskCursorRef.current[taskId] ?? 0
+      if (after === 0 && currentAfter > 0) {
+        return
+      }
+      if (events.length === 0) return
+
+      let contentBackup = ""
+      if (after === 0) {
+        // Rebuild timeline from events. Clear content first so deltas don't
+        // duplicate text already persisted on the message.
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) => {
+            if (msg.role !== "assistant") return msg
+            if (msg.id !== assistantId && msg.task_id !== taskId) return msg
+            contentBackup = msg.content || contentBackup
+            return { ...msg, thinking_steps: [], stream_parts: [], content: "" }
+          })
+        )
+      }
+      taskCursorRef.current[taskId] = events[events.length - 1].sequence
+      events.forEach((event) => {
+        const normalized = normalizeTaskEvent(event)
+        if (normalized) {
+          applyStreamEvent(targetChatId, assistantId, normalized as Record<string, unknown>)
+        }
+      })
+      if (after === 0) {
+        updateChatMessagesFor(targetChatId, (prev) =>
+          prev.map((msg) => {
+            if (msg.role !== "assistant") return msg
+            if (msg.id !== assistantId && msg.task_id !== taskId) return msg
+            const partsText = (msg.stream_parts ?? [])
+              .filter(
+                (part): part is Extract<NonNullable<ChatMessage["stream_parts"]>[number], { type: "text" }> =>
+                  part.type === "text"
+              )
+              .map((part) => part.text)
+              .join("")
+            if (partsText.length > 0) {
+              return { ...msg, content: partsText }
+            }
+            if (contentBackup) {
+              return { ...msg, content: contentBackup }
+            }
+            return msg
+          })
+        )
       }
     },
-    [applyStreamEvent, normalizeTaskEvent]
+    [applyStreamEvent, normalizeTaskEvent, updateChatMessagesFor]
   )
 
   const applyTerminalTaskStatus = useCallback(
@@ -616,7 +791,7 @@ export const ChatPage = () => {
             return {
               ...msg,
               content: msg.content?.trim().length ? msg.content : fallback,
-              thinking_steps: [],
+              thinking_steps: msg.thinking_steps ?? [],
               generation_status: "failed",
             }
           }
@@ -626,13 +801,13 @@ export const ChatPage = () => {
             return {
               ...msg,
               content: msg.content?.trim().length ? msg.content : fallback,
-              thinking_steps: [],
+              thinking_steps: msg.thinking_steps ?? [],
               generation_status: "cancelled",
             }
           }
           return {
             ...msg,
-            thinking_steps: [],
+            thinking_steps: msg.thinking_steps ?? [],
             generation_status: "completed",
           }
         })
@@ -693,7 +868,7 @@ export const ChatPage = () => {
   const subscribeToTask = useCallback(
     (targetChatId: string, taskId: string, assistantId: string) => {
       if (taskSubscriptionsRef.current[taskId]) return
-      const after = taskCursorRef.current[taskId]
+      const after = taskCursorRef.current[taskId] ?? 0
       const { promise, cancel } = chatApi.subscribeGenerationTask(
         targetChatId,
         taskId,
@@ -717,7 +892,39 @@ export const ChatPage = () => {
 
   const replaceChatMessagesFor = useCallback(
     (targetChatId: string, messages: ChatMessage[]) => {
-      queryClient.setQueryData(["chatMessages", targetChatId], messages)
+      queryClient.setQueryData<ChatMessage[]>(["chatMessages", targetChatId], (prev) => {
+        if (!messages.length) return messages
+        if (!prev?.length) return messages
+        const preservedSteps = new Map<string, string[]>()
+        const preservedParts = new Map<string, NonNullable<ChatMessage["stream_parts"]>>()
+        for (const msg of prev) {
+          if (msg.role !== "assistant") continue
+          if (msg.thinking_steps?.length) {
+            if (msg.task_id) preservedSteps.set(`task:${msg.task_id}`, msg.thinking_steps)
+            preservedSteps.set(`id:${msg.id}`, msg.thinking_steps)
+          }
+          if (msg.stream_parts?.length) {
+            if (msg.task_id) preservedParts.set(`task:${msg.task_id}`, msg.stream_parts)
+            preservedParts.set(`id:${msg.id}`, msg.stream_parts)
+          }
+        }
+        if (preservedSteps.size === 0 && preservedParts.size === 0) return messages
+        return messages.map((msg) => {
+          if (msg.role !== "assistant") return msg
+          const steps =
+            (msg.task_id ? preservedSteps.get(`task:${msg.task_id}`) : undefined) ||
+            preservedSteps.get(`id:${msg.id}`)
+          const parts =
+            (msg.task_id ? preservedParts.get(`task:${msg.task_id}`) : undefined) ||
+            preservedParts.get(`id:${msg.id}`)
+          if (!steps?.length && !parts?.length) return msg
+          return {
+            ...msg,
+            ...(steps?.length ? { thinking_steps: steps } : {}),
+            ...(parts?.length ? { stream_parts: parts } : {}),
+          }
+        })
+      })
     },
     [queryClient]
   )
@@ -770,11 +977,15 @@ export const ChatPage = () => {
         }),
       ]
       return [...merged].sort((a, b) => {
+        const timeDiff =
+          parseChatDate(a.created_at).getTime() - parseChatDate(b.created_at).getTime()
+        if (timeDiff !== 0) return timeDiff
+        // Stable tie-break within the same task: assistant text, then tool cards.
         if (a.task_id && b.task_id && a.task_id === b.task_id) {
-          if (a.role === "tool" && b.role === "assistant") return -1
-          if (a.role === "assistant" && b.role === "tool") return 1
+          if (a.role === "assistant" && b.role === "tool") return -1
+          if (a.role === "tool" && b.role === "assistant") return 1
         }
-        return parseChatDate(a.created_at).getTime() - parseChatDate(b.created_at).getTime()
+        return 0
       })
     },
     [parseChatDate]
@@ -999,11 +1210,11 @@ export const ChatPage = () => {
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === "chatui_toolcall_logs_visible") {
-        setShowToolCallLogs(event.newValue === "1")
+        setActionInfoLevel(actionInfoLevelStore.parse(event.newValue))
       }
     }
     const onFocus = () => {
-      setShowToolCallLogs(toolCallLogsVisibleStore.get() === "1")
+      setActionInfoLevel(actionInfoLevelStore.get())
     }
     window.addEventListener("storage", onStorage)
     window.addEventListener("focus", onFocus)
@@ -1014,8 +1225,18 @@ export const ChatPage = () => {
   }, [])
 
   useEffect(() => {
+    // Reset catch-up cursors when switching chats so a new chat doesn't
+    // inherit another chat's event offset.
+    taskCursorRef.current = {}
+  }, [chatId])
+
+  useEffect(() => {
     if (!chatId) return
     if (loadingByChat[chatId]) return
+    // Wait for messages so catch-up can attach to the assistant bubble.
+    // Otherwise the cursor advances against an empty list and live deltas
+    // create a partial timeline that hides persisted content.
+    if (isMessagesLoading) return
     let cancelled = false
     const resumeTasks = async () => {
       try {
@@ -1033,7 +1254,17 @@ export const ChatPage = () => {
           }
           return
         }
-        tasks.forEach((task) => {
+        for (const task of tasks) {
+          if (cancelled) return
+          const messages =
+            queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
+          const hasAssistant = messages.some(
+            (msg) => msg.role === "assistant" && msg.id === task.assistant_message_id
+          )
+          if (!hasAssistant) {
+            // Messages query may still be empty/stale; retry on next effect run.
+            continue
+          }
           taskCursorRef.current[task.id] = taskCursorRef.current[task.id] ?? 0
           updateChatMessagesFor(chatId, (prev) =>
             prev.map((msg) =>
@@ -1046,9 +1277,12 @@ export const ChatPage = () => {
                 : msg
             )
           )
-          fetchTaskEvents(chatId, task.id, task.assistant_message_id).catch(() => null)
+          // Catch up from DB first, then subscribe from the advanced cursor so
+          // activity/tool events are not applied twice on refresh.
+          await fetchTaskEvents(chatId, task.id, task.assistant_message_id)
+          if (cancelled) return
           subscribeToTask(chatId, task.id, task.assistant_message_id)
-        })
+        }
       } catch {
         // ignore resume errors
       }
@@ -1064,13 +1298,16 @@ export const ChatPage = () => {
     updateChatMessagesFor,
     replaceChatMessagesFor,
     loadingByChat,
+    isMessagesLoading,
+    // Length is enough to retry once messages appear; avoid re-running on every delta.
+    serverMessages.length,
     queryClient,
   ])
 
   const visibleMessages = useMemo(() => {
     const merged = mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
       if (!msg.tool_event) return true
-      return showToolCallLogs
+      return actionInfoLevel === "detailed"
     })
     return collapseActivityEvents(merged)
   }, [
@@ -1078,7 +1315,7 @@ export const ChatPage = () => {
     mergeToolEvents,
     serverMessages,
     toolEvents,
-    showToolCallLogs,
+    actionInfoLevel,
   ])
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
@@ -1203,19 +1440,6 @@ export const ChatPage = () => {
       replaceCurrentChatMessages([])
       setToolEvents([])
       navigate("/chat", { replace: true })
-    }
-  }
-
-  const clearHistory = async () => {
-    if (!orgId || chats.length === 0) return
-    setClearingHistory(true)
-    try {
-      await Promise.all(chats.map((chat) => chatApi.deleteChat(chat.id)))
-      queryClient.setQueryData<Chat[]>(["chats", orgId], [])
-      setClearHistoryConfirmOpen(false)
-    } finally {
-      setClearingHistory(false)
-      refetchChats().catch(() => null)
     }
   }
 
@@ -2070,7 +2294,10 @@ export const ChatPage = () => {
         (msg.model_name ? msg.model_name.toLowerCase().includes("image") : false)
       const activeThinking = msg.thinking_steps ?? []
       const nonStepThinking = activeThinking.filter(
-        (label) => !/^Step \d+\/\d+$/.test(label) && label !== "Thinking"
+        (label) =>
+          !/^Step \d+\/\d+$/.test(label) &&
+          label !== "Thinking" &&
+          label !== "Answering"
       )
       const stepLabel =
         activeThinking.find((label) => /^Step \d+\/\d+$/.test(label)) ?? null
@@ -2100,7 +2327,7 @@ export const ChatPage = () => {
           thinkingLabels={thinkingLabels}
           currentStepLabel={stepLabel}
           currentToolLabel={currentToolLabel}
-          showToolCallLogs={showToolCallLogs}
+          actionInfoLevel={actionInfoLevel}
           actionsEnabled={!isSharedView}
           isEditing={isEditing}
           isEditDragActive={isEditing && isEditDragActive}
@@ -2150,7 +2377,7 @@ export const ChatPage = () => {
       handleEditDrop,
       removeEditingAttachment,
       isSharedView,
-      showToolCallLogs,
+      actionInfoLevel,
     ]
   )
 
@@ -2317,7 +2544,6 @@ export const ChatPage = () => {
             }
             labels={{
               title: t("chat_history"),
-              clearAll: t("chat_history_clear_all"),
               search: t("chat_search_placeholder"),
               empty: chatSearchQuery
                 ? t("chat_search_no_results")
@@ -2330,7 +2556,6 @@ export const ChatPage = () => {
             }}
             onQueryChange={setChatSearchQuery}
             onSelectChat={(chat) => handleSelectChat(chat)}
-            onClearAll={() => setClearHistoryConfirmOpen(true)}
             onDeleteChat={setDeleteConfirmChat}
             onToggleShareChat={toggleShareChat}
             formatDate={formatHistoryDate}
@@ -2515,31 +2740,6 @@ export const ChatPage = () => {
                 }}
               >
                 {t("chat_delete")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-        <Dialog open={clearHistoryConfirmOpen} onOpenChange={setClearHistoryConfirmOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("chat_history_clear_confirm_title")}</DialogTitle>
-              <DialogDescription>{t("chat_history_clear_confirm_desc")}</DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button
-                autoFocus
-                variant="outline"
-                disabled={clearingHistory}
-                onClick={() => setClearHistoryConfirmOpen(false)}
-              >
-                {t("chat_cancel")}
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={clearingHistory}
-                onClick={() => clearHistory().catch(() => null)}
-              >
-                {clearingHistory ? t("chat_history_clearing") : t("chat_history_clear_all")}
               </Button>
             </DialogFooter>
           </DialogContent>

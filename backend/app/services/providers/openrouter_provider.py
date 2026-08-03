@@ -11,6 +11,7 @@ class OpenRouterProvider(OpenAIProvider):
         reasoning_effort: str | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
+        prefer_responses_api: bool = False,
     ) -> None:
         super().__init__(
             api_key=api_key or settings.openrouter_api_key,
@@ -18,6 +19,7 @@ class OpenRouterProvider(OpenAIProvider):
             reasoning_effort=reasoning_effort,
             prompt_cache_key=prompt_cache_key,
             prompt_cache_retention=prompt_cache_retention,
+            prefer_responses_api=prefer_responses_api,
         )
         self.client.default_headers = {
             "HTTP-Referer": "https://chatui.com", # TODO: Make this configurable

@@ -1,4 +1,5 @@
 import logging
+from collections.abc import AsyncIterator
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 from json_repair import loads as repair_json_loads
 
@@ -208,9 +209,117 @@ def _extract_usage_details(usage: object | None) -> tuple[int, int]:
     return cached_tokens or 0, thinking_tokens or 0
 
 
-def _looks_like_responses_only_model(model: str) -> bool:
-    normalized = (model or "").strip().lower()
-    return normalized.endswith("-pro")
+def _usage_chunk_from_response_usage(usage: object | None) -> ChatStreamChunk:
+    cached_tokens, thinking_tokens = _extract_usage_details(usage)
+    prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+        _coalesce_usage_tokens(usage)
+    )
+    if input_tokens == 0:
+        input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+    return ChatStreamChunk(
+        usage=ChatUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            input_tokens=input_tokens or prompt_tokens,
+            output_tokens=output_tokens or completion_tokens,
+            cached_tokens=cached_tokens or 0,
+            thinking_tokens=thinking_tokens or 0,
+        )
+    )
+
+
+def _tool_calls_from_pending(
+    pending_tool_calls: dict[int, dict[str, str]],
+) -> list[ChatToolCall]:
+    tool_calls: list[ChatToolCall] = []
+    for index in sorted(pending_tool_calls):
+        entry = pending_tool_calls[index]
+        arguments: dict = {}
+        if entry.get("arguments"):
+            try:
+                parsed_arguments = repair_json_loads(entry["arguments"])
+                arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+            except Exception:
+                arguments = {}
+        name = entry.get("name") or ""
+        if not name:
+            continue
+        tool_calls.append(
+            ChatToolCall(
+                id=entry.get("id") or f"call_{index}",
+                name=name,
+                arguments=arguments,
+            )
+        )
+    return tool_calls
+
+
+async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]:
+    pending_tool_calls: dict[int, dict[str, str]] = {}
+    signaled_tool_calls = False
+    final_response = None
+    async for event in stream:
+        event_type = getattr(event, "type", None)
+        if event_type == "response.output_text.delta":
+            delta = getattr(event, "delta", None)
+            if delta:
+                yield ChatStreamChunk(content=delta)
+            continue
+        if event_type == "response.output_item.added":
+            item = getattr(event, "item", None)
+            if getattr(item, "type", None) == "function_call":
+                if not signaled_tool_calls:
+                    signaled_tool_calls = True
+                    yield ChatStreamChunk(finish_reason="tool_calls")
+                index = getattr(event, "output_index", 0) or 0
+                pending_tool_calls[index] = {
+                    "id": str(
+                        getattr(item, "call_id", None)
+                        or getattr(item, "id", None)
+                        or ""
+                    ),
+                    "name": str(getattr(item, "name", None) or ""),
+                    "arguments": str(getattr(item, "arguments", None) or ""),
+                }
+            continue
+        if event_type == "response.function_call_arguments.delta":
+            if not signaled_tool_calls:
+                signaled_tool_calls = True
+                yield ChatStreamChunk(finish_reason="tool_calls")
+            index = getattr(event, "output_index", 0) or 0
+            entry = pending_tool_calls.setdefault(
+                index, {"id": "", "name": "", "arguments": ""}
+            )
+            entry["arguments"] += str(getattr(event, "delta", None) or "")
+            continue
+        if event_type == "response.output_item.done":
+            item = getattr(event, "item", None)
+            if getattr(item, "type", None) == "function_call":
+                index = getattr(event, "output_index", 0) or 0
+                entry = pending_tool_calls.setdefault(
+                    index, {"id": "", "name": "", "arguments": ""}
+                )
+                call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
+                name = getattr(item, "name", None)
+                arguments = getattr(item, "arguments", None)
+                if call_id:
+                    entry["id"] = str(call_id)
+                if name:
+                    entry["name"] = str(name)
+                if isinstance(arguments, str) and arguments:
+                    entry["arguments"] = arguments
+            continue
+        if event_type == "response.completed":
+            final_response = getattr(event, "response", None)
+
+    tool_calls = _tool_calls_from_pending(pending_tool_calls)
+    usage = getattr(final_response, "usage", None) if final_response is not None else None
+    yield _usage_chunk_from_response_usage(usage)
+    yield ChatStreamChunk(
+        tool_calls=tool_calls or None,
+        finish_reason="tool_calls" if tool_calls else "stop",
+    )
 
 
 def _to_responses_tool_choice(tool_choice: object | None) -> object | None:
@@ -238,12 +347,11 @@ class OpenAIProvider:
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         prompt_cache_enabled: bool = True,
+        prefer_responses_api: bool = False,
     ) -> None:
         self.chat_timeout_seconds = 120.0
-        # /v1/responses calls (used for *-pro reasoning models) can legitimately
-        # take several minutes when reasoning.effort is high. Match the OpenAI
-        # SDK default of 600s here so we don't kill connections that the server
-        # is still working on. Celery soft/hard limits (15m/20m) bound this.
+        # /v1/responses calls can take several minutes when reasoning.effort is high.
+        # Match the OpenAI SDK default of 600s; Celery soft/hard limits (15m/20m) bound this.
         self.responses_timeout_seconds = 600.0
         self.client = AsyncOpenAI(
             api_key=api_key or settings.openai_api_key,
@@ -259,7 +367,9 @@ class OpenAIProvider:
             else None
         )
         self.logger = logging.getLogger(__name__)
-        self._responses_only_models: set[str] = set()
+        # Loaded from ChatModel.uses_responses_api; flipped true if chat.completions rejects.
+        self._prefer_responses_api = prefer_responses_api
+        self._discovered_responses_api = False
 
     def _apply_prompt_cache(self, payload: dict) -> None:
         if self.prompt_cache_key:
@@ -276,17 +386,21 @@ class OpenAIProvider:
         return removed
 
     def _mark_responses_only_model(self, model: str) -> None:
-        normalized = (model or "").strip().lower()
-        if normalized:
-            self._responses_only_models.add(normalized)
+        del model  # preference is per provider instance (one chat model at a time)
+        if not self._prefer_responses_api:
+            self._discovered_responses_api = True
+        self._prefer_responses_api = True
+
+    def consume_responses_api_discovery(self) -> bool:
+        """True once if chat.completions fallback newly discovered responses-only."""
+        if not self._discovered_responses_api:
+            return False
+        self._discovered_responses_api = False
+        return True
 
     def _should_use_responses(self, model: str) -> bool:
-        normalized = (model or "").strip().lower()
-        if not normalized:
-            return False
-        if normalized in self._responses_only_models:
-            return True
-        return _looks_like_responses_only_model(normalized)
+        del model
+        return self._prefer_responses_api
 
     def _responses_reasoning_effort(self, model: str) -> str | None:
         if self.reasoning_effort and self.reasoning_effort != "none":
@@ -375,6 +489,81 @@ class OpenAIProvider:
                     max_retries=0,
                 ).responses.create(**payload)
             raise
+
+    async def _create_response_stream(self, payload: dict):
+        stream_payload = {**payload, "stream": True}
+        try:
+            return await self.client.with_options(
+                timeout=self.responses_timeout_seconds,
+                max_retries=0,
+            ).responses.create(**stream_payload)
+        except Exception as exc:
+            retry = False
+            if _is_unsupported_reasoning_effort_error(exc):
+                if stream_payload.pop("reasoning", None) is not None:
+                    self.logger.warning(
+                        "responses stream rejected reasoning.effort for model=%s; retrying without reasoning override",
+                        stream_payload.get("model"),
+                    )
+                    retry = True
+            elif _is_prompt_cache_param_error(exc):
+                if self._strip_prompt_cache(stream_payload):
+                    self.logger.warning(
+                        "responses stream rejected prompt_cache params, retrying without them: %s",
+                        exc,
+                    )
+                    retry = True
+            if retry:
+                return await self.client.with_options(
+                    timeout=self.responses_timeout_seconds,
+                    max_retries=0,
+                ).responses.create(**stream_payload)
+            raise
+
+    async def _stream_via_responses(
+        self, model: str, messages: list[dict]
+    ) -> AsyncIterator[ChatStreamChunk]:
+        input_items = _to_responses_input(messages)
+        payload: dict[str, object] = {"model": model, "input": input_items}
+        reasoning_effort = self._responses_reasoning_effort(model)
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        self._apply_prompt_cache(payload)
+        stream = await self._create_response_stream(payload)
+        async for chunk in _iter_response_stream_chunks(stream):
+            yield chunk
+
+    async def _stream_with_tools_via_responses(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[ChatToolSpec],
+        tool_choice: object | None = None,
+    ) -> AsyncIterator[ChatStreamChunk]:
+        input_items = _to_responses_input(messages)
+        payload: dict[str, object] = {
+            "model": model,
+            "input": input_items,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+                for tool in tools
+            ],
+        }
+        reasoning_effort = self._responses_reasoning_effort(model)
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        mapped_tool_choice = _to_responses_tool_choice(tool_choice)
+        if mapped_tool_choice is not None:
+            payload["tool_choice"] = mapped_tool_choice
+        self._apply_prompt_cache(payload)
+        stream = await self._create_response_stream(payload)
+        async for chunk in _iter_response_stream_chunks(stream):
+            yield chunk
 
     async def _chat_via_responses(self, model: str, messages: list[dict]) -> object:
         input_items = _to_responses_input(messages)
@@ -654,25 +843,8 @@ class OpenAIProvider:
 
     async def chat_stream(self, model: str, messages: list[dict]):
         if self._should_use_responses(model):
-            response = await self._chat_via_responses(model, messages)
-            content = _extract_response_text(response)
-            if content:
-                yield ChatStreamChunk(content=content)
-            usage = getattr(response, "usage", None)
-            prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-                _coalesce_usage_tokens(usage)
-            )
-            yield ChatStreamChunk(
-                usage=ChatUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    input_tokens=input_tokens or prompt_tokens,
-                    output_tokens=output_tokens or completion_tokens,
-                    cached_tokens=0,
-                    thinking_tokens=0,
-                )
-            )
+            async for chunk in self._stream_via_responses(model, messages):
+                yield chunk
             return
         payload = {
             "model": model,
@@ -687,25 +859,8 @@ class OpenAIProvider:
             stream = await self._create_chat_completion(payload)
         except NonChatModelError:
             self._mark_responses_only_model(model)
-            response = await self._chat_via_responses(model, messages)
-            content = _extract_response_text(response)
-            if content:
-                yield ChatStreamChunk(content=content)
-            usage = getattr(response, "usage", None)
-            prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-                _coalesce_usage_tokens(usage)
-            )
-            yield ChatStreamChunk(
-                usage=ChatUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    input_tokens=input_tokens or prompt_tokens,
-                    output_tokens=output_tokens or completion_tokens,
-                    cached_tokens=0,
-                    thinking_tokens=0,
-                )
-            )
+            async for chunk in self._stream_via_responses(model, messages):
+                yield chunk
             return
         usage_sent = False
         async for event in stream:
@@ -734,6 +889,145 @@ class OpenAIProvider:
                 )
         if not usage_sent:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+
+    async def chat_stream_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[ChatToolSpec],
+        tool_choice: object | None = None,
+    ):
+        if self._should_use_responses(model):
+            async for chunk in self._stream_with_tools_via_responses(
+                model, messages, tools, tool_choice=tool_choice
+            ):
+                yield chunk
+            return
+
+        normalized_messages = []
+        for message in messages:
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                normalized_messages.append(
+                    {
+                        **{k: v for k, v in message.items() if k != "tool_calls"},
+                        "tool_calls": [
+                            {
+                                "id": call.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": call.get("name"),
+                                    "arguments": json.dumps(call.get("arguments", {})),
+                                },
+                            }
+                            for call in tool_calls
+                        ],
+                    }
+                )
+            else:
+                normalized_messages.append(message)
+        payload = {
+            "model": model,
+            "messages": normalized_messages,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ],
+            "tool_choice": tool_choice or "auto",
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        self._apply_prompt_cache(payload)
+        if self.reasoning_effort and self.reasoning_effort != "none":
+            payload["reasoning_effort"] = self.reasoning_effort
+        try:
+            stream = await self._create_chat_completion(payload)
+        except NonChatModelError:
+            self._mark_responses_only_model(model)
+            async for chunk in self._stream_with_tools_via_responses(
+                model, messages, tools, tool_choice=tool_choice
+            ):
+                yield chunk
+            return
+
+        pending_tool_calls: dict[int, dict[str, str]] = {}
+        finish_reason: str | None = None
+        usage_sent = False
+        signaled_tool_calls = False
+        async for event in stream:
+            if event.choices:
+                choice = event.choices[0]
+                finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                delta = choice.delta
+                tool_deltas = getattr(delta, "tool_calls", None) or []
+                if tool_deltas and not signaled_tool_calls:
+                    signaled_tool_calls = True
+                    yield ChatStreamChunk(finish_reason="tool_calls")
+                if delta and delta.content:
+                    yield ChatStreamChunk(content=delta.content)
+                for call in tool_deltas:
+                    index = getattr(call, "index", 0) or 0
+                    entry = pending_tool_calls.setdefault(
+                        index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    if call.id:
+                        entry["id"] = call.id
+                    function = getattr(call, "function", None)
+                    if function is not None:
+                        if function.name:
+                            entry["name"] = function.name
+                        if function.arguments:
+                            entry["arguments"] += function.arguments
+            if event.usage:
+                usage_sent = True
+                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
+                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                    _coalesce_usage_tokens(event.usage)
+                )
+                if input_tokens == 0:
+                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+                yield ChatStreamChunk(
+                    usage=ChatUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens or completion_tokens,
+                        cached_tokens=cached_tokens or 0,
+                        thinking_tokens=thinking_tokens or 0,
+                    )
+                )
+
+        tool_calls: list[ChatToolCall] = []
+        for index in sorted(pending_tool_calls):
+            entry = pending_tool_calls[index]
+            arguments: dict = {}
+            if entry["arguments"]:
+                try:
+                    parsed_arguments = repair_json_loads(entry["arguments"])
+                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                except Exception:
+                    arguments = {}
+            tool_calls.append(
+                ChatToolCall(
+                    id=entry["id"] or f"call_{index}",
+                    name=entry["name"],
+                    arguments=arguments,
+                )
+            )
+        if not usage_sent:
+            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+        yield ChatStreamChunk(
+            tool_calls=tool_calls or None,
+            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
+        )
 
 
 class AzureOpenAIProvider:
@@ -911,6 +1205,189 @@ class AzureOpenAIProvider:
             finish_reason=finish_reason,
         )
 
+    async def chat_stream(self, model: str, messages: list[dict]):
+        deployment = settings.azure_openai_deployment or model
+        payload = {
+            "model": deployment,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        self._apply_prompt_cache(payload)
+        try:
+            stream = await self.client.chat.completions.create(**payload)
+        except Exception as exc:
+            if self._strip_prompt_cache(payload):
+                self.logger.error(
+                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
+                    exc,
+                    exc_info=True,
+                )
+                stream = await self.client.chat.completions.create(**payload)
+            else:
+                raise
+        usage_sent = False
+        async for event in stream:
+            if event.choices:
+                delta = event.choices[0].delta.content
+                if delta:
+                    yield ChatStreamChunk(content=delta)
+            if event.usage:
+                usage_sent = True
+                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
+                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                    _coalesce_usage_tokens(event.usage)
+                )
+                if input_tokens == 0:
+                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+                yield ChatStreamChunk(
+                    usage=ChatUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens or completion_tokens,
+                        cached_tokens=cached_tokens or 0,
+                        thinking_tokens=thinking_tokens or 0,
+                    )
+                )
+        if not usage_sent:
+            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+
+    async def chat_stream_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[ChatToolSpec],
+        tool_choice: object | None = None,
+    ):
+        deployment = settings.azure_openai_deployment or model
+        normalized_messages = []
+        for message in messages:
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                normalized_messages.append(
+                    {
+                        **{k: v for k, v in message.items() if k != "tool_calls"},
+                        "tool_calls": [
+                            {
+                                "id": call.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": call.get("name"),
+                                    "arguments": json.dumps(call.get("arguments", {})),
+                                },
+                            }
+                            for call in tool_calls
+                        ],
+                    }
+                )
+            else:
+                normalized_messages.append(message)
+        payload = {
+            "model": deployment,
+            "messages": normalized_messages,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ],
+            "tool_choice": tool_choice or "auto",
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        self._apply_prompt_cache(payload)
+        try:
+            stream = await self.client.chat.completions.create(**payload)
+        except Exception as exc:
+            if self._strip_prompt_cache(payload):
+                self.logger.error(
+                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
+                    exc,
+                    exc_info=True,
+                )
+                stream = await self.client.chat.completions.create(**payload)
+            else:
+                raise
+
+        pending_tool_calls: dict[int, dict[str, str]] = {}
+        finish_reason: str | None = None
+        usage_sent = False
+        signaled_tool_calls = False
+        async for event in stream:
+            if event.choices:
+                choice = event.choices[0]
+                finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                delta = choice.delta
+                tool_deltas = getattr(delta, "tool_calls", None) or []
+                if tool_deltas and not signaled_tool_calls:
+                    signaled_tool_calls = True
+                    yield ChatStreamChunk(finish_reason="tool_calls")
+                if delta and delta.content:
+                    yield ChatStreamChunk(content=delta.content)
+                for call in tool_deltas:
+                    index = getattr(call, "index", 0) or 0
+                    entry = pending_tool_calls.setdefault(
+                        index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    if call.id:
+                        entry["id"] = call.id
+                    function = getattr(call, "function", None)
+                    if function is not None:
+                        if function.name:
+                            entry["name"] = function.name
+                        if function.arguments:
+                            entry["arguments"] += function.arguments
+            if event.usage:
+                usage_sent = True
+                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
+                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                    _coalesce_usage_tokens(event.usage)
+                )
+                if input_tokens == 0:
+                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+                yield ChatStreamChunk(
+                    usage=ChatUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens or completion_tokens,
+                        cached_tokens=cached_tokens or 0,
+                        thinking_tokens=thinking_tokens or 0,
+                    )
+                )
+
+        tool_calls: list[ChatToolCall] = []
+        for index in sorted(pending_tool_calls):
+            entry = pending_tool_calls[index]
+            arguments: dict = {}
+            if entry["arguments"]:
+                try:
+                    parsed_arguments = repair_json_loads(entry["arguments"])
+                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                except Exception:
+                    arguments = {}
+            tool_calls.append(
+                ChatToolCall(
+                    id=entry["id"] or f"call_{index}",
+                    name=entry["name"],
+                    arguments=arguments,
+                )
+            )
+        if not usage_sent:
+            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
+        yield ChatStreamChunk(
+            tool_calls=tool_calls or None,
+            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
+        )
+
 
 def _to_responses_input(messages: list[dict]) -> list[dict]:
     items: list[dict] = []
@@ -1011,52 +1488,3 @@ def _extract_openai_sources(response) -> list[str]:
                         if url:
                             sources.append(url)
     return list(dict.fromkeys(sources))
-
-async def chat_stream(self, model: str, messages: list[dict]):
-        deployment = settings.azure_openai_deployment or model
-        payload = {
-            "model": deployment,
-            "messages": messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        self._apply_prompt_cache(payload)
-        try:
-            stream = await self.client.chat.completions.create(**payload)
-        except Exception as exc:
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                stream = await self.client.chat.completions.create(**payload)
-            else:
-                raise
-        usage_sent = False
-        async for event in stream:
-            if event.choices:
-                delta = event.choices[0].delta.content
-                if delta:
-                    yield ChatStreamChunk(content=delta)
-            if event.usage:
-                usage_sent = True
-                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
-                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-                    _coalesce_usage_tokens(event.usage)
-                )
-                if input_tokens == 0:
-                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
-                yield ChatStreamChunk(
-                    usage=ChatUsage(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=total_tokens,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens or completion_tokens,
-                        cached_tokens=cached_tokens or 0,
-                        thinking_tokens=thinking_tokens or 0,
-                    )
-                )
-        if not usage_sent:
-            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))

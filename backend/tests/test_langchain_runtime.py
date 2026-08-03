@@ -171,7 +171,7 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
 
 
 @pytest.mark.asyncio
-async def test_agentic_loop_keeps_attachment_data_out_of_model_and_tool_events():
+async def test_agentic_loop_strips_attachment_data_from_model_keeps_tool_event_payload():
     registry = ToolRegistry()
     image_base64 = "large-image-payload"
 
@@ -228,6 +228,13 @@ async def test_agentic_loop_keeps_attachment_data_out_of_model_and_tool_events()
     assert image_base64 not in tool_message["content"]
     assert "data_base64" not in tool_events[-1]["output"]["raw_output"]
     assert tool_events[-1]["output"]["raw_output"]["files"] == [{}]
+    assert tool_events[-1]["output"]["attachments"] == [
+        {
+            "file_name": "generated.png",
+            "content_type": "image/png",
+            "data_base64": image_base64,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -414,3 +421,71 @@ async def test_agentic_loop_normalizes_web_scrape_answer_before_roundtrip():
     assert "analysis_input" not in tool_message["content"]
     assert huge_screenshot not in tool_message["content"]
     assert "Use mean 0.5" in tool_message["content"]
+
+
+@dataclass
+class _StreamingToolsProvider:
+    calls: int = 0
+
+    async def chat_stream_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+        from app.services.providers.base import ChatStreamChunk
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatStreamChunk(content="Looking that up. ")
+            yield ChatStreamChunk(finish_reason="tool_calls")
+            yield ChatStreamChunk(
+                usage=_usage(),
+                tool_calls=[
+                    ChatToolCall(
+                        id="tool-1",
+                        name="echo_tool",
+                        arguments={"text": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+            return
+        yield ChatStreamChunk(content="final ")
+        yield ChatStreamChunk(content="answer")
+        yield ChatStreamChunk(usage=_usage(), tool_calls=None, finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_streams_final_answer_deltas():
+    registry = ToolRegistry()
+
+    async def _echo(args: dict) -> ToolResult:
+        return ToolResult(name="echo_tool", output={"echo": args.get("text")})
+
+    registry.register(
+        ToolSpec(
+            name="echo_tool",
+            description="Echo text",
+            parameters={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        ),
+        _echo,
+    )
+    provider = _StreamingToolsProvider()
+    delta_sender, delta_receiver = anyio.create_memory_object_stream(8)
+    content, *_ = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "say hello"}],
+        tool_registry=registry,
+        max_steps=3,
+        delta_sender=delta_sender,
+    )
+    await delta_sender.aclose()
+    deltas = [event async for event in delta_receiver]
+
+    assert content == "Looking that up. final answer"
+    assert [item["delta"] for item in deltas] == [
+        "Looking that up. ",
+        "final ",
+        "answer",
+    ]

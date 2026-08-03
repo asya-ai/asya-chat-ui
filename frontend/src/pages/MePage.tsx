@@ -18,11 +18,22 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { getTheme, toggleTheme } from "@/lib/theme"
 import type { ApiKey, UserMemory } from "@/lib/types"
 import { Pencil, Trash2, X, Check } from "lucide-react"
-import { orgStore, toolCallLogsVisibleStore } from "@/lib/storage"
+import {
+  actionInfoLevelStore,
+  orgStore,
+  type ActionInfoLevel,
+} from "@/lib/storage"
 
 export const MePage = () => {
   const navigate = useNavigate()
@@ -45,9 +56,9 @@ export const MePage = () => {
   const [apiKeyCreating, setApiKeyCreating] = useState(false)
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
   const [createdKey, setCreatedKey] = useState<string | null>(null)
-  const [showToolCallLogs, setShowToolCallLogs] = useState<boolean>(() => {
-    return toolCallLogsVisibleStore.get() === "1"
-  })
+  const [actionInfoLevel, setActionInfoLevel] = useState<ActionInfoLevel>(() =>
+    actionInfoLevelStore.get()
+  )
   const [memoryEnabled, setMemoryEnabled] = useState(false)
   const [memories, setMemories] = useState<UserMemory[]>([])
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
@@ -97,9 +108,9 @@ export const MePage = () => {
       })
   }
 
-  const onToggleToolCallLogs = (enabled: boolean) => {
-    setShowToolCallLogs(enabled)
-    toolCallLogsVisibleStore.set(enabled)
+  const onActionInfoLevelChange = (level: ActionInfoLevel) => {
+    setActionInfoLevel(level)
+    actionInfoLevelStore.set(level)
   }
 
   const onToggleMemory = async (enabled: boolean) => {
@@ -257,20 +268,33 @@ export const MePage = () => {
               </Button>
             </div>
             <div className="pt-1 border-t">
-              <label className="flex justify-between items-start gap-4 py-2 cursor-pointer">
+              <div className="flex justify-between items-start gap-4 py-2">
                 <div className="space-y-1">
                   <p className="font-medium text-sm leading-5">
-                    {t("me_show_toolcall_logs")}
+                    {t("me_action_info")}
                   </p>
                   <p className="text-muted-foreground text-xs leading-5">
-                    {t("me_show_toolcall_logs_desc")}
+                    {t("me_action_info_desc")}
                   </p>
                 </div>
-                <Switch
-                  checked={showToolCallLogs}
-                  onCheckedChange={onToggleToolCallLogs}
-                />
-              </label>
+                <Select
+                  value={actionInfoLevel}
+                  onValueChange={(value) =>
+                    onActionInfoLevelChange(value as ActionInfoLevel)
+                  }
+                >
+                  <SelectTrigger className="w-48 shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t("me_action_info_none")}</SelectItem>
+                    <SelectItem value="short">{t("me_action_info_short")}</SelectItem>
+                    <SelectItem value="detailed">
+                      {t("me_action_info_detailed")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardContent>
         </Card>

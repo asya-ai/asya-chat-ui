@@ -5,7 +5,16 @@ const LOCALE_KEY = "chatui_locale"
 const LOGIN_ORG_KEY = "chatui_login_org"
 const WEB_SEARCH_ENABLED_KEY = "chatui_web_search_enabled"
 const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
-const TOOLCALL_LOGS_VISIBLE_KEY = "chatui_toolcall_logs_visible"
+const ACTION_INFO_LEVEL_KEY = "chatui_toolcall_logs_visible"
+
+export type ActionInfoLevel = "none" | "short" | "detailed"
+
+const parseActionInfoLevel = (raw: string | null): ActionInfoLevel => {
+  if (raw === "none" || raw === "short" || raw === "detailed") return raw
+  // Legacy boolean toggle: on → detailed, off/unset → short.
+  if (raw === "1") return "detailed"
+  return "short"
+}
 
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
@@ -51,9 +60,11 @@ export const codeExecutionEnabledStore = {
   clear: () => localStorage.removeItem(CODE_EXECUTION_ENABLED_KEY),
 }
 
-export const toolCallLogsVisibleStore = {
-  get: () => localStorage.getItem(TOOLCALL_LOGS_VISIBLE_KEY),
-  set: (enabled: boolean) =>
-    localStorage.setItem(TOOLCALL_LOGS_VISIBLE_KEY, enabled ? "1" : "0"),
-  clear: () => localStorage.removeItem(TOOLCALL_LOGS_VISIBLE_KEY),
+export const actionInfoLevelStore = {
+  get: (): ActionInfoLevel =>
+    parseActionInfoLevel(localStorage.getItem(ACTION_INFO_LEVEL_KEY)),
+  set: (level: ActionInfoLevel) =>
+    localStorage.setItem(ACTION_INFO_LEVEL_KEY, level),
+  clear: () => localStorage.removeItem(ACTION_INFO_LEVEL_KEY),
+  parse: parseActionInfoLevel,
 }
