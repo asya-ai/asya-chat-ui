@@ -4,9 +4,21 @@ Open source multi-provider LLM chat platform with organization management, model
 
 Developed by [asya.ai](https://asya.ai) authors of https://eldigen.com (automated e-mail and document support system) and https://pitchpatterns.com (automated call centre analytics and robocalls)
 
-## Screen Shot
+## Screenshots
 
-![image-20260306190633867](https://share.yellowrobot.xyz/quick/c839fa1f698a46768e2a9c4ae8472484_1772816793997.png)
+Empty chat:
+
+![Empty chat light](docs/screenshots/empty-chat-light.png)
+![Empty chat dark](docs/screenshots/empty-chat-dark.png)
+
+Chat with attachments and tools:
+
+![Chat with attachments](docs/screenshots/chat-with-attachments.png)
+
+Chat history:
+
+![Chat history](docs/screenshots/chat-history.png)
+
 
 ## Roadmap
 
