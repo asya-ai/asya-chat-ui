@@ -12,7 +12,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
+RUN uv sync --frozen --no-dev
 ARG AGENT_EMBEDDING_MODEL=BAAI/bge-m3
 RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${AGENT_EMBEDDING_MODEL}', device='cpu')"
 
