@@ -1,16 +1,10 @@
-import { useRef } from "react"
+import { useRef, type ReactNode } from "react"
 
 import type { ChatMessageAttachmentInput } from "@/lib/types"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  ArrowUp,
-  Globe,
-  Paperclip,
-  Square,
-  SquareTerminal,
-  X,
-} from "lucide-react"
+import { ArrowUp, Plus, Square, X } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { cn } from "@/lib/utils"
@@ -26,6 +20,8 @@ type ChatComposerProps = {
   webSearchEnabled: boolean
   codeExecutionEnabled: boolean
   inputRef?: React.RefObject<HTMLTextAreaElement | null>
+  modelSelect?: ReactNode
+  showModelSelect?: boolean
   onMessageChange: (value: string) => void
   onSend: () => void
   onStop: () => void
@@ -45,12 +41,6 @@ type ChatComposerProps = {
   centered?: boolean
 }
 
-const toolToggleClass = (active: boolean) =>
-  cn(
-    "gap-1.5 px-2 rounded-lg h-7 text-muted-foreground hover:text-foreground",
-    active && "bg-secondary text-foreground"
-  )
-
 export const ChatComposer = ({
   message,
   placeholder,
@@ -62,6 +52,8 @@ export const ChatComposer = ({
   webSearchEnabled,
   codeExecutionEnabled,
   inputRef,
+  modelSelect,
+  showModelSelect = false,
   onMessageChange,
   onSend,
   onStop,
@@ -141,7 +133,7 @@ export const ChatComposer = ({
           className={cn(
             "bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
             centered
-              ? "-mx-px -mt-px h-13 min-h-13 max-h-13 w-[calc(100%+2px)] px-5 py-4 leading-5"
+              ? "-mx-px -mt-px h-13 min-h-13 max-h-52 w-[calc(100%+2px)] px-5 py-4 leading-5"
               : "max-h-52 min-h-13 px-1.5 py-1",
             "placeholder:text-muted-foreground",
             "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
@@ -199,7 +191,7 @@ export const ChatComposer = ({
             centered ? "h-13 items-center p-2" : "items-end"
           )}
         >
-          <div className="flex flex-wrap items-center gap-0.5 min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -210,67 +202,67 @@ export const ChatComposer = ({
             />
             <Button
               variant="ghost"
-              size={centered ? "icon" : "icon-sm"}
-              className="text-muted-foreground"
+              size="icon"
+              className="size-9 shrink-0 text-muted-foreground"
               onClick={handlePickFiles}
               disabled={loading || readOnly}
               aria-label={t("chat_add_files")}
             >
-              {centered ? (
-                <span
-                  aria-hidden="true"
-                  className="size-4 figma-icon"
-                  style={{ maskImage: "url('/icon-attachment.svg')" }}
-                />
-              ) : (
-                <Paperclip aria-hidden="true" className="size-4" />
+              <Plus aria-hidden="true" className="size-4" />
+            </Button>
+            <label
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-2 text-sm",
+                (loading || readOnly) && "pointer-events-none opacity-50"
               )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={toolToggleClass(webSearchEnabled)}
-              title={
-                webSearchEnabled ? t("chat_web_search_on") : t("chat_web_search_off")
-              }
-              disabled={loading || readOnly}
-              onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
             >
-              <Globe aria-hidden="true" className="size-3.5" />
-              <span className="text-xs">{t("chat_web_search")}</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={toolToggleClass(codeExecutionEnabled)}
-              title={
-                codeExecutionEnabled
-                  ? t("chat_code_execution_on")
-                  : t("chat_code_execution_off")
-              }
-              disabled={loading || readOnly}
-              onClick={() => onCodeExecutionEnabledChange(!codeExecutionEnabled)}
+              <Switch
+                size="sm"
+                checked={webSearchEnabled}
+                disabled={loading || readOnly}
+                onCheckedChange={onWebSearchEnabledChange}
+                aria-label={t("chat_web_search")}
+              />
+              <span className="whitespace-nowrap text-xs text-foreground/80">
+                {t("chat_web_search")}
+              </span>
+            </label>
+            <label
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-2 text-sm",
+                (loading || readOnly) && "pointer-events-none opacity-50"
+              )}
             >
-              <SquareTerminal aria-hidden="true" className="size-3.5" />
-              <span className="text-xs">{t("org_code_execution")}</span>
-            </Button>
+              <Switch
+                size="sm"
+                checked={codeExecutionEnabled}
+                disabled={loading || readOnly}
+                onCheckedChange={onCodeExecutionEnabledChange}
+                aria-label={t("org_code_execution")}
+              />
+              <span className="whitespace-nowrap text-xs text-foreground/80">
+                {t("org_code_execution")}
+              </span>
+            </label>
           </div>
-          <div className="shrink-0">
+          <div className="flex shrink-0 items-center gap-1">
+            {showModelSelect && modelSelect && !loading ? modelSelect : null}
             {loading ? (
               <Button
                 variant="destructive"
-                size={centered ? "icon" : "sm"}
-                className="h-9"
+                size="icon"
+                className="size-9"
                 onClick={onStop}
                 aria-label={stopLabel}
               >
-                {centered ? <Square aria-hidden="true" /> : stopLabel}
+                <Square aria-hidden="true" className="size-3.5 fill-current" />
               </Button>
             ) : centered && !canSend ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
+                className="size-9"
                 onClick={() => inputRef?.current?.focus()}
                 aria-label={t("chat_voice_input")}
               >
@@ -282,14 +274,14 @@ export const ChatComposer = ({
               </Button>
             ) : (
               <Button
-                size={centered ? "icon" : "sm"}
-                className="h-9"
+                size="icon"
+                className="size-9"
                 variant={canSend ? "default" : "secondary"}
                 onClick={onSend}
                 disabled={!canSend}
                 aria-label={sendLabel}
               >
-                {centered ? <ArrowUp aria-hidden="true" /> : sendLabel}
+                <ArrowUp aria-hidden="true" />
               </Button>
             )}
           </div>

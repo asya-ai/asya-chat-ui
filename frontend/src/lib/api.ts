@@ -566,6 +566,11 @@ export const chatApi = {
     }),
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),
+  update: (chatId: string, payload: { title: string }) =>
+    apiFetch<Chat>(`/chats/${chatId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   messages: (chatId: string, shareToken?: string | null) => {
     const params = new URLSearchParams()
     if (shareToken) params.set("share", shareToken)

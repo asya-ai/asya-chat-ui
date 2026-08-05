@@ -192,19 +192,31 @@ def _coalesce_usage_tokens(usage: object | None) -> tuple[int, int, int, int, in
         completion_tokens = output_tokens
     if total_tokens == 0:
         total_tokens = prompt_tokens + completion_tokens
+    cached_tokens, _ = _extract_usage_details(usage)
+    # Chat Completions + Responses both report full input (incl. cached); store non-cached.
+    raw_input = input_tokens or prompt_tokens
+    input_tokens = max(raw_input - (cached_tokens or 0), 0) if raw_input else 0
     return prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens
 
 
 def _extract_usage_details(usage: object | None) -> tuple[int, int]:
     if not usage:
         return 0, 0
+    # Chat Completions: prompt_tokens_details / completion_tokens_details
+    # Responses API: input_tokens_details / output_tokens_details
     prompt_details = getattr(usage, "prompt_tokens_details", None)
-    cached_tokens = getattr(prompt_details, "cached_tokens", 0) or getattr(
-        usage, "cached_prompt_tokens", 0
+    input_details = getattr(usage, "input_tokens_details", None)
+    cached_tokens = (
+        getattr(prompt_details, "cached_tokens", 0)
+        or getattr(input_details, "cached_tokens", 0)
+        or getattr(usage, "cached_prompt_tokens", 0)
     )
     completion_details = getattr(usage, "completion_tokens_details", None)
-    thinking_tokens = getattr(completion_details, "reasoning_tokens", 0) or getattr(
-        usage, "reasoning_tokens", 0
+    output_details = getattr(usage, "output_tokens_details", None)
+    thinking_tokens = (
+        getattr(completion_details, "reasoning_tokens", 0)
+        or getattr(output_details, "reasoning_tokens", 0)
+        or getattr(usage, "reasoning_tokens", 0)
     )
     return cached_tokens or 0, thinking_tokens or 0
 
@@ -214,14 +226,12 @@ def _usage_chunk_from_response_usage(usage: object | None) -> ChatStreamChunk:
     prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
         _coalesce_usage_tokens(usage)
     )
-    if input_tokens == 0:
-        input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
     return ChatStreamChunk(
         usage=ChatUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            input_tokens=input_tokens or prompt_tokens,
+            input_tokens=input_tokens,
             output_tokens=output_tokens or completion_tokens,
             cached_tokens=cached_tokens or 0,
             thinking_tokens=thinking_tokens or 0,

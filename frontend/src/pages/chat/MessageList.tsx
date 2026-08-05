@@ -80,8 +80,10 @@ const MessageListComponent = forwardRef<MessageListHandle, MessageListProps>(
 
     const itemContent = useCallback(
       (_index: number, msg: ChatMessage) => (
+        // flow-root + padding (not margin) so ResizeObserver heights stay stable —
+        // collapsing margins on markdown children cause Virtuoso scroll jumps.
         <div
-          className="min-w-0 max-w-full overflow-x-hidden px-4 pb-6 md:px-8"
+          className="flow-root min-w-0 max-w-full overflow-x-hidden px-4 pb-6 md:px-8"
           data-message-id={msg.id}
         >
           {renderMessage(msg)}
@@ -120,10 +122,7 @@ const MessageListComponent = forwardRef<MessageListHandle, MessageListProps>(
                 className="figma-icon size-4 shrink-0"
                 style={{ maskImage: "url('/icon-privacy.svg')" }}
               />
-              <div>
-                <p>{t("chat_privacy_message")}</p>
-                <p>{t("chat_privacy_message_detail")}</p>
-              </div>
+              <p>{t("chat_privacy_message")}</p>
             </div>
           </div>
         </div>
@@ -139,12 +138,15 @@ const MessageListComponent = forwardRef<MessageListHandle, MessageListProps>(
           computeItemKey={computeItemKey}
           itemContent={itemContent}
           components={{ Scroller: VirtuosoScroller }}
-          initialTopMostItemIndex={messages.length - 1}
+          initialTopMostItemIndex={{
+            index: messages.length - 1,
+            align: "start",
+          }}
           followOutput={followOutput ? "smooth" : false}
           atBottomStateChange={onAtBottomChange}
           atBottomThreshold={80}
-          defaultItemHeight={160}
-          increaseViewportBy={{ top: 2000, bottom: 2000 }}
+          defaultItemHeight={280}
+          increaseViewportBy={{ top: 600, bottom: 600 }}
           aria-live="polite"
           aria-relevant="additions text"
         />

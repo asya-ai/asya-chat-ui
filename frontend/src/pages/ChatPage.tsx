@@ -19,14 +19,16 @@ import type {
   ChatMessage,
   ChatMessageAttachmentInput,
   GenerationStatus,
+  SourceItem,
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { Image as ImageIcon, Menu, PanelLeftOpen } from "lucide-react"
+import { Image as ImageIcon, Menu, PanelLeftOpen, Plus } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
@@ -34,6 +36,7 @@ import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
 import { MessageList, type MessageListHandle } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
+import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 import {
   useChatSearch,
   useChatMessages,
@@ -261,7 +264,8 @@ export const ChatPage = () => {
   const [editingAttachmentError, setEditingAttachmentError] = useState<string | null>(null)
   const [isEditDragActive, setIsEditDragActive] = useState(false)
   const messageListRef = useRef<MessageListHandle | null>(null)
-  const lastScrolledIdRef = useRef<string | null>(null)
+  // Stable across temp→server id remaps (prefer task_id for assistants).
+  const lastScrolledKeyRef = useRef<string | null>(null)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const [pendingAttachments, setPendingAttachments] = useState<
     ChatMessageAttachmentInput[]
@@ -296,6 +300,7 @@ export const ChatPage = () => {
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
   const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState<boolean | null>(null)
+  const [sourcesPanelSources, setSourcesPanelSources] = useState<SourceItem[] | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const { locale, t, tCount } = useI18n()
   const shareToken = useMemo(() => {
@@ -464,29 +469,6 @@ export const ChatPage = () => {
     setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
   }
 
-
-  const getSourceLabel = useCallback((source: {
-    url: string | null | undefined
-    title?: string | null
-    host?: string | null
-  }) => {
-    const sourceUrl = typeof source.url === "string" ? source.url : ""
-    const isInternal = sourceUrl.startsWith("/chat/")
-    if (isInternal) {
-      return source.title || t("chat_untitled")
-    }
-    const host = source.host || (() => {
-      try {
-        return sourceUrl ? new URL(sourceUrl).hostname : "source"
-      } catch {
-        return sourceUrl || "source"
-      }
-    })()
-    if (source.title) {
-      return `${source.title} — ${host}`
-    }
-    return host
-  }, [t])
 
   const modelNameById = useMemo(() => {
     return Object.fromEntries(models.map((model) => [model.id, model.display_name]))
@@ -1159,25 +1141,60 @@ export const ChatPage = () => {
     )
   }, [chatSearchDebounced, chats, getChatActivityDate, parseChatDate, searchedChats])
 
-  const formatHistoryDate = useCallback(
-    (dateString: string) => {
-      const date = parseChatDate(dateString)
-      const now = new Date()
-      if (
-        date.getFullYear() === now.getFullYear() &&
-        date.getMonth() === now.getMonth() &&
-        date.getDate() === now.getDate()
-      ) {
-        return t("chat_group_today")
+  const historyGroups = useMemo(() => {
+    const agentNameById = Object.fromEntries(agents.map((agent) => [agent.id, agent.name]))
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+    const startOfYesterday = new Date(startOfToday)
+    startOfYesterday.setDate(startOfYesterday.getDate() - 1)
+
+    const buckets = new Map<string, typeof historyChats>()
+    const order: string[] = []
+
+    for (const chat of historyChats) {
+      const date = parseChatDate(getChatActivityDate(chat))
+      const day = new Date(date)
+      day.setHours(0, 0, 0, 0)
+      let label: string
+      if (day.getTime() === startOfToday.getTime()) {
+        label = t("chat_group_today")
+      } else if (day.getTime() === startOfYesterday.getTime()) {
+        label = t("chat_group_yesterday")
+      } else {
+        label = new Intl.DateTimeFormat(locale, {
+          month: "short",
+          day: "numeric",
+          year: date.getFullYear() === startOfToday.getFullYear() ? undefined : "numeric",
+        }).format(date)
       }
-      return new Intl.DateTimeFormat(locale, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }).format(date)
-    },
-    [locale, parseChatDate, t]
-  )
+      if (!buckets.has(label)) {
+        buckets.set(label, [])
+        order.push(label)
+      }
+      buckets.get(label)!.push(chat)
+    }
+
+    return order.map((label) => ({
+      label,
+      rows: (buckets.get(label) ?? []).map((chat) => ({
+        chat,
+        modelLabel: chat.model_id ? modelNameById[chat.model_id] ?? null : null,
+        spaceLabel: chat.agent_id ? agentNameById[chat.agent_id] ?? null : null,
+      })),
+    }))
+  }, [
+    agents,
+    getChatActivityDate,
+    historyChats,
+    locale,
+    modelNameById,
+    parseChatDate,
+    t,
+  ])
+
+  useEffect(() => {
+    setSourcesPanelSources(null)
+  }, [chatId])
 
   useEffect(() => {
     if (orgsLoading) return
@@ -1275,7 +1292,7 @@ export const ChatPage = () => {
 
   useEffect(() => {
     setToolEvents([])
-    lastScrolledIdRef.current = null
+    lastScrolledKeyRef.current = null
     isChatSwitchRef.current = true
     setAutoScrollEnabled(true)
     Object.values(taskSubscriptionsRef.current).forEach((cancel) => cancel())
@@ -1449,27 +1466,41 @@ export const ChatPage = () => {
   }, [])
 
   useEffect(() => {
-    if (!autoScrollEnabled && !currentChatLoading) return
+    // Never fight the user — even while a reply is streaming.
+    if (!autoScrollEnabled) return
 
-    const lastMsg = visibleMessages[visibleMessages.length - 1]
+    // Tool/event rows are excluded so they can't change the scroll target mid-turn.
+    const conversationMessages = visibleMessages.filter(
+      (msg) => msg.role === "user" || msg.role === "assistant"
+    )
+    const lastMsg = conversationMessages[conversationMessages.length - 1]
     if (!lastMsg) return
 
-    const isNew = lastMsg.id !== lastScrolledIdRef.current
-    if (isNew) {
-      lastScrolledIdRef.current = lastMsg.id
-      const behavior: ScrollBehavior = isChatSwitchRef.current ? "instant" : "smooth"
-      isChatSwitchRef.current = false
-      const lastIndex = visibleMessages.length - 1
-      if (lastMsg.role === "user") {
-        messageListRef.current?.scrollToBottom(behavior)
-      } else if (lastMsg.role === "assistant") {
-        messageListRef.current?.scrollToIndex(lastIndex, {
-          align: "start",
-          behavior,
-        })
+    // Index-based key survives temp→server id remaps and task_id assignment.
+    const scrollKey = `${lastMsg.role}:${conversationMessages.length}`
+    if (scrollKey === lastScrolledKeyRef.current) return
+    lastScrolledKeyRef.current = scrollKey
+
+    const behavior: ScrollBehavior = isChatSwitchRef.current ? "instant" : "smooth"
+    isChatSwitchRef.current = false
+    // Prefer the conversation message itself — tool rows may sit after it in the list.
+    let lastIndex = -1
+    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
+      if (visibleMessages[i].id === lastMsg.id) {
+        lastIndex = i
+        break
       }
     }
-  }, [visibleMessages, autoScrollEnabled, currentChatLoading])
+    if (lastIndex < 0) return
+    if (lastMsg.role === "user") {
+      messageListRef.current?.scrollToBottom(behavior)
+    } else {
+      messageListRef.current?.scrollToIndex(lastIndex, {
+        align: "start",
+        behavior,
+      })
+    }
+  }, [visibleMessages, autoScrollEnabled])
 
   const startNewChat = () => {
     replaceCurrentChatMessages([])
@@ -1604,6 +1635,7 @@ export const ChatPage = () => {
     if (!trimmed && pendingAttachments.length === 0) return
     setAttachmentError(null)
     setAutoScrollEnabled(true)
+    lastScrolledKeyRef.current = null
     let requestChatId: string | null = null
     try {
       let chat = activeChat
@@ -2177,6 +2209,7 @@ export const ChatPage = () => {
     }
     stopGeneration()
     setAutoScrollEnabled(true)
+    lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", activeChat.id] })
     setLoadingByChat((prev) => ({ ...prev, [activeChat.id]: true }))
     setToolEvents([])
@@ -2293,6 +2326,7 @@ export const ChatPage = () => {
 
     stopGeneration()
     setAutoScrollEnabled(true)
+    lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", chatId] })
     setLoadingByChat((prev) => ({ ...prev, [chatId]: true }))
     setToolEvents([])
@@ -2443,7 +2477,7 @@ export const ChatPage = () => {
           editAttachmentError={isEditing ? editingAttachmentError : null}
           codeTheme={codeTheme}
           t={t}
-          getSourceLabel={getSourceLabel}
+          onOpenSources={setSourcesPanelSources}
           onStartEdit={startEditMessage}
           onDeleteFromMessage={deleteFromMessage}
           onRetryMessage={retryFailedMessage}
@@ -2464,7 +2498,6 @@ export const ChatPage = () => {
     [
       codeTheme,
       t,
-      getSourceLabel,
       isTerminalStatus,
       editingMessageId,
       editingContent,
@@ -2577,6 +2610,8 @@ export const ChatPage = () => {
             close: t("common_close"),
           }}
           activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
+          activeChatId={chatId}
+          activeAgentId={activeAgentId}
           onNewChat={startNewChat}
           onOpenHistory={() => {
             setSidebarOpen(false)
@@ -2627,6 +2662,8 @@ export const ChatPage = () => {
             projects: t("project_title"),
           }}
           activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
+          activeChatId={chatId}
+          activeAgentId={activeAgentId}
           onNewChat={startNewChat}
           onOpenHistory={() => navigate("/history")}
           onOpenProjects={() => navigate("/projects")}
@@ -2641,13 +2678,19 @@ export const ChatPage = () => {
       >
         {isHistoryView ? (
           <HistoryPanel
-            chats={historyChats}
+            groups={historyGroups}
             query={chatSearchQuery}
             leadingAction={
               <>
                 {mobileSidebar}
                 {desktopSidebarToggle}
               </>
+            }
+            trailingAction={
+              <Button onClick={startNewChat}>
+                <Plus aria-hidden="true" />
+                {t("chat_new")}
+              </Button>
             }
             labels={{
               title: t("chat_history"),
@@ -2665,127 +2708,146 @@ export const ChatPage = () => {
             onSelectChat={(chat) => handleSelectChat(chat)}
             onDeleteChat={setDeleteConfirmChat}
             onToggleShareChat={toggleShareChat}
-            formatDate={formatHistoryDate}
           />
         ) : (
-          <>
-        <h1 className="sr-only">{activeChatTitle}</h1>
-        <div className="relative -left-px -top-px flex h-15 w-[calc(100%+2px)] shrink-0 items-center justify-between bg-background px-3 py-2.5">
-          <div className="flex min-w-0 items-center gap-2">
-          {mobileSidebar}
-          {desktopSidebarToggle}
-          <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger
-              className="w-[267px] border-0 bg-transparent shadow-none"
-              aria-label={t("chat_select_model")}
-            >
-              <SelectValue placeholder={t("chat_select_model")} />
-            </SelectTrigger>
-            <SelectContent className="max-h-96">
-              {selectableChatModels.map((model) => (
-                <SelectItem
-                  key={model.id}
-                  value={model.id}
-                  disabled={model.is_available === false}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    {model.provider === "openai" ? (
-                      <span
-                        aria-hidden="true"
-                        className="figma-icon size-5"
-                        style={{ maskImage: "url('/icon-provider-openai.svg')" }}
-                      />
-                    ) : isImageOutputModel(model) ? (
-                      <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
-                    ) : null}
-                    <span>{model.display_name}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {isAgentMode ? (
-            <div className="flex items-center gap-3 text-muted-foreground text-sm">
-              <span>
-                {t("project_label")}{" "}
-                {activeAgentId ? (
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/projects/${encodeURIComponent(activeAgentId)}`)}
-                    className="font-medium text-foreground hover:underline"
-                  >
-                    {activeAgent?.name ?? t("project_unknown")}
-                  </button>
-                ) : (
-                  <span className="font-medium text-foreground">{t("project_unknown")}</span>
-                )}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/chat")}
-              >
-                {t("project_leave")}
-              </Button>
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <h1 className="sr-only">{activeChatTitle}</h1>
+              <div className="relative -left-px -top-px flex h-15 w-[calc(100%+2px)] shrink-0 items-center justify-between bg-background px-3 py-2.5">
+                <div className="flex min-w-0 items-center gap-2">
+                  {mobileSidebar}
+                  {desktopSidebarToggle}
+                  {isAgentMode ? (
+                    <div className="flex items-center gap-3 text-muted-foreground text-sm">
+                      <span>
+                        {t("project_label")}{" "}
+                        {activeAgentId ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate(`/projects/${encodeURIComponent(activeAgentId)}`)
+                            }
+                            className="font-medium text-foreground hover:underline"
+                          >
+                            {activeAgent?.name ?? t("project_unknown")}
+                          </button>
+                        ) : (
+                          <span className="font-medium text-foreground">
+                            {t("project_unknown")}
+                          </span>
+                        )}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate("/chat")}
+                      >
+                        {t("project_leave")}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+                <label className="hidden cursor-pointer items-center gap-2 md:inline-flex">
+                  <span className="text-sm leading-5">{t("chat_save_session")}</span>
+                  <Switch
+                    checked={!incognitoEnabled}
+                    onCheckedChange={(checked) => setIncognitoEnabled(!checked)}
+                    aria-label={t("chat_save_session")}
+                  />
+                </label>
+              </div>
+              <MessageList
+                ref={messageListRef}
+                key={chatId ?? "new"}
+                messages={visibleMessages}
+                welcomeTitle={welcomeTitle}
+                isLoading={isMessagesLoading}
+                onAtBottomChange={handleAtBottomChange}
+                renderMessage={renderMessage}
+              />
+              <ChatComposer
+                message={message}
+                placeholder={
+                  isAgentMode
+                    ? t("project_message_placeholder")
+                    : t("chat_message_placeholder")
+                }
+                loading={currentChatLoading || isUploadingAttachments}
+                readOnly={isSharedView}
+                isDragActive={isDragActive}
+                pendingAttachments={pendingAttachments}
+                attachmentError={attachmentError}
+                webSearchEnabled={webSearchEnabled}
+                codeExecutionEnabled={codeExecutionEnabled}
+                inputRef={composerInputRef}
+                showModelSelect
+                modelSelect={
+                  <Select value={selectedModel} onValueChange={setSelectedModel}>
+                    <SelectTrigger
+                      className="h-9 w-auto max-w-54 border-0 bg-transparent shadow-none"
+                      aria-label={t("chat_select_model")}
+                    >
+                      <SelectValue placeholder={t("chat_best_available_model")} />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-96">
+                      {selectableChatModels.map((model) => (
+                        <SelectItem
+                          key={model.id}
+                          value={model.id}
+                          disabled={model.is_available === false}
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            {model.provider === "openai" ? (
+                              <span
+                                aria-hidden="true"
+                                className="figma-icon size-5"
+                                style={{
+                                  maskImage: "url('/icon-provider-openai.svg')",
+                                }}
+                              />
+                            ) : isImageOutputModel(model) ? (
+                              <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                            ) : null}
+                            <span>{model.display_name}</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                }
+                onMessageChange={setMessage}
+                onSend={sendMessage}
+                onStop={stopGeneration}
+                onFilesSelected={handleFilesSelected}
+                onRemoveAttachment={removePendingAttachment}
+                onPreviewAttachment={setPreviewAttachment}
+                onPasteAttachments={handlePasteAttachments}
+                onDragEnter={handleComposerDragEnter}
+                onDragOver={handleComposerDragOver}
+                onDragLeave={handleComposerDragLeave}
+                onDrop={handleComposerDrop}
+                onWebSearchEnabledChange={setWebSearchEnabled}
+                onCodeExecutionEnabledChange={setCodeExecutionEnabled}
+                sendLabel={t("common_send")}
+                stopLabel={t("common_stop")}
+                welcomeTitle={welcomeTitle}
+                centered={isEmptyChat}
+              />
             </div>
-          ) : null}
+            {sourcesPanelSources ? (
+              <SourcesPanel
+                sources={sourcesPanelSources}
+                title={t("chat_sources")}
+                emptyLabel={t("chat_sources_empty")}
+                closeLabel={t("common_close")}
+                onClose={() => setSourcesPanelSources(null)}
+                onNavigateInternal={(path) => {
+                  setSourcesPanelSources(null)
+                  navigate(path)
+                }}
+              />
+            ) : null}
           </div>
-          <Button
-            variant="ghost"
-            className={`hidden h-9 px-4 md:inline-flex ${
-              incognitoEnabled ? "bg-muted text-foreground" : ""
-            }`}
-            aria-pressed={incognitoEnabled}
-            onClick={() => setIncognitoEnabled((enabled) => !enabled)}
-            title={t("chat_enable_incognito")}
-          >
-            <span
-              aria-hidden="true"
-              className="figma-icon size-4"
-              style={{ maskImage: "url('/icon-incognito.svg')" }}
-            />
-            {t("chat_enable_incognito")}
-          </Button>
-        </div>
-        <MessageList
-          ref={messageListRef}
-          key={chatId ?? "new"}
-          messages={visibleMessages}
-          welcomeTitle={welcomeTitle}
-          isLoading={isMessagesLoading}
-          onAtBottomChange={handleAtBottomChange}
-          renderMessage={renderMessage}
-        />
-        <ChatComposer
-          message={message}
-          placeholder={isAgentMode ? t("project_message_placeholder") : t("chat_message_placeholder")}
-          loading={currentChatLoading || isUploadingAttachments}
-          readOnly={isSharedView}
-          isDragActive={isDragActive}
-          pendingAttachments={pendingAttachments}
-          attachmentError={attachmentError}
-          webSearchEnabled={webSearchEnabled}
-          codeExecutionEnabled={codeExecutionEnabled}
-          inputRef={composerInputRef}
-          onMessageChange={setMessage}
-          onSend={sendMessage}
-          onStop={stopGeneration}
-          onFilesSelected={handleFilesSelected}
-          onRemoveAttachment={removePendingAttachment}
-          onPreviewAttachment={setPreviewAttachment}
-          onPasteAttachments={handlePasteAttachments}
-          onDragEnter={handleComposerDragEnter}
-          onDragOver={handleComposerDragOver}
-          onDragLeave={handleComposerDragLeave}
-          onDrop={handleComposerDrop}
-          onWebSearchEnabledChange={setWebSearchEnabled}
-          onCodeExecutionEnabledChange={setCodeExecutionEnabled}
-          sendLabel={t("common_send")}
-          stopLabel={t("common_stop")}
-          welcomeTitle={welcomeTitle}
-          centered={isEmptyChat}
-        />
-          </>
         )}
         <Dialog
           open={Boolean(previewAttachment)}

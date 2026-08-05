@@ -6,8 +6,32 @@ const LOGIN_ORG_KEY = "chatui_login_org"
 const WEB_SEARCH_ENABLED_KEY = "chatui_web_search_enabled"
 const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
 const ACTION_INFO_LEVEL_KEY = "chatui_toolcall_logs_visible"
+const SIDEBAR_SECTIONS_KEY = "chatui_sidebar_sections"
 
 export type ActionInfoLevel = "none" | "short" | "detailed"
+
+export type SidebarSectionsState = {
+  spaces: boolean
+  sessions: boolean
+}
+
+const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionsState = {
+  spaces: false,
+  sessions: true,
+}
+
+const parseSidebarSections = (raw: string | null): SidebarSectionsState => {
+  if (!raw) return { ...DEFAULT_SIDEBAR_SECTIONS }
+  try {
+    const parsed = JSON.parse(raw) as Partial<SidebarSectionsState>
+    return {
+      spaces: Boolean(parsed.spaces),
+      sessions: parsed.sessions == null ? true : Boolean(parsed.sessions),
+    }
+  } catch {
+    return { ...DEFAULT_SIDEBAR_SECTIONS }
+  }
+}
 
 const parseActionInfoLevel = (raw: string | null): ActionInfoLevel => {
   if (raw === "none" || raw === "short" || raw === "detailed") return raw
@@ -67,4 +91,12 @@ export const actionInfoLevelStore = {
     localStorage.setItem(ACTION_INFO_LEVEL_KEY, level),
   clear: () => localStorage.removeItem(ACTION_INFO_LEVEL_KEY),
   parse: parseActionInfoLevel,
+}
+
+export const sidebarSectionsStore = {
+  get: (): SidebarSectionsState =>
+    parseSidebarSections(localStorage.getItem(SIDEBAR_SECTIONS_KEY)),
+  set: (state: SidebarSectionsState) =>
+    localStorage.setItem(SIDEBAR_SECTIONS_KEY, JSON.stringify(state)),
+  clear: () => localStorage.removeItem(SIDEBAR_SECTIONS_KEY),
 }

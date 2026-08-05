@@ -4,8 +4,11 @@ import pytest
 
 from app.services.providers.openai_provider import (
     OpenAIProvider,
+    _coalesce_usage_tokens,
+    _extract_usage_details,
     _is_prompt_cache_param_error,
     _is_unsupported_reasoning_effort_error,
+    _usage_chunk_from_response_usage,
 )
 
 
@@ -44,6 +47,45 @@ def test_detects_reasoning_effort_errors() -> None:
 
     assert _is_unsupported_reasoning_effort_error(exc) is True
     assert _is_prompt_cache_param_error(exc) is False
+
+
+def test_extract_usage_details_from_chat_completions() -> None:
+    from types import SimpleNamespace
+
+    usage = SimpleNamespace(
+        prompt_tokens_details=SimpleNamespace(cached_tokens=120),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=40),
+    )
+
+    assert _extract_usage_details(usage) == (120, 40)
+
+
+def test_extract_usage_details_from_responses_api() -> None:
+    from types import SimpleNamespace
+
+    usage = SimpleNamespace(
+        input_tokens=500,
+        output_tokens=80,
+        total_tokens=580,
+        prompt_tokens=0,
+        completion_tokens=0,
+        input_tokens_details=SimpleNamespace(cached_tokens=300),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=25),
+    )
+
+    assert _extract_usage_details(usage) == (300, 25)
+    prompt, completion, total, input_tokens, output_tokens = _coalesce_usage_tokens(usage)
+    assert prompt == 500
+    assert completion == 80
+    assert total == 580
+    assert input_tokens == 200  # excludes cached
+    assert output_tokens == 80
+
+    chunk = _usage_chunk_from_response_usage(usage)
+    assert chunk.usage is not None
+    assert chunk.usage.cached_tokens == 300
+    assert chunk.usage.thinking_tokens == 25
+    assert chunk.usage.input_tokens == 200
 
 
 @pytest.mark.asyncio
@@ -122,11 +164,13 @@ async def test_response_stream_chunks_emit_text_and_tool_calls() -> None:
             type="response.completed",
             response=SimpleNamespace(
                 usage=SimpleNamespace(
-                    input_tokens=3,
-                    output_tokens=2,
-                    total_tokens=5,
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
                     prompt_tokens=0,
                     completion_tokens=0,
+                    input_tokens_details=SimpleNamespace(cached_tokens=7),
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=2),
                 )
             ),
         )
@@ -140,4 +184,6 @@ async def test_response_stream_chunks_emit_text_and_tool_calls() -> None:
     assert final_tools[0].arguments == {"text": "hi"}
     usage_chunk = next(chunk for chunk in chunks if chunk.usage is not None)
     assert usage_chunk.usage.input_tokens == 3
-    assert usage_chunk.usage.output_tokens == 2
+    assert usage_chunk.usage.output_tokens == 5
+    assert usage_chunk.usage.cached_tokens == 7
+    assert usage_chunk.usage.thinking_tokens == 2

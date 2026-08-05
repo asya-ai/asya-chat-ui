@@ -135,7 +135,7 @@ export type ChatMessage = {
 }
 
 export type SourceItem = {
-  url: string
+  url?: string | null
   title?: string | null
   host?: string | null
 }

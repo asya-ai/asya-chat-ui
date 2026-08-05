@@ -2381,6 +2381,10 @@ class ChatCreateRequest(BaseModel):
     is_incognito: bool = False
 
 
+class ChatUpdateRequest(BaseModel):
+    title: str
+
+
 class ChatRead(BaseModel):
     id: str
     title: str | None
@@ -3628,6 +3632,55 @@ def delete_chat(
     chat.is_deleted = True
     session.add(chat)
     session.commit()
+
+
+@router.patch("/{chat_id}", response_model=ChatRead)
+def update_chat(
+    chat_id: str,
+    payload: ChatUpdateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot update this chat"
+        )
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Title is required"
+        )
+    if len(title) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Title is too long"
+        )
+    chat.title = title
+    session.add(chat)
+    session.commit()
+    session.refresh(chat)
+    return ChatRead(
+        id=str(chat.id),
+        title=chat.title,
+        model_id=str(chat.model_id) if chat.model_id else None,
+        agent_id=str(chat.agent_id) if chat.agent_id else None,
+        is_shared=bool(chat.share_token),
+        is_incognito=bool(chat.is_incognito),
+        created_at=chat.created_at,
+        last_activity_at=chat.last_activity_at,
+    )
 
 
 @router.get("/shared/{share_token}", response_model=SharedChatResolveRead)

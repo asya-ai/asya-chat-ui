@@ -126,6 +126,27 @@ export const useDeleteChat = (orgId: string | null) => {
       if (!orgId || !context?.previous) return
       queryClient.setQueryData(chatKeys.list(orgId), context.previous)
     },
+    onSuccess: () => {
+      if (!orgId) return
+      queryClient.invalidateQueries({ queryKey: [...chatKeys.list(orgId), "search"] })
+    },
+  })
+}
+
+export const useRenameChat = (orgId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chatId, title }: { chatId: string; title: string }) =>
+      chatApi.update(chatId, { title }),
+    onSuccess: (updated) => {
+      if (!orgId) return
+      queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) =>
+        prev
+          ? prev.map((chat) => (chat.id === updated.id ? { ...chat, ...updated } : chat))
+          : prev
+      )
+      queryClient.invalidateQueries({ queryKey: [...chatKeys.list(orgId), "search"] })
+    },
   })
 }
 

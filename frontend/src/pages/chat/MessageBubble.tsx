@@ -1,6 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import type { ComponentProps, CSSProperties } from "react"
-import { useNavigate } from "react-router"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -22,7 +21,12 @@ import { Copy, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ActionInfoLevel } from "@/lib/storage"
-import type { ChatMessage, ChatMessageAttachmentInput, ToolEvent } from "@/lib/types"
+import type {
+  ChatMessage,
+  ChatMessageAttachmentInput,
+  SourceItem,
+  ToolEvent,
+} from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -63,7 +67,7 @@ type MessageBubbleProps = {
   editAttachmentError?: string | null
   codeTheme: Record<string, CSSProperties>
   t: I18nContextValue["t"]
-  getSourceLabel: (source: { url: string; title?: string | null; host?: string | null }) => string
+  onOpenSources?: (sources: SourceItem[]) => void
   onStartEdit: (msg: ChatMessage) => void
   onDeleteFromMessage: (msg: ChatMessage) => void
   onRetryMessage: (msg: ChatMessage) => void
@@ -522,7 +526,7 @@ const MessageBubbleComponent = ({
   editAttachmentError,
   codeTheme,
   t,
-  getSourceLabel,
+  onOpenSources,
   onStartEdit,
   onDeleteFromMessage,
   onRetryMessage,
@@ -538,7 +542,6 @@ const MessageBubbleComponent = ({
   onRemoveEditingAttachment,
   onPreviewAttachment,
 }: MessageBubbleProps) => {
-  const navigate = useNavigate()
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
@@ -1345,92 +1348,90 @@ const MessageBubbleComponent = ({
                   })}
                 </div>
               ) : null}
-              {msg.sources && msg.sources.length > 0 ? (
-                <div className="z-10 relative mt-3 overflow-hidden text-muted-foreground text-xs pointer-events-auto">
-                  <span className="uppercase tracking-wide">{t("chat_sources")}</span>{" "}
-                  <div className="flex flex-wrap gap-2 mt-2 max-w-full">
-                    {msg.sources.map((source, index) => {
-                      const sourceUrl = typeof source.url === "string" ? source.url : ""
-                      const isInternal = sourceUrl.startsWith("/chat/")
-                      return (
-                        <a
-                          key={`${sourceUrl || "source"}-${index}`}
-                          href={sourceUrl || "#"}
-                          {...(isInternal ? {} : { target: "_blank", rel: "noreferrer" })}
-                          title={source.title ?? sourceUrl}
-                          className="inline-flex px-2 py-0.5 border border-muted-foreground/30 rounded-full max-w-[240px] overflow-hidden text-[10px] text-muted-foreground hover:text-foreground text-ellipsis uppercase tracking-wide whitespace-nowrap cursor-pointer"
-                          onClick={
-                            isInternal
-                              ? (e) => {
-                                  e.preventDefault()
-                                  navigate(sourceUrl)
-                                }
-                              : !sourceUrl
-                                ? (e) => e.preventDefault()
-                                : undefined
-                          }
-                        >
-                          {getSourceLabel(source)}
-                        </a>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
             </>
           )}
         </div>
         {!isEditing &&
         (canCopyMessage ||
-          (actionsEnabled && (isUser || msg.generation_status === "failed"))) ? (
+          (actionsEnabled && (isUser || msg.generation_status === "failed")) ||
+          (!isUser && msg.sources && msg.sources.length > 0) ||
+          (!isUser && Boolean(msg.model_name))) ? (
           <div
-            className={`flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 mt-2 transition ${
-              isUser ? "justify-end" : "justify-start"
+            className={`mt-2 flex flex-wrap items-center gap-2 transition ${
+              isUser ? "justify-end" : "justify-between"
             }`}
           >
-            {canCopyMessage ? (
-              <CopyTextButton
-                text={msg.content}
-                label={t("chat_copy_message")}
-                iconOnly
-                className="opacity-70 hover:opacity-100"
-              />
-            ) : null}
-            {!isUser && actionsEnabled && msg.generation_status === "failed" ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="px-2 h-7 text-xs"
-                onClick={() => onRetryMessage(msg)}
-              >
-                <RotateCcw aria-hidden="true" className="mr-1 w-3.5 h-3.5" />
-                {t("chat_retry")}
-              </Button>
-            ) : null}
-            {isUser && actionsEnabled ? (
-              <>
+            <div
+              className={`flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 ${
+                isUser ? "justify-end" : "justify-start"
+              }`}
+            >
+              {canCopyMessage ? (
+                <CopyTextButton
+                  text={msg.content}
+                  label={t("chat_copy_message")}
+                  iconOnly
+                  className="opacity-70 hover:opacity-100"
+                />
+              ) : null}
+              {!isUser && actionsEnabled && msg.generation_status === "failed" ? (
                 <Button
                   type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-70 hover:opacity-100"
-                  onClick={() => onStartEdit(msg)}
-                  aria-label={t("chat_edit_message")}
+                  variant="outline"
+                  size="sm"
+                  className="px-2 h-7 text-xs"
+                  onClick={() => onRetryMessage(msg)}
                 >
-                  <Pencil aria-hidden="true" className="w-3.5 h-3.5" />
+                  <RotateCcw aria-hidden="true" className="mr-1 w-3.5 h-3.5" />
+                  {t("chat_retry")}
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-70 hover:opacity-100"
-                  onClick={() => onDeleteFromMessage(msg)}
-                  aria-label={t("chat_delete")}
-                >
-                  <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
-                </Button>
-              </>
+              ) : null}
+              {isUser && actionsEnabled ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="opacity-70 hover:opacity-100"
+                    onClick={() => onStartEdit(msg)}
+                    aria-label={t("chat_edit_message")}
+                  >
+                    <Pencil aria-hidden="true" className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="opacity-70 hover:opacity-100"
+                    onClick={() => onDeleteFromMessage(msg)}
+                    aria-label={t("chat_delete")}
+                  >
+                    <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              ) : null}
+            </div>
+            {!isUser ? (
+              <div className="flex min-w-0 items-center gap-2">
+                {msg.sources && msg.sources.length > 0 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 rounded-full px-2.5 text-xs"
+                    onClick={() => onOpenSources?.(msg.sources ?? [])}
+                  >
+                    {msg.sources.length === 1
+                      ? t("chat_sources_count_one", { count: msg.sources.length })
+                      : t("chat_sources_count", { count: msg.sources.length })}
+                  </Button>
+                ) : null}
+                {msg.model_name ? (
+                  <span className="truncate text-xs leading-4 text-muted-foreground">
+                    {msg.model_name}
+                  </span>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -1453,7 +1454,7 @@ export const MessageBubble = memo(
     if (prev.isEditing !== next.isEditing) return false
     if (prev.codeTheme !== next.codeTheme) return false
     if (prev.t !== next.t) return false
-    if (prev.getSourceLabel !== next.getSourceLabel) return false
+    if (prev.onOpenSources !== next.onOpenSources) return false
     if (prev.thinkingLabels.length !== next.thinkingLabels.length) return false
     for (let i = 0; i < prev.thinkingLabels.length; i += 1) {
       if (prev.thinkingLabels[i] !== next.thinkingLabels[i]) return false

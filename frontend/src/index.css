@@ -85,7 +85,13 @@ body {
 }
 
 :root {
-  --chat-content-width: 35.9375rem;
+  /*
+    Chat column is intentionally wider than the Figma frame (~575px / 35.9375rem)
+    so large viewports waste less horizontal space. This fluid ceiling is
+    deliberate product UX — future design syncs must NOT reset it to a hard
+    Figma max-width.
+  */
+  --chat-content-width: clamp(35.9375rem, 52vw, 52rem);
   --radius: 0.5rem;
 
   --background: #f5f3f2;
