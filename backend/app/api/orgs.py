@@ -14,6 +14,8 @@ from app.models import (
     OrgModel,
     OrgProviderConfig,
     Role,
+    Team,
+    TeamMembership,
     User,
 )
 from app.services.org_service import (
@@ -23,7 +25,7 @@ from app.services.org_service import (
     require_super_admin,
     validate_login_domains,
 )
-from app.services.team_service import ensure_default_team
+from app.services.team_service import ensure_default_team, list_known_oidc_groups
 
 router = APIRouter(prefix="/orgs", tags=["orgs"])
 
@@ -42,11 +44,17 @@ class OrgRead(BaseModel):
     chat_retention_days: int | None
 
 
+class OrgMemberTeamRead(BaseModel):
+    id: str
+    name: str
+
+
 class OrgMemberRead(BaseModel):
     user_id: str
     email: str
     role: str
     is_super_admin: bool
+    teams: list[OrgMemberTeamRead] = []
 
 
 class OrgMemberUpdateRequest(BaseModel):
@@ -438,6 +446,20 @@ def update_retention_settings(
     )
 
 
+def _member_teams(session: Session, org_id: UUID, user_id: UUID) -> list[OrgMemberTeamRead]:
+    teams = session.exec(
+        select(Team)
+        .join(TeamMembership, TeamMembership.team_id == Team.id)
+        .where(
+            Team.org_id == org_id,
+            Team.is_default.is_(False),
+            TeamMembership.user_id == user_id,
+        )
+        .order_by(Team.name)
+    ).all()
+    return [OrgMemberTeamRead(id=str(team.id), name=team.name) for team in teams]
+
+
 @router.get("/{org_id}/members", response_model=list[OrgMemberRead])
 def list_members(
     org_id: str,
@@ -469,6 +491,7 @@ def list_members(
                 email=user.email,
                 role=role.name,
                 is_super_admin=user.is_super_admin,
+                teams=_member_teams(session, org_uuid, user.id),
             )
         )
     return members
@@ -524,7 +547,25 @@ def update_member(
         email=user.email if user else "",
         role=role.name,
         is_super_admin=user.is_super_admin if user else False,
+        teams=_member_teams(session, org_uuid, membership.user_id),
     )
+
+
+@router.get("/{org_id}/oidc-groups", response_model=list[str])
+def list_oidc_groups(
+    org_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[str]:
+    try:
+        org_uuid = UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+        ) from exc
+    if not current_user.is_super_admin:
+        require_org_admin(session, org_uuid, current_user.id)
+    return list_known_oidc_groups(session, org_uuid)
 
 
 @router.delete("/{org_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

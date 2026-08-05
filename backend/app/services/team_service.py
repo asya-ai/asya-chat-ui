@@ -140,6 +140,48 @@ def normalize_oidc_groups(value) -> set[str]:
     return set()
 
 
+def remember_oidc_groups(session: Session, org_id: UUID, groups: Iterable[str]) -> None:
+    """Merge group names into the org's known OIDC groups list."""
+    from app.models import Org
+
+    cleaned = sorted({g.strip() for g in groups if isinstance(g, str) and g.strip()})
+    if not cleaned:
+        return
+    org = session.exec(select(Org).where(Org.id == org_id)).first()
+    if not org:
+        return
+    existing = {
+        item.strip()
+        for item in (org.oidc_known_groups or [])
+        if isinstance(item, str) and item.strip()
+    }
+    merged = sorted(existing | set(cleaned))
+    if merged == sorted(existing):
+        return
+    org.oidc_known_groups = merged
+    session.add(org)
+
+
+def list_known_oidc_groups(session: Session, org_id: UUID) -> list[str]:
+    from app.models import Org
+
+    org = session.exec(select(Org).where(Org.id == org_id)).first()
+    known = {
+        item.strip()
+        for item in ((org.oidc_known_groups if org else None) or [])
+        if isinstance(item, str) and item.strip()
+    }
+    team_groups = session.exec(
+        select(Team.oidc_group).where(
+            Team.org_id == org_id, Team.oidc_group.is_not(None)
+        )
+    ).all()
+    for group in team_groups:
+        if isinstance(group, str) and group.strip():
+            known.add(group.strip())
+    return sorted(known)
+
+
 def sync_oidc_team_memberships(
     session: Session,
     org_id: UUID,

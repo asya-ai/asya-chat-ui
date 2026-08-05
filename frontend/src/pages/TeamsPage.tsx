@@ -13,13 +13,14 @@ import { Input } from "@/components/ui/input"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+
+const OIDC_NONE = "__none__"
 
 export const TeamsPage = () => {
   const navigate = useNavigate()
@@ -32,12 +33,13 @@ export const TeamsPage = () => {
   const [selectedOrg, setSelectedOrg] = useState<string | null>(orgStore.get())
   const [teams, setTeams] = useState<Team[]>([])
   const [members, setMembers] = useState<OrgMember[]>([])
+  const [oidcGroups, setOidcGroups] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [newTeamName, setNewTeamName] = useState("")
-  const [newTeamGroup, setNewTeamGroup] = useState("")
+  const [newTeamGroup, setNewTeamGroup] = useState(OIDC_NONE)
   const [editingTeam, setEditingTeam] = useState<Team | null>(null)
   const [editName, setEditName] = useState("")
-  const [editGroup, setEditGroup] = useState("")
+  const [editGroup, setEditGroup] = useState(OIDC_NONE)
   const [teamModels, setTeamModels] = useState<TeamModel[]>([])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set())
@@ -80,12 +82,14 @@ export const TeamsPage = () => {
   }, [authChecked, isAdmin, isSuperAdmin, selectedOrg])
 
   const loadTeams = async (orgId: string) => {
-    const [teamList, memberList] = await Promise.all([
+    const [teamList, memberList, groups] = await Promise.all([
       orgApi.teams(orgId),
       orgApi.members(orgId),
+      orgApi.oidcGroups(orgId),
     ])
     setTeams(teamList)
     setMembers(memberList)
+    setOidcGroups(groups)
   }
 
   useEffect(() => {
@@ -99,7 +103,10 @@ export const TeamsPage = () => {
     setSelectedOrg(orgId)
     orgStore.set(orgId)
     setEditingTeam(null)
+    setNewTeamGroup(OIDC_NONE)
   }
+
+  const groupValue = (value: string) => (value === OIDC_NONE ? null : value)
 
   const createTeam = async () => {
     if (!selectedOrg || !newTeamName.trim()) return
@@ -107,10 +114,10 @@ export const TeamsPage = () => {
     try {
       await orgApi.createTeam(selectedOrg, {
         name: newTeamName.trim(),
-        oidc_group: newTeamGroup.trim() || null,
+        oidc_group: groupValue(newTeamGroup),
       })
       setNewTeamName("")
-      setNewTeamGroup("")
+      setNewTeamGroup(OIDC_NONE)
       await loadTeams(selectedOrg)
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common_error"))
@@ -122,17 +129,19 @@ export const TeamsPage = () => {
     setError(null)
     setEditingTeam(team)
     setEditName(team.name)
-    setEditGroup(team.oidc_group ?? "")
+    setEditGroup(team.oidc_group ?? OIDC_NONE)
     try {
-      const [models, currentMembers] = await Promise.all([
+      const [models, currentMembers, groups] = await Promise.all([
         orgApi.teamModels(selectedOrg, team.id),
         team.is_default
           ? Promise.resolve([] as TeamMember[])
           : orgApi.teamMembers(selectedOrg, team.id),
+        orgApi.oidcGroups(selectedOrg),
       ])
       setTeamModels(models)
       setTeamMembers(currentMembers)
       setSelectedMemberIds(new Set(currentMembers.map((m) => m.user_id)))
+      setOidcGroups(groups)
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common_error"))
     }
@@ -145,7 +154,7 @@ export const TeamsPage = () => {
     try {
       await orgApi.updateTeam(selectedOrg, editingTeam.id, {
         name: editName.trim(),
-        oidc_group: editingTeam.is_default ? null : editGroup.trim() || null,
+        oidc_group: editingTeam.is_default ? null : groupValue(editGroup),
       })
       await orgApi.setTeamModels(
         selectedOrg,
@@ -201,6 +210,14 @@ export const TeamsPage = () => {
 
   if (!authChecked) return null
   if (!isSuperAdmin && !isAdmin) return null
+
+  const groupOptions = Array.from(
+    new Set([
+      ...oidcGroups,
+      ...(newTeamGroup !== OIDC_NONE ? [newTeamGroup] : []),
+      ...(editGroup !== OIDC_NONE ? [editGroup] : []),
+    ])
+  ).sort((a, b) => a.localeCompare(b))
 
   const navItems = [
     { label: t("me_settings"), href: "/settings/me", active: false },
@@ -269,8 +286,6 @@ export const TeamsPage = () => {
           </Alert>
         ) : null}
 
-        <p className="text-muted-foreground text-sm">{t("org_teams_intro")}</p>
-
         <Card>
           <CardHeader>
             <CardTitle>{t("org_teams_create")}</CardTitle>
@@ -281,11 +296,19 @@ export const TeamsPage = () => {
               value={newTeamName}
               onChange={(event) => setNewTeamName(event.target.value)}
             />
-            <Input
-              placeholder={t("org_teams_oidc_group")}
-              value={newTeamGroup}
-              onChange={(event) => setNewTeamGroup(event.target.value)}
-            />
+            <Select value={newTeamGroup} onValueChange={setNewTeamGroup}>
+              <SelectTrigger className="sm:w-64">
+                <SelectValue placeholder={t("org_teams_oidc_group")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={OIDC_NONE}>{t("org_teams_oidc_none")}</SelectItem>
+                {groupOptions.map((group) => (
+                  <SelectItem key={group} value={group}>
+                    {group}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button onClick={createTeam} disabled={!newTeamName.trim() || !selectedOrg}>
               {t("org_teams_create")}
             </Button>
@@ -342,11 +365,6 @@ export const TeamsPage = () => {
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("org_teams_edit")}</DialogTitle>
-            <DialogDescription>
-              {editingTeam?.is_default
-                ? t("org_teams_default_members_hint")
-                : t("org_teams_oidc_group_hint")}
-            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
@@ -356,10 +374,19 @@ export const TeamsPage = () => {
             {!editingTeam?.is_default ? (
               <div className="space-y-2">
                 <label className="text-sm font-medium">{t("org_teams_oidc_group")}</label>
-                <Input
-                  value={editGroup}
-                  onChange={(event) => setEditGroup(event.target.value)}
-                />
+                <Select value={editGroup} onValueChange={setEditGroup}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={t("org_teams_oidc_group")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={OIDC_NONE}>{t("org_teams_oidc_none")}</SelectItem>
+                    {groupOptions.map((group) => (
+                      <SelectItem key={group} value={group}>
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 

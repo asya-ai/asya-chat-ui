@@ -416,6 +416,7 @@ export const orgApi = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  oidcGroups: (orgId: string) => apiFetch<string[]>(`/orgs/${orgId}/oidc-groups`),
   teams: (orgId: string) => apiFetch<Team[]>(`/orgs/${orgId}/teams`),
   createTeam: (orgId: string, payload: { name: string; oidc_group?: string | null }) =>
     apiFetch<Team>(`/orgs/${orgId}/teams`, {

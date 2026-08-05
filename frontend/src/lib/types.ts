@@ -285,6 +285,7 @@ export type OrgMember = {
   email: string
   role: string
   is_super_admin: boolean
+  teams?: { id: string; name: string }[]
 }
 
 export type Team = {

@@ -820,15 +820,14 @@ async def oidc_callback(
     if groups_claim:
         from app.services.team_service import (
             normalize_oidc_groups,
+            remember_oidc_groups,
             sync_oidc_team_memberships,
         )
 
-        sync_oidc_team_memberships(
-            session,
-            org.id,
-            user.id,
-            normalize_oidc_groups(claims.get(groups_claim)),
-        )
+        groups = normalize_oidc_groups(claims.get(groups_claim))
+        remember_oidc_groups(session, org.id, groups)
+        sync_oidc_team_memberships(session, org.id, user.id, groups)
+        session.commit()
 
     token = create_access_token(str(user.id), token_version=user.token_version)
     redirect_url = f"{redirect_base}/sso-callback?token={token}"

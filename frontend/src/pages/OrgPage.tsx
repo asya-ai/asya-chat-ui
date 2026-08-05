@@ -1322,6 +1322,7 @@ export const OrgPage = () => {
                   <TableRow>
                     <TableHead>{t("org_users_email")}</TableHead>
                     <TableHead>{t("org_users_role")}</TableHead>
+                    <TableHead>{t("org_users_teams")}</TableHead>
                     {isSuperAdmin ? <TableHead>{t("org_users_superadmin")}</TableHead> : null}
                     <TableHead>{t("org_users_actions")}</TableHead>
                   </TableRow>
@@ -1353,6 +1354,11 @@ export const OrgPage = () => {
                         ) : (
                           roleLabel(member.role)
                         )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {member.teams && member.teams.length > 0
+                          ? member.teams.map((team) => team.name).join(", ")
+                          : t("org_users_no_teams")}
                       </TableCell>
                       {isSuperAdmin ? (
                         <TableCell>

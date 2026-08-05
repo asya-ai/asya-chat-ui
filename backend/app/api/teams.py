@@ -19,6 +19,7 @@ from app.services.org_service import require_org_admin
 from app.services.team_service import (
     TEAM_SOURCE_MANUAL,
     ensure_default_team,
+    remember_oidc_groups,
 )
 
 router = APIRouter(prefix="/orgs", tags=["teams"])
@@ -188,6 +189,8 @@ def create_team(
 
     team = Team(org_id=org_uuid, name=name, is_default=False, oidc_group=oidc_group)
     session.add(team)
+    if oidc_group:
+        remember_oidc_groups(session, org_uuid, [oidc_group])
     session.commit()
     session.refresh(team)
     return _team_read(session, team)
@@ -223,6 +226,8 @@ def update_team(
             session, org_uuid, oidc_group, exclude_team_id=team.id
         )
         team.oidc_group = oidc_group
+        if oidc_group:
+            remember_oidc_groups(session, org_uuid, [oidc_group])
     session.add(team)
     session.commit()
     session.refresh(team)

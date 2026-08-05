@@ -56,6 +56,7 @@ class Org(SQLModel, table=True):
     oidc_groups_claim: Optional[str] = Field(default=None)
     oidc_auto_create_users: bool = Field(default=True)
     login_domains: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
+    oidc_known_groups: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     memberships: List["OrgMembership"] = Relationship(back_populates="org")
