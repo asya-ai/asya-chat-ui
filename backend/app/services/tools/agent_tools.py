@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.models.entities import AgentSource, AgentSourceStatus
 from app.services.agents.runtime import search_agent_chunks
+from app.services.tools.code_execution import project_source_exec_path
 from app.services.tools.registry import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,11 @@ async def list_project_sources(context: AgentToolContext) -> ToolResult:
             "readable": source.status == AgentSourceStatus.ready,
             "summary": _source_summary(source),
             "length_chars": len(source.content_text or ""),
+            "exec_path": (
+                project_source_exec_path(source)
+                if source.status == AgentSourceStatus.ready
+                else None
+            ),
         }
         for idx, source in enumerate(sources, start=1)
     ]

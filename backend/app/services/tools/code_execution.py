@@ -17,7 +17,8 @@ from docker.types import Ulimit
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import ChatMessage, ChatMessageAttachment
+from app.models import AgentSource, AgentSourceStatus, ChatMessage, ChatMessageAttachment
+from app.services.file_storage import maybe_read_file_bytes
 from app.services.tools.registry import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class CodeExecutionContext:
     org_id: str
     chat_id: str
     network_enabled: bool
+    agent_id: str | None = None
 
 
 def _collect_imports(code: str) -> set[str]:
@@ -139,17 +141,39 @@ def _write_inputs(
 ) -> list[dict]:
     inputs_dir.mkdir(parents=True, exist_ok=True)
     inputs: list[dict] = []
+    total_bytes = 0
     for attachment in attachments:
+        if len(inputs) >= settings.attachments_max_files:
+            break
         safe_name = _sanitize_filename(attachment.file_name)
         filename = f"{attachment.id}_{safe_name}"
-        try:
-            payload = base64.b64decode(attachment.data_base64)
-        except Exception as exc:
+        payload: bytes | None = None
+        if attachment.file_path:
+            payload = maybe_read_file_bytes(attachment.file_path)
+        if payload is None and attachment.data_base64:
+            try:
+                payload = base64.b64decode(attachment.data_base64)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decode attachment id=%s filename=%s: %s",
+                    attachment.id,
+                    attachment.file_name,
+                    exc,
+                )
+                continue
+        if payload is None:
+            continue
+        if len(payload) > settings.attachments_max_file_bytes:
             logger.warning(
-                "Failed to decode attachment id=%s filename=%s: %s",
+                "Skipping oversized attachment id=%s (%s bytes)",
                 attachment.id,
-                attachment.file_name,
-                exc,
+                len(payload),
+            )
+            continue
+        if total_bytes + len(payload) > settings.attachments_max_total_bytes:
+            logger.warning(
+                "Skipping attachment id=%s; total input size limit reached",
+                attachment.id,
             )
             continue
         file_path = inputs_dir / filename
@@ -163,11 +187,128 @@ def _write_inputs(
                 exc,
             )
             continue
+        total_bytes += len(payload)
         inputs.append(
             {
                 "name": attachment.file_name,
                 "path": f"/inputs/{filename}",
                 "content_type": attachment.content_type,
+            }
+        )
+    return inputs
+
+
+def _project_source_display_name(source: AgentSource) -> str:
+    if source.file_name:
+        return source.file_name
+    title = (source.title or "source").strip() or "source"
+    safe = _sanitize_filename(title)
+    if "." in safe:
+        return safe
+    return f"{safe}.txt"
+
+
+_TEXT_STANDIN_EXTENSIONS = {
+    ".txt",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".md",
+    ".markdown",
+    ".py",
+    ".xml",
+    ".html",
+    ".htm",
+    ".log",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".sql",
+}
+
+
+def _text_standin_name(display_name: str) -> str:
+    suffix = Path(display_name).suffix.lower()
+    if suffix in _TEXT_STANDIN_EXTENSIONS:
+        return display_name
+    stem = Path(display_name).stem or "source"
+    return f"{_sanitize_filename(stem)}.txt"
+
+
+def project_source_exec_path(source: AgentSource) -> str:
+    display_name = _project_source_display_name(source)
+    if not source.file_path:
+        display_name = _text_standin_name(display_name)
+    safe_name = _sanitize_filename(display_name)
+    return f"/inputs/project/{source.id}_{safe_name}"
+
+
+def _write_project_inputs(
+    sources: Iterable[AgentSource],
+    inputs_dir: Path,
+    *,
+    used_bytes: int = 0,
+    used_files: int = 0,
+) -> list[dict]:
+    project_dir = inputs_dir / "project"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    inputs: list[dict] = []
+    total_bytes = used_bytes
+    file_count = used_files
+    for source in sources:
+        if file_count >= settings.attachments_max_files:
+            break
+        display_name = _project_source_display_name(source)
+        payload: bytes | None = None
+        content_type = source.content_type or "text/plain"
+        if source.file_path:
+            payload = maybe_read_file_bytes(source.file_path)
+        if payload is None and source.content_text:
+            payload = source.content_text.encode("utf-8")
+            display_name = _text_standin_name(display_name)
+            if Path(display_name).suffix.lower() not in {".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".yaml", ".yml", ".md", ".markdown"}:
+                content_type = "text/plain"
+            elif not content_type:
+                content_type = "text/plain"
+        if payload is None:
+            continue
+        safe_name = _sanitize_filename(display_name)
+        filename = f"{source.id}_{safe_name}"
+        if len(payload) > settings.attachments_max_file_bytes:
+            logger.warning(
+                "Skipping oversized project source id=%s (%s bytes)",
+                source.id,
+                len(payload),
+            )
+            continue
+        if total_bytes + len(payload) > settings.attachments_max_total_bytes:
+            logger.warning(
+                "Skipping project source id=%s; total input size limit reached",
+                source.id,
+            )
+            continue
+        file_path = project_dir / filename
+        try:
+            file_path.write_bytes(payload)
+        except Exception as exc:
+            logger.warning(
+                "Failed to write project source id=%s filename=%s: %s",
+                source.id,
+                display_name,
+                exc,
+            )
+            continue
+        total_bytes += len(payload)
+        file_count += 1
+        inputs.append(
+            {
+                "name": display_name,
+                "path": f"/inputs/project/{filename}",
+                "content_type": content_type,
+                "source_id": str(source.id),
+                "title": source.title,
             }
         )
     return inputs
@@ -513,6 +654,32 @@ async def run_code_execution(
     except ValueError as exc:
         return ToolResult(name="code_execution", output={"error": str(exc)})
     inputs = _write_inputs(attachments, inputs_dir)
+    if context.agent_id:
+        try:
+            agent_uuid = UUID(context.agent_id)
+        except ValueError:
+            agent_uuid = None
+        if agent_uuid is not None:
+            sources = context.session.exec(
+                select(AgentSource)
+                .where(
+                    AgentSource.agent_id == agent_uuid,
+                    AgentSource.status == AgentSourceStatus.ready,
+                )
+                .order_by(AgentSource.created_at)
+            ).all()
+            used_bytes = sum(
+                path.stat().st_size
+                for path in inputs_dir.iterdir()
+                if path.is_file()
+            )
+            project_inputs = _write_project_inputs(
+                sources,
+                inputs_dir,
+                used_bytes=used_bytes,
+                used_files=len(inputs),
+            )
+            inputs = inputs + project_inputs
     code_path = work_dir / "main.py"
     code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
     def _runner():

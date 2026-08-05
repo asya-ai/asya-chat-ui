@@ -32,6 +32,7 @@ from app.models import (
     User,
 )
 from app.services.agents.source_parsing import extract_text_from_file
+from app.services.file_storage import delete_file, write_agent_source_file
 from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -41,6 +42,49 @@ def _enqueue_source_reindex_task(source_id: UUID) -> None:
     celery_app.send_task(
         "chatui.reindex_agent_source",
         args=[str(source_id)],
+    )
+
+
+def _decode_base64_bytes(data_base64: str) -> bytes:
+    try:
+        return base64.b64decode(data_base64, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid base64 source content",
+        ) from exc
+
+
+def _persist_source_bytes(
+    source: AgentSource,
+    *,
+    data: bytes,
+    file_name: str | None,
+) -> None:
+    name = file_name or source.file_name or source.title or "source"
+    if source.file_path:
+        delete_file(source.file_path)
+    relative_path, _size = write_agent_source_file(
+        agent_id=source.agent_id,
+        source_id=source.id,
+        file_name=name,
+        data=data,
+    )
+    source.file_path = relative_path
+
+
+def _store_file_source_bytes(
+    source: AgentSource,
+    *,
+    data_base64: str,
+    file_name: str | None = None,
+) -> None:
+    if source.kind != AgentSourceKind.file:
+        return
+    _persist_source_bytes(
+        source,
+        data=_decode_base64_bytes(data_base64),
+        file_name=file_name or source.file_name,
     )
 
 
@@ -201,13 +245,7 @@ def _decode_source_text(payload: AgentSourceCreateRequest) -> str:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="data_base64 is required for file sources",
             )
-        try:
-            raw = base64.b64decode(payload.data_base64, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid base64 source content",
-            ) from exc
+        raw = _decode_base64_bytes(payload.data_base64)
         try:
             return extract_text_from_file(
                 file_name=payload.file_name,
@@ -223,13 +261,7 @@ def _decode_source_text(payload: AgentSourceCreateRequest) -> str:
     if payload.content_text:
         return payload.content_text
     if payload.data_base64:
-        try:
-            raw = base64.b64decode(payload.data_base64, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid base64 source content",
-            ) from exc
+        raw = _decode_base64_bytes(payload.data_base64)
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -446,6 +478,7 @@ def delete_agent(
             session.delete(chunk)
         session.flush()
     for source in sources:
+        delete_file(source.file_path)
         session.delete(source)
     session.flush()
 
@@ -491,6 +524,12 @@ def create_source(
     )
     session.add(source)
     session.flush()
+    if payload.kind == AgentSourceKind.file and payload.data_base64:
+        _store_file_source_bytes(
+            source,
+            data_base64=payload.data_base64,
+            file_name=payload.file_name,
+        )
     source.status = AgentSourceStatus.queued
     source.error_message = None
     session.add(source)
@@ -551,6 +590,12 @@ def update_source(
                 content_text=None,
             )
         )
+        if source.kind == AgentSourceKind.file:
+            _store_file_source_bytes(
+                source,
+                data_base64=payload.data_base64,
+                file_name=payload.file_name if payload.file_name is not None else source.file_name,
+            )
         should_reindex = True
 
     source.updated_at = datetime.utcnow()
@@ -591,6 +636,7 @@ def delete_source(
     for chunk in chunks:
         session.delete(chunk)
     session.flush()
+    delete_file(source.file_path)
     session.delete(source)
     session.commit()
 

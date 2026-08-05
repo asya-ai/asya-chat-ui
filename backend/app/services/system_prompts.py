@@ -31,7 +31,9 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "claim you cannot access Python or files. Use real tool calls (not plain-text pseudo "
         "calls). Always set `purpose` to a short plain-language goal for the run "
         "(what you are trying to learn or produce), not imports or code. "
-        "Uploaded files are available under /inputs with the listed filenames. "
+        "Uploaded chat files are available under /inputs with the listed filenames. "
+        "When working in a project, project source files are also available under "
+        "/inputs/project/. "
         "If image metadata (width/height/exif) is already present in context, do not call "
         "code_execution only to re-read those same basics."
     ),

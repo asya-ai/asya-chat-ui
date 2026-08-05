@@ -5,8 +5,14 @@ import os
 import stat
 from uuid import UUID, uuid4
 
-from app.models import ChatMessageAttachment
-from app.services.tools.code_execution import _collect_outputs, _validate_imports, _write_inputs
+from app.models import AgentSource, AgentSourceKind, AgentSourceStatus, ChatMessageAttachment
+from app.services.tools.code_execution import (
+    _collect_outputs,
+    _validate_imports,
+    _write_inputs,
+    _write_project_inputs,
+    project_source_exec_path,
+)
 
 
 def _attachment(*, attachment_id: str, file_name: str, payload: bytes) -> ChatMessageAttachment:
@@ -16,6 +22,28 @@ def _attachment(*, attachment_id: str, file_name: str, payload: bytes) -> ChatMe
         file_name=file_name,
         content_type="application/octet-stream",
         data_base64=base64.b64encode(payload).decode("ascii"),
+    )
+
+
+def _source(
+    *,
+    source_id: str,
+    title: str,
+    content_text: str,
+    file_name: str | None = None,
+    file_path: str | None = None,
+    content_type: str | None = "text/plain",
+) -> AgentSource:
+    return AgentSource(
+        id=UUID(source_id),
+        agent_id=uuid4(),
+        kind=AgentSourceKind.file if file_name else AgentSourceKind.text,
+        title=title,
+        file_name=file_name,
+        content_type=content_type,
+        content_text=content_text,
+        file_path=file_path,
+        status=AgentSourceStatus.ready,
     )
 
 
@@ -47,6 +75,56 @@ def test_write_inputs_stages_raw_attachments_without_preprocessing(tmp_path) -> 
     ]
     assert (tmp_path / f"{shp_id}_roads.shp").read_bytes() == b"shp-bytes"
     assert (tmp_path / f"{zip_id}_bundle.zip").read_bytes() == b"zip-bytes"
+
+
+def test_write_project_inputs_stages_content_text_under_project_dir(tmp_path) -> None:
+    source_id = "33333333-3333-3333-3333-333333333333"
+    source = _source(
+        source_id=source_id,
+        title="Sales Report",
+        content_text="region,amount\nEU,10\n",
+        file_name="sales.csv",
+        content_type="text/csv",
+    )
+
+    inputs = _write_project_inputs([source], tmp_path)
+
+    assert inputs == [
+        {
+            "name": "sales.csv",
+            "path": f"/inputs/project/{source_id}_sales.csv",
+            "content_type": "text/csv",
+            "source_id": source_id,
+            "title": "Sales Report",
+        }
+    ]
+    assert (tmp_path / "project" / f"{source_id}_sales.csv").read_text(
+        encoding="utf-8"
+    ) == "region,amount\nEU,10\n"
+    assert project_source_exec_path(source) == f"/inputs/project/{source_id}_sales.csv"
+
+
+def test_write_project_inputs_prefers_stored_file_bytes(tmp_path, monkeypatch) -> None:
+    source_id = "44444444-4444-4444-4444-444444444444"
+    stored = tmp_path / "original.xlsx"
+    stored.write_bytes(b"xlsx-bytes")
+    source = _source(
+        source_id=source_id,
+        title="Workbook",
+        content_text="extracted text only",
+        file_name="workbook.xlsx",
+        file_path="agents/x/sources/workbook.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    monkeypatch.setattr(
+        "app.services.tools.code_execution.maybe_read_file_bytes",
+        lambda path: stored.read_bytes() if path else None,
+    )
+
+    inputs = _write_project_inputs([source], tmp_path)
+
+    assert inputs[0]["path"] == f"/inputs/project/{source_id}_workbook.xlsx"
+    assert (tmp_path / "project" / f"{source_id}_workbook.xlsx").read_bytes() == b"xlsx-bytes"
 
 
 def test_collect_outputs_keeps_large_files_as_attachments(monkeypatch, tmp_path) -> None:

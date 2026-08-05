@@ -568,6 +568,7 @@ def _build_tool_registry(
                     org_id=str(org_id),
                     chat_id=str(chat_id),
                     network_enabled=exec_network_enabled,
+                    agent_id=str(agent_id) if agent_id else None,
                 ),
                 code=code,
                 language=args.get("language", "python"),
@@ -582,9 +583,12 @@ def _build_tool_registry(
                     "Given that it is run as `python main.py`, you need to use `print()` statements to see results."
                     "Use this for any data analysis, plotting, or file-based tasks."
                     "All files from this chat are available as read-only under /inputs."
+                    "When this chat belongs to a project, project source files are also available "
+                    "as read-only under /inputs/project/ (original uploads when present, otherwise "
+                    "extracted text). Filenames are <source_id>_<sanitized_name>."
                     "Write any output files to /outputs to return them to the user (images, resulting csv etc.)."
                     "YOu dont need to tell user where the file was created, it will be sent together with your response to them."
-                    "You can call this tool multiple times. Filenames are <attachment_id>_<sanitized_name>."
+                    "You can call this tool multiple times. Chat attachment filenames are <attachment_id>_<sanitized_name>."
                     "Calls do not reuse same sandbox, so any created files will be lost after the call."
                     f"Allowed third-party imports: {ALLOWED_IMPORTS_HINT}."
                 ),
@@ -716,8 +720,9 @@ def _build_tool_registry(
                 name="list_project_sources",
                 description=(
                     "List every document/source attached to this project, with its numeric "
-                    "id, title, a short summary, and length. Call this first to see what "
-                    "material is available. Refer to sources by their small numeric id."
+                    "id, title, a short summary, length, and exec_path under /inputs/project/ "
+                    "for use with code_execution. Call this first to see what material is "
+                    "available. Refer to sources by their small numeric id."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),

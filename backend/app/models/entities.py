@@ -432,6 +432,7 @@ class AgentSource(SQLModel, table=True):
     file_name: Optional[str] = Field(default=None)
     content_type: Optional[str] = Field(default=None)
     content_text: str
+    file_path: Optional[str] = Field(default=None)
     status: AgentSourceStatus = Field(
         default=AgentSourceStatus.queued,
         sa_column=Column(String(32), nullable=False),

@@ -61,6 +61,21 @@ def write_chat_attachment_file(
     return relative_path, len(payload)
 
 
+def write_agent_source_file(
+    *,
+    agent_id: UUID,
+    source_id: UUID,
+    file_name: str,
+    data: bytes,
+) -> tuple[str, int]:
+    safe_name = _sanitize_filename(file_name)
+    relative_path = f"agents/{agent_id}/sources/{source_id}_{safe_name}"
+    absolute_path = _absolute_path(relative_path)
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    absolute_path.write_bytes(data)
+    return relative_path, len(data)
+
+
 def read_file_bytes(file_path: str) -> bytes:
     return _absolute_path(file_path).read_bytes()
 

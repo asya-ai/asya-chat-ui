@@ -57,6 +57,7 @@ from app.models.entities import (
 from app.services.org_service import require_provider_enabled
 from app.services.file_storage import delete_file
 from app.services.agents.runtime import reindex_source
+from app.services.tools.code_execution import project_source_exec_path
 from app.services.langchain_runtime import (
     chat_stream_with_langchain,
     chat_with_langchain,
@@ -762,6 +763,10 @@ async def _run_generation(task_id: UUID) -> None:
                         "`read_project_source` (passing the numeric id) to read the full "
                         "document when a passage matters. Prefer reading the actual document "
                         "over relying on a single snippet.\n"
+                        "- For data analysis, CSV/XLSX processing, plotting, or other "
+                        "file-based work on project documents, use `code_execution`. Project "
+                        "source files are mounted read-only under `/inputs/project/` as "
+                        "`<source_id>_<sanitized_name>` (original file bytes when available).\n"
                         "- Run multiple searches and read more than one source when the "
                         "question is broad or comparative. Do not stop after one search.\n"
                         "- Base your answer on the sources and cite them by title. If the "
@@ -772,6 +777,19 @@ async def _run_generation(task_id: UUID) -> None:
                             "\nAvailable sources in this project:\n"
                             + "\n".join(catalog_lines)
                         )
+                        project_paths = []
+                        for idx, source in enumerate(all_sources, start=1):
+                            if source.status != AgentSourceStatus.ready:
+                                continue
+                            project_paths.append(
+                                f"- [{idx}] \"{source.title}\" -> "
+                                f"{project_source_exec_path(source)}"
+                            )
+                        if project_paths:
+                            guidance += (
+                                "\n\nProject source files for code_execution "
+                                "(/inputs/project/):\n" + "\n".join(project_paths)
+                            )
                     if context_blocks:
                         guidance += (
                             "\n\nRelevant passages for the latest question (starting point - "
