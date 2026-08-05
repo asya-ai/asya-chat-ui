@@ -72,10 +72,11 @@ export const en = {
   me_profile: "Profile",
   me_preferences: "Settings",
   me_action_info: "Show actions taken by model",
-  me_action_info_desc: "Choose how much model action activity to show in chat.",
+  me_action_info_desc:
+    "Choose how much model action activity to show in chat. Detailed mode lets you expand each action for full tool-call details.",
   me_action_info_none: "No action info",
   me_action_info_short: "Short action info",
-  me_action_info_detailed: "Detailed action info",
+  me_action_info_detailed: "Detailed (expandable) action info",
   me_security: "Security",
   me_account: "Account",
   me_logout: "Log out",

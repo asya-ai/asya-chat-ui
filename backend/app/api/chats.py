@@ -1453,6 +1453,111 @@ def _attach_stream_action_attachments(
     parts.append({"type": "action", "label": label, "attachments": attachments})
 
 
+def _is_specialized_tool_event(payload: dict[str, Any]) -> bool:
+    return payload.get("type") in {"code_execution", "url_attachments", "context_summary"}
+
+
+def _tool_event_action_label(payload: dict[str, Any]) -> str:
+    event_type = payload.get("type")
+    if event_type == "tool_call":
+        summary = payload.get("action_summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+        tool_name = payload.get("tool_name")
+        if tool_name == "generate_image":
+            return "Generating image"
+        if tool_name == "edit_image":
+            return "Editing image"
+        if tool_name == "download_attachments":
+            return "Downloading attachments"
+        if tool_name == "code_execution":
+            return "Running code"
+        if tool_name == "extract_pdf":
+            return "Extracting PDF"
+        if isinstance(tool_name, str) and tool_name.strip():
+            return f"Running {tool_name}"
+        return "Running tool"
+    if event_type == "code_execution":
+        return "Running code"
+    if event_type == "url_attachments":
+        return "Downloading attachments"
+    if event_type == "context_summary":
+        return "Summarizing context"
+    return "Running tool"
+
+
+def _action_label_matches_tool_event(label: str, payload: dict[str, Any]) -> bool:
+    event_type = payload.get("type")
+    if event_type == "tool_call":
+        summary = payload.get("action_summary")
+        if isinstance(summary, str) and summary.strip():
+            return label == summary.strip()
+        tool_name = payload.get("tool_name")
+        if tool_name == "generate_image":
+            return label == "Generating image"
+        if tool_name == "edit_image":
+            return label == "Editing image"
+        if tool_name == "download_attachments":
+            return label == "Downloading attachments"
+        if tool_name == "code_execution":
+            return label == "Running code" or label.startswith("Running code (")
+        if tool_name == "extract_pdf":
+            return label == "Extracting PDF"
+        return False
+    if event_type == "code_execution":
+        return label == "Running code" or label.startswith("Running code (")
+    if event_type == "url_attachments":
+        return label == "Downloading attachments"
+    if event_type == "context_summary":
+        return label == "Summarizing context" or "summar" in label.lower()
+    return False
+
+
+def _attach_stream_action_tool_event(
+    parts: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> None:
+    event_id = payload.get("id")
+    if isinstance(event_id, str) and event_id:
+        for index in range(len(parts) - 1, -1, -1):
+            part = parts[index]
+            if part.get("type") != "action":
+                continue
+            existing = part.get("tool_event")
+            if isinstance(existing, dict) and existing.get("id") == event_id:
+                part["tool_event"] = payload
+                return
+    for index in range(len(parts) - 1, -1, -1):
+        part = parts[index]
+        if part.get("type") != "action":
+            continue
+        label = part.get("label")
+        if not isinstance(label, str) or not _action_label_matches_tool_event(label, payload):
+            continue
+        existing = part.get("tool_event")
+        if (
+            isinstance(existing, dict)
+            and _is_specialized_tool_event(existing)
+            and payload.get("type") == "tool_call"
+        ):
+            return
+        if (
+            isinstance(existing, dict)
+            and not _is_specialized_tool_event(payload)
+            and existing.get("id") != event_id
+        ):
+            continue
+        part["tool_event"] = payload
+        return
+    parts.append(
+        {
+            "type": "action",
+            "label": _tool_event_action_label(payload),
+            "tool_event": payload,
+        }
+    )
+
+
 def _normalize_timeline_attachments(
     raw_attachments: Any,
     message_attachments: list["ChatMessageAttachmentRead"] | None = None,
@@ -1521,6 +1626,7 @@ def _build_stream_parts_from_events(
             continue
         if event.event_type != "tool_event":
             continue
+        _attach_stream_action_tool_event(parts, payload)
         if payload.get("type") != "tool_call" or payload.get("state") != "end":
             continue
         output = payload.get("output")

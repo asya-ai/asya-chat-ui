@@ -32,7 +32,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import ChatSidebar from "@/pages/chat/ChatSidebar"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
-import { MessageList } from "@/pages/chat/MessageList"
+import { MessageList, type MessageListHandle } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
 import {
   useChatSearch,
@@ -88,6 +88,101 @@ const appendStreamAction = (
   parts: ChatMessage["stream_parts"],
   label: string
 ): NonNullable<ChatMessage["stream_parts"]> => [...(parts ?? []), { type: "action", label }]
+
+const actionLabelMatchesToolEvent = (
+  label: string,
+  toolEvent: NonNullable<ChatMessage["tool_event"]>
+): boolean => {
+  if (toolEvent.type === "tool_call") {
+    const summary = toolEvent.action_summary?.trim()
+    if (summary) return label === summary
+    if (toolEvent.tool_name === "generate_image") return label === "Generating image"
+    if (toolEvent.tool_name === "edit_image") return label === "Editing image"
+    if (toolEvent.tool_name === "download_attachments") {
+      return label === "Downloading attachments"
+    }
+    if (toolEvent.tool_name === "code_execution") {
+      return label === "Running code" || label.startsWith("Running code (")
+    }
+    if (toolEvent.tool_name === "extract_pdf") return label === "Extracting PDF"
+    return false
+  }
+  if (toolEvent.type === "code_execution") {
+    return label === "Running code" || label.startsWith("Running code (")
+  }
+  if (toolEvent.type === "url_attachments") {
+    return label === "Downloading attachments"
+  }
+  if (toolEvent.type === "context_summary") {
+    return label === "Summarizing context" || label.toLowerCase().includes("summar")
+  }
+  return false
+}
+
+const isSpecializedToolEvent = (
+  toolEvent: NonNullable<ChatMessage["tool_event"]>
+): boolean =>
+  toolEvent.type === "code_execution" ||
+  toolEvent.type === "url_attachments" ||
+  toolEvent.type === "context_summary"
+
+const resolveToolEventActionLabel = (
+  toolEvent: NonNullable<ChatMessage["tool_event"]>
+): string => {
+  if (toolEvent.type === "tool_call") {
+    const summary = toolEvent.action_summary?.trim()
+    if (summary) return summary
+    if (toolEvent.tool_name === "generate_image") return "Generating image"
+    if (toolEvent.tool_name === "edit_image") return "Editing image"
+    if (toolEvent.tool_name === "download_attachments") return "Downloading attachments"
+    if (toolEvent.tool_name === "code_execution") return "Running code"
+    if (toolEvent.tool_name === "extract_pdf") return "Extracting PDF"
+    return `Running ${toolEvent.tool_name}`
+  }
+  if (toolEvent.type === "code_execution") return "Running code"
+  if (toolEvent.type === "url_attachments") return "Downloading attachments"
+  if (toolEvent.type === "context_summary") return "Summarizing context"
+  return "Running tool"
+}
+
+const attachStreamActionToolEvent = (
+  parts: ChatMessage["stream_parts"],
+  toolEvent: NonNullable<ChatMessage["tool_event"]>
+): NonNullable<ChatMessage["stream_parts"]> => {
+  const next = [...(parts ?? [])]
+  if (toolEvent.id) {
+    for (let i = next.length - 1; i >= 0; i -= 1) {
+      const part = next[i]
+      if (part.type !== "action" || part.tool_event?.id !== toolEvent.id) continue
+      next[i] = { ...part, tool_event: toolEvent }
+      return next
+    }
+  }
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    const part = next[i]
+    if (part.type !== "action") continue
+    if (!actionLabelMatchesToolEvent(part.label, toolEvent)) continue
+    if (
+      part.tool_event &&
+      isSpecializedToolEvent(part.tool_event) &&
+      toolEvent.type === "tool_call"
+    ) {
+      // Keep richer specialized payload; action is already covered.
+      return next
+    }
+    if (part.tool_event && !isSpecializedToolEvent(toolEvent) && part.tool_event.id !== toolEvent.id) {
+      continue
+    }
+    next[i] = { ...part, tool_event: toolEvent }
+    return next
+  }
+  next.push({
+    type: "action",
+    label: resolveToolEventActionLabel(toolEvent),
+    tool_event: toolEvent,
+  })
+  return next
+}
 
 const attachStreamActionAttachments = (
   parts: ChatMessage["stream_parts"],
@@ -165,8 +260,7 @@ export const ChatPage = () => {
   >([])
   const [editingAttachmentError, setEditingAttachmentError] = useState<string | null>(null)
   const [isEditDragActive, setIsEditDragActive] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement | null>(null)
-  const messagesContainerRef = useRef<HTMLDivElement | null>(null)
+  const messageListRef = useRef<MessageListHandle | null>(null)
   const lastScrolledIdRef = useRef<string | null>(null)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const [pendingAttachments, setPendingAttachments] = useState<
@@ -656,6 +750,16 @@ export const ChatPage = () => {
             toolEvent,
             typeof event.task_id === "string" ? event.task_id : null
           )
+          updateChatMessagesFor(targetChatId, (prev) =>
+            prev.map((msg) =>
+              matchesAssistant(msg)
+                ? {
+                    ...msg,
+                    stream_parts: attachStreamActionToolEvent(msg.stream_parts, toolEvent),
+                  }
+                : msg
+            )
+          )
           if (
             toolEvent.type === "tool_call" &&
             toolEvent.state === "end" &&
@@ -668,7 +772,8 @@ export const ChatPage = () => {
               toolEvent.action_summary.trim()
                 ? toolEvent.action_summary
                 : null) ||
-              (toolEvent.tool_name === "generate_image" ? "Generating image" : null)
+              (toolEvent.tool_name === "generate_image" ? "Generating image" : null) ||
+              (toolEvent.tool_name === "edit_image" ? "Editing image" : null)
             if (label) {
               updateChatMessagesFor(targetChatId, (prev) =>
                 prev.map((msg) =>
@@ -1180,6 +1285,7 @@ export const ChatPage = () => {
     setToolEvents([])
     lastScrolledIdRef.current = null
     isChatSwitchRef.current = true
+    setAutoScrollEnabled(true)
     Object.values(taskSubscriptionsRef.current).forEach((cancel) => cancel())
     taskSubscriptionsRef.current = {}
     Object.values(taskPollingRef.current).forEach((timeoutId) =>
@@ -1305,9 +1411,37 @@ export const ChatPage = () => {
   ])
 
   const visibleMessages = useMemo(() => {
+    const nestedToolEventIds = new Set<string>()
+    const nestedActionKeys = new Set<string>()
+    for (const msg of serverMessages) {
+      if (msg.role !== "assistant" || !msg.stream_parts?.length) continue
+      for (const part of msg.stream_parts) {
+        if (part.type !== "action" || !part.tool_event) continue
+        if (part.tool_event.id) nestedToolEventIds.add(part.tool_event.id)
+        nestedActionKeys.add(
+          msg.task_id ? `${msg.task_id}:${part.label}` : `id:${msg.id}:${part.label}`
+        )
+      }
+    }
     const merged = mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
       if (!msg.tool_event) return true
-      return actionInfoLevel === "detailed"
+      if (actionInfoLevel !== "detailed") return false
+      const event = msg.tool_event
+      if (event.id && nestedToolEventIds.has(event.id)) return false
+      // Hide generic tool_call / specialized bubbles already nested under a timeline action.
+      for (const assistant of serverMessages) {
+        if (assistant.role !== "assistant" || !assistant.stream_parts?.length) continue
+        if (msg.task_id && assistant.task_id && msg.task_id !== assistant.task_id) continue
+        for (const part of assistant.stream_parts) {
+          if (part.type !== "action" || !part.tool_event) continue
+          if (!actionLabelMatchesToolEvent(part.label, event)) continue
+          const key = assistant.task_id
+            ? `${assistant.task_id}:${part.label}`
+            : `id:${assistant.id}:${part.label}`
+          if (nestedActionKeys.has(key)) return false
+        }
+      }
+      return true
     })
     return collapseActivityEvents(merged)
   }, [
@@ -1318,14 +1452,9 @@ export const ChatPage = () => {
     actionInfoLevel,
   ])
 
-  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
-    const container = messagesContainerRef.current
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior })
-      return
-    }
-    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" })
-  }
+  const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    setAutoScrollEnabled(atBottom)
+  }, [])
 
   useEffect(() => {
     if (!autoScrollEnabled && !currentChatLoading) return
@@ -1338,31 +1467,17 @@ export const ChatPage = () => {
       lastScrolledIdRef.current = lastMsg.id
       const behavior: ScrollBehavior = isChatSwitchRef.current ? "instant" : "smooth"
       isChatSwitchRef.current = false
+      const lastIndex = visibleMessages.length - 1
       if (lastMsg.role === "user") {
-        scrollToBottom(behavior)
+        messageListRef.current?.scrollToBottom(behavior)
       } else if (lastMsg.role === "assistant") {
-        const container = messagesContainerRef.current
-        const target = container?.querySelector(
-          `[data-message-id="${lastMsg.id}"]`
-        )
-        if (target && container) {
-          const top = (target as HTMLElement).offsetTop - container.offsetTop
-          container.scrollTo({ top, behavior })
-        } else {
-          scrollToBottom(behavior)
-        }
+        messageListRef.current?.scrollToIndex(lastIndex, {
+          align: "start",
+          behavior,
+        })
       }
     }
   }, [visibleMessages, autoScrollEnabled, currentChatLoading])
-
-  const handleMessagesScroll = useCallback(() => {
-    const container = messagesContainerRef.current
-    if (!container) return
-    const threshold = 80
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight
-    setAutoScrollEnabled(distanceFromBottom <= threshold)
-  }, [])
 
   const startNewChat = () => {
     replaceCurrentChatMessages([])
@@ -2528,7 +2643,7 @@ export const ChatPage = () => {
       </aside>
       <main
         id="main-content"
-        className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
+        className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
           desktopSidebarOpen ? "md:ml-0" : "md:ml-2"
         }`}
       >
@@ -2641,12 +2756,12 @@ export const ChatPage = () => {
           </Button>
         </div>
         <MessageList
+          ref={messageListRef}
+          key={chatId ?? "new"}
           messages={visibleMessages}
           welcomeTitle={welcomeTitle}
           isLoading={isMessagesLoading}
-          onScroll={handleMessagesScroll}
-          containerRef={messagesContainerRef}
-          endRef={messagesEndRef}
+          onAtBottomChange={handleAtBottomChange}
           renderMessage={renderMessage}
         />
         <ChatComposer

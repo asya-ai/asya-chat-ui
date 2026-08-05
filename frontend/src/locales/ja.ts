@@ -74,10 +74,11 @@ export const ja = {
   me_profile: "プロフィール",
   me_preferences: "設定",
   me_action_info: "モデルのアクション表示",
-  me_action_info_desc: "チャットに表示するモデルのアクション情報の量を選びます。",
+  me_action_info_desc:
+    "チャットに表示するモデルのアクション情報の量を選びます。詳細モードでは各アクションを展開してツール呼び出しの全文を確認できます。",
   me_action_info_none: "アクション情報なし",
   me_action_info_short: "短いアクション情報",
-  me_action_info_detailed: "詳細なアクション情報",
+  me_action_info_detailed: "詳細（展開可能）なアクション情報",
   me_security: "セキュリティ",
   me_account: "アカウント",
   me_logout: "ログアウト",

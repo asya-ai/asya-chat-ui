@@ -260,7 +260,12 @@ export type ChatMessageAttachmentLike =
 
 export type AssistantStreamPart =
   | { type: "text"; text: string }
-  | { type: "action"; label: string; attachments?: ChatMessageAttachmentLike[] }
+  | {
+      type: "action"
+      label: string
+      attachments?: ChatMessageAttachmentLike[]
+      tool_event?: ToolEvent
+    }
 
 export type UsageSlice = {
   key: string

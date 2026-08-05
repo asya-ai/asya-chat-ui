@@ -74,10 +74,11 @@ export const lv = {
   me_profile: "Profils",
   me_preferences: "Iestatījumi",
   me_action_info: "Rādīt modeļa veiktās darbības",
-  me_action_info_desc: "Izvēlies, cik daudz modeļa darbību informācijas rādīt čatā.",
+  me_action_info_desc:
+    "Izvēlies, cik daudz modeļa darbību informācijas rādīt čatā. Detalizētajā režīmā katru darbību var izvērst, lai redzētu pilnu rīka izsaukuma info.",
   me_action_info_none: "Bez darbību info",
   me_action_info_short: "Īsa darbību info",
-  me_action_info_detailed: "Detalizēta darbību info",
+  me_action_info_detailed: "Detalizēta (izvēršama) darbību info",
   me_security: "Drošība",
   me_account: "Konts",
   me_logout: "Izrakstīties",

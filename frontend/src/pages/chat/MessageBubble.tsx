@@ -1,21 +1,50 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import type { CSSProperties } from "react"
+import type { ComponentProps, CSSProperties } from "react"
 import { useNavigate } from "react-router"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
-import mermaid from "mermaid"
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
+import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter"
+import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash"
+import css from "react-syntax-highlighter/dist/esm/languages/prism/css"
+import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript"
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json"
+import jsx from "react-syntax-highlighter/dist/esm/languages/prism/jsx"
+import markdown from "react-syntax-highlighter/dist/esm/languages/prism/markdown"
+import python from "react-syntax-highlighter/dist/esm/languages/prism/python"
+import sql from "react-syntax-highlighter/dist/esm/languages/prism/sql"
+import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx"
+import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript"
+import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml"
 import { Copy, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ActionInfoLevel } from "@/lib/storage"
-import type { ChatMessage, ChatMessageAttachmentInput } from "@/lib/types"
+import type { ChatMessage, ChatMessageAttachmentInput, ToolEvent } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+
+SyntaxHighlighter.registerLanguage("bash", bash)
+SyntaxHighlighter.registerLanguage("sh", bash)
+SyntaxHighlighter.registerLanguage("shell", bash)
+SyntaxHighlighter.registerLanguage("css", css)
+SyntaxHighlighter.registerLanguage("javascript", javascript)
+SyntaxHighlighter.registerLanguage("js", javascript)
+SyntaxHighlighter.registerLanguage("json", json)
+SyntaxHighlighter.registerLanguage("jsx", jsx)
+SyntaxHighlighter.registerLanguage("markdown", markdown)
+SyntaxHighlighter.registerLanguage("md", markdown)
+SyntaxHighlighter.registerLanguage("python", python)
+SyntaxHighlighter.registerLanguage("py", python)
+SyntaxHighlighter.registerLanguage("sql", sql)
+SyntaxHighlighter.registerLanguage("tsx", tsx)
+SyntaxHighlighter.registerLanguage("typescript", typescript)
+SyntaxHighlighter.registerLanguage("ts", typescript)
+SyntaxHighlighter.registerLanguage("yaml", yaml)
+SyntaxHighlighter.registerLanguage("yml", yaml)
 
 type MessageBubbleProps = {
   msg: ChatMessage
@@ -59,13 +88,16 @@ const nextMermaidRenderId = () => {
   return `chatui-mermaid-${mermaidRenderId}`
 }
 
-const ensureMermaidInitialized = () => {
-  if (mermaidInitialized) return
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-  })
-  mermaidInitialized = true
+const loadMermaid = async () => {
+  const mermaid = (await import("mermaid")).default
+  if (!mermaidInitialized) {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+    })
+    mermaidInitialized = true
+  }
+  return mermaid
 }
 
 const MERMAID_START_PATTERN =
@@ -140,6 +172,15 @@ const isBlockCode = (content: string, className?: string) =>
 const codeBlockClassName =
   "relative my-3 overflow-hidden rounded-lg border border-border bg-code text-code-foreground shadow-sm"
 
+const scheduleIdle = (callback: () => void, timeout = 120) => {
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(callback, { timeout })
+    return () => window.cancelIdleCallback(id)
+  }
+  const id = window.setTimeout(callback, 0)
+  return () => window.clearTimeout(id)
+}
+
 const copyToClipboard = async (text: string) => {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text)
@@ -156,6 +197,159 @@ const copyToClipboard = async (text: string) => {
   textarea.select()
   document.execCommand("copy")
   document.body.removeChild(textarea)
+}
+
+const ToolEventDetails = ({
+  toolEvent,
+  t,
+  onPreviewAttachment,
+}: {
+  toolEvent: ToolEvent
+  t: I18nContextValue["t"]
+  onPreviewAttachment: (attachment: ChatMessageAttachmentInput) => void
+}) => {
+  if (toolEvent.type === "code_execution") {
+    return (
+      <div className="space-y-3">
+        <div>
+          <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_execution_code")}</p>
+          <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs">
+            {toolEvent.code ?? ""}
+          </pre>
+        </div>
+        <div>
+          <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_execution_output")}</p>
+          <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs">
+            {[
+              toolEvent.output?.stdout,
+              toolEvent.output?.stderr,
+              toolEvent.output?.error
+                ? `${t("common_error")}: ${toolEvent.output.error}`
+                : null,
+              toolEvent.output?.requires_approval
+                ? t("chat_execution_requires_approval")
+                : null,
+              toolEvent.output?.timed_out ? t("chat_execution_timed_out") : null,
+              typeof toolEvent.output?.exit_code === "number"
+                ? t("chat_execution_exit_code", {
+                    code: toolEvent.output.exit_code,
+                  })
+                : null,
+            ]
+              .filter(Boolean)
+              .join("\n") || t("chat_execution_no_output")}
+          </pre>
+        </div>
+        {toolEvent.output?.output_files && toolEvent.output.output_files.length > 0 ? (
+          <div className="space-y-2">
+            <p className="opacity-70 text-xs uppercase">{t("chat_execution_outputs")}</p>
+            <div className="flex flex-wrap gap-2">
+              {toolEvent.output.output_files
+                .filter((file) => (file.content_type ?? "").startsWith("image/"))
+                .map((file, index) => (
+                  <Button
+                    key={`${file.file_name}-${index}`}
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                    onClick={() =>
+                      onPreviewAttachment({
+                        file_name: file.file_name,
+                        content_type: file.content_type,
+                        data_base64: file.data_base64,
+                      })
+                    }
+                  >
+                    <img
+                      src={`data:${file.content_type};base64,${file.data_base64}`}
+                      alt={file.file_name}
+                      className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
+                    />
+                  </Button>
+                ))}
+              {toolEvent.output.output_files
+                .filter((file) => !(file.content_type ?? "").startsWith("image/"))
+                .map((file, index) => (
+                  <a
+                    key={`${file.file_name}-${index}`}
+                    className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                    href={`data:${file.content_type};base64,${file.data_base64}`}
+                    download={file.file_name}
+                  >
+                    {file.file_name}
+                  </a>
+                ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+  if (toolEvent.type === "tool_call") {
+    return (
+      <div className="space-y-1 py-1 text-xs">
+        <div className="opacity-80">
+          {toolEvent.action_summary ||
+            toolEvent.input_preview ||
+            t("chat_running_tool_call")}
+        </div>
+        {toolEvent.output?.result_preview ? (
+          <div className="text-muted-foreground">{toolEvent.output.result_preview}</div>
+        ) : null}
+        {toolEvent.output?.error ? (
+          <div className="text-destructive/90">
+            {t("common_error")}: {toolEvent.output.error}
+          </div>
+        ) : null}
+        {toolEvent.output?.raw_output ? (
+          <details className="pt-1">
+            <summary className="opacity-80 cursor-pointer">{t("chat_result")}</summary>
+            <pre className="bg-background/40 mt-1 p-2 rounded overflow-x-auto text-[11px] whitespace-pre-wrap">
+              {JSON.stringify(toolEvent.output.raw_output, null, 2)}
+            </pre>
+          </details>
+        ) : null}
+      </div>
+    )
+  }
+  if (toolEvent.type === "url_attachments") {
+    return (
+      <div className="space-y-3">
+        <div>
+          <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_sources")}</p>
+          <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
+            {(toolEvent.urls ?? []).join("\n") || t("chat_no_urls_provided")}
+          </pre>
+        </div>
+        <div>
+          <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_result")}</p>
+          <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
+            {toolEvent.output?.error
+              ? `${t("common_error")}: ${toolEvent.output.error}`
+              : (toolEvent.output?.results ?? [])
+                  .map((row) =>
+                    row.error
+                      ? `- ${row.url ?? t("chat_unknown")}: ${t("common_error")} ${row.error}`
+                      : `- ${row.file_name ?? t("chat_file")} (${row.content_type ?? t("chat_unknown")}, ${row.size_bytes ?? 0} ${t("chat_bytes_unit")})`
+                  )
+                  .join("\n") || t("chat_waiting_for_download")}
+          </pre>
+        </div>
+      </div>
+    )
+  }
+  if (toolEvent.type === "context_summary") {
+    return (
+      <div>
+        <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_summary")}</p>
+        <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
+          {toolEvent.summary ?? ""}
+        </pre>
+      </div>
+    )
+  }
+  return null
 }
 
 const CopyTextButton = ({
@@ -185,6 +379,107 @@ const CopyTextButton = ({
   </Button>
 )
 
+const HighlightedCodeBlock = ({
+  code,
+  language,
+  codeTheme,
+  copyLabel,
+  restProps,
+}: {
+  code: string
+  language: string
+  codeTheme: Record<string, CSSProperties>
+  copyLabel: string
+  restProps: Record<string, unknown>
+}) => {
+  const [highlight, setHighlight] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const cancel = scheduleIdle(() => {
+      if (!cancelled) setHighlight(true)
+    })
+    return () => {
+      cancelled = true
+      cancel()
+    }
+  }, [code, language])
+
+  return (
+    <div className={codeBlockClassName}>
+      <CopyTextButton
+        text={code}
+        label={copyLabel}
+        className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
+      />
+      {highlight ? (
+        <SyntaxHighlighter
+          {...restProps}
+          style={codeTheme}
+          language={language}
+          PreTag="div"
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            paddingTop: "2.5rem",
+            background: "transparent",
+          }}
+          codeTagProps={{
+            className: "font-mono text-[13px]",
+          }}
+        >
+          {code}
+        </SyntaxHighlighter>
+      ) : (
+        <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
+          <code className={`language-${language} font-mono`}>{code}</code>
+        </pre>
+      )}
+    </div>
+  )
+}
+
+const DeferredMarkdown = ({
+  markdown,
+  urgent,
+  components,
+}: {
+  markdown: string
+  urgent: boolean
+  components: ComponentProps<typeof ReactMarkdown>["components"]
+}) => {
+  const [ready, setReady] = useState(urgent)
+  const normalized = useMemo(() => normalizeMathContent(markdown), [markdown])
+
+  useEffect(() => {
+    if (urgent) {
+      setReady(true)
+      return
+    }
+    setReady(false)
+    const cancel = scheduleIdle(() => setReady(true), 64)
+    return cancel
+  }, [markdown, urgent])
+
+  if (!ready) {
+    return (
+      <div className="wrap-break-word whitespace-pre-wrap text-inherit">
+        {markdown}
+      </div>
+    )
+  }
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={components}
+    >
+      {normalized}
+    </ReactMarkdown>
+  )
+}
+
 const MermaidDiagram = ({
   chart,
   copyLabel,
@@ -205,7 +500,7 @@ const MermaidDiagram = ({
       container.innerHTML = ""
       setRenderError(null)
       try {
-        ensureMermaidInitialized()
+        const mermaid = await loadMermaid()
         const { svg, bindFunctions } = await mermaid.render(nextMermaidRenderId(), chart)
         if (cancelled || !containerRef.current) return
         containerRef.current.innerHTML = svg
@@ -249,7 +544,7 @@ const MermaidDiagram = ({
       />
       <div
         ref={containerRef}
-        className="[&_svg]:w-full [&_svg]:min-w-max [&_svg]:h-auto overflow-x-auto"
+        className="max-w-full overflow-x-auto [&_svg]:h-auto [&_svg]:max-w-none"
       />
     </div>
   )
@@ -471,6 +766,17 @@ const MessageBubbleComponent = ({
           )
         }
         if (isBlockCode(codeContent, className)) {
+          if (match) {
+            return (
+              <HighlightedCodeBlock
+                code={codeContent}
+                language={match[1]}
+                codeTheme={codeTheme}
+                copyLabel={t("chat_copy_code")}
+                restProps={rest}
+              />
+            )
+          }
           return (
             <div className={codeBlockClassName}>
               <CopyTextButton
@@ -478,31 +784,11 @@ const MessageBubbleComponent = ({
                 label={t("chat_copy_code")}
                 className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
               />
-              {match ? (
-                <SyntaxHighlighter
-                  {...rest}
-                  style={codeTheme}
-                  language={match[1]}
-                  PreTag="div"
-                  customStyle={{
-                    margin: 0,
-                    padding: "1rem",
-                    paddingTop: "2.5rem",
-                    background: "transparent",
-                  }}
-                  codeTagProps={{
-                    className: "font-mono text-[13px]",
-                  }}
-                >
+              <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
+                <code className={className} {...rest}>
                   {codeContent}
-                </SyntaxHighlighter>
-              ) : (
-                <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
-                  <code className={className} {...rest}>
-                    {codeContent}
-                  </code>
-                </pre>
-              )}
+                </code>
+              </pre>
             </div>
           )
         }
@@ -515,15 +801,18 @@ const MessageBubbleComponent = ({
     }),
     [codeTheme, isUser, t]
   )
+  const isLiveGeneration =
+    msg.generation_status === "queued" ||
+    msg.generation_status === "running" ||
+    msg.generation_status === "streaming"
+
   const renderMarkdown = (markdown: string, key?: string) => (
-    <ReactMarkdown
+    <DeferredMarkdown
       key={key}
-      remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
+      markdown={markdown}
+      urgent={isLiveGeneration}
       components={markdownComponents}
-    >
-      {normalizeMathContent(markdown)}
-    </ReactMarkdown>
+    />
   )
   const attachmentSrc = (attachment: {
     content_type: string
@@ -574,13 +863,13 @@ const MessageBubbleComponent = ({
 
   return (
     <div
-      className={`mx-auto flex w-full max-w-(--chat-content-width) ${
+      className={`mx-auto flex w-full min-w-0 max-w-(--chat-content-width) ${
         isUser ? "justify-end" : "justify-start"
       }`}
     >
-      <div className={`group ${isEditing || !isUser ? "w-full" : "max-w-full"}`}>
+      <div className={`group min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
         <div
-          className={`overflow-hidden rounded-lg wrap-break-word whitespace-normal ${
+          className={`min-w-0 overflow-hidden rounded-lg wrap-break-word whitespace-normal ${
             isUser
               ? "bg-secondary p-2 text-base leading-5 font-semibold text-foreground"
               : hasEventHeader
@@ -608,110 +897,20 @@ const MessageBubbleComponent = ({
               <summary className="text-xs uppercase tracking-wide cursor-pointer">
                 {t("chat_execution_details")}
               </summary>
-              <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_execution_code")}</p>
-                <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs">
-                  {codeEvent?.code ?? ""}
-                </pre>
-              </div>
-              <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_execution_output")}</p>
-                <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs">
-                  {[
-                    codeEvent?.output?.stdout,
-                    codeEvent?.output?.stderr,
-                    codeEvent?.output?.error
-                      ? `${t("common_error")}: ${codeEvent.output.error}`
-                      : null,
-                    codeEvent?.output?.requires_approval
-                      ? t("chat_execution_requires_approval")
-                      : null,
-                    codeEvent?.output?.timed_out
-                      ? t("chat_execution_timed_out")
-                      : null,
-                    typeof codeEvent?.output?.exit_code === "number"
-                      ? t("chat_execution_exit_code", {
-                          code: codeEvent.output.exit_code,
-                        })
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join("\n") || t("chat_execution_no_output")}
-                </pre>
-              </div>
-              {codeEvent?.output?.output_files &&
-              codeEvent.output.output_files.length > 0 ? (
-                <div className="space-y-2">
-                  <p className="opacity-70 text-xs uppercase">
-                    {t("chat_execution_outputs")}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {codeEvent.output.output_files
-                      .filter((file) => (file.content_type ?? "").startsWith("image/"))
-                      .map((file: { file_name: string; content_type: string; data_base64: string }, index: number) => (
-                        <Button
-                          key={`${file.file_name}-${index}`}
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                          onClick={() =>
-                            onPreviewAttachment({
-                              file_name: file.file_name,
-                              content_type: file.content_type,
-                              data_base64: file.data_base64,
-                            })
-                          }
-                        >
-                          <img
-                            src={`data:${file.content_type};base64,${file.data_base64}`}
-                            alt={file.file_name}
-                            className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
-                          />
-                        </Button>
-                      ))}
-                    {codeEvent.output.output_files
-                      .filter((file) => !(file.content_type ?? "").startsWith("image/"))
-                      .map((file: { file_name: string; content_type: string; data_base64: string }, index: number) => (
-                        <a
-                          key={`${file.file_name}-${index}`}
-                          className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                          href={`data:${file.content_type};base64,${file.data_base64}`}
-                          download={file.file_name}
-                        >
-                          {file.file_name}
-                        </a>
-                      ))}
-                  </div>
-                </div>
+              {codeEvent ? (
+                <ToolEventDetails
+                  toolEvent={codeEvent}
+                  t={t}
+                  onPreviewAttachment={onPreviewAttachment}
+                />
               ) : null}
             </details>
           ) : toolCallEvent ? (
-            <div className="space-y-1 py-1 text-xs">
-              <div className="opacity-80">
-                {toolCallEvent.action_summary ||
-                  toolCallEvent.input_preview ||
-                  t("chat_running_tool_call")}
-              </div>
-              {toolCallEvent.output?.result_preview ? (
-                <div className="text-muted-foreground">
-                  {toolCallEvent.output.result_preview}
-                </div>
-              ) : null}
-              {toolCallEvent.output?.error ? (
-                <div className="text-destructive/90">
-                  {t("common_error")}: {toolCallEvent.output.error}
-                </div>
-              ) : null}
-              {toolCallEvent.output?.raw_output ? (
-                <details className="pt-1">
-                  <summary className="opacity-80 cursor-pointer">{t("chat_result")}</summary>
-                  <pre className="bg-background/40 mt-1 p-2 rounded overflow-x-auto text-[11px] whitespace-pre-wrap">
-                    {JSON.stringify(toolCallEvent.output.raw_output, null, 2)}
-                  </pre>
-                </details>
-              ) : null}
-            </div>
+            <ToolEventDetails
+              toolEvent={toolCallEvent}
+              t={t}
+              onPreviewAttachment={onPreviewAttachment}
+            />
           ) : chatViewEvent ? (
             <div className="space-y-1 py-1 text-xs">
               {(chatViewEvent.opens ?? []).map((open, index) => {
@@ -737,38 +936,24 @@ const MessageBubbleComponent = ({
               <summary className="text-xs uppercase tracking-wide cursor-pointer">
                 {t("chat_downloaded_attachments")}
               </summary>
-              <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_sources")}</p>
-                <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
-                  {(urlAttachmentsEvent.urls ?? []).join("\n") || t("chat_no_urls_provided")}
-                </pre>
-              </div>
-              <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_result")}</p>
-                <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
-                  {urlAttachmentsEvent.output?.error
-                    ? `${t("common_error")}: ${urlAttachmentsEvent.output.error}`
-                    : (urlAttachmentsEvent.output?.results ?? [])
-                        .map((row) =>
-                          row.error
-                            ? `- ${row.url ?? t("chat_unknown")}: ${t("common_error")} ${row.error}`
-                            : `- ${row.file_name ?? t("chat_file")} (${row.content_type ?? t("chat_unknown")}, ${row.size_bytes ?? 0} ${t("chat_bytes_unit")})`
-                        )
-                        .join("\n") || t("chat_waiting_for_download")}
-                </pre>
-              </div>
+              <ToolEventDetails
+                toolEvent={urlAttachmentsEvent}
+                t={t}
+                onPreviewAttachment={onPreviewAttachment}
+              />
             </details>
           ) : isContextSummaryEvent ? (
             <details className="space-y-3">
               <summary className="text-xs uppercase tracking-wide cursor-pointer">
                 {t("chat_context_summarized")}
               </summary>
-              <div>
-                <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_summary")}</p>
-                <pre className="bg-background/40 p-2 rounded overflow-x-auto text-xs whitespace-pre-wrap">
-                  {contextSummaryEvent?.summary ?? ""}
-                </pre>
-              </div>
+              {contextSummaryEvent ? (
+                <ToolEventDetails
+                  toolEvent={contextSummaryEvent}
+                  t={t}
+                  onPreviewAttachment={onPreviewAttachment}
+                />
+              ) : null}
             </details>
           ) : isEditing ? (
             <div
@@ -929,55 +1114,83 @@ const MessageBubbleComponent = ({
                       )
                     }
                     if (actionInfoLevel === "detailed") {
+                      const toolEvent = part.tool_event
+                      const attachmentRow =
+                        actionAttachments.length > 0 ? (
+                          <div className="flex flex-wrap gap-2 pl-3">
+                            {actionAttachments.map((attachment, attachmentIndex) => {
+                              const isImage = (attachment.content_type ?? "").startsWith(
+                                "image/"
+                              )
+                              if (isImage) {
+                                return (
+                                  <Button
+                                    key={`${attachment.file_name}-${attachmentIndex}`}
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                                    onClick={() =>
+                                      onPreviewAttachment({
+                                        file_name: attachment.file_name,
+                                        content_type: attachment.content_type,
+                                        data_base64: attachment.data_base64,
+                                        content_url: attachment.content_url,
+                                      })
+                                    }
+                                  >
+                                    <img
+                                      src={attachmentSrc(attachment)}
+                                      alt={attachment.file_name}
+                                      className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
+                                    />
+                                  </Button>
+                                )
+                              }
+                              return (
+                                <a
+                                  key={`${attachment.file_name}-${attachmentIndex}`}
+                                  className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                                  href={attachmentHref(attachment)}
+                                  download={attachment.file_name}
+                                >
+                                  {attachment.file_name}
+                                </a>
+                              )
+                            })}
+                          </div>
+                        ) : null
+                      if (!toolEvent) {
+                        return (
+                          <div key={`action-${index}`} className="space-y-2">
+                            <div className="flex items-start gap-1.5 text-xs text-muted-foreground leading-5">
+                              <span aria-hidden="true" className="select-none opacity-50">
+                                ›
+                              </span>
+                              <span className="min-w-0 wrap-break-word">{part.label}</span>
+                            </div>
+                            {attachmentRow}
+                          </div>
+                        )
+                      }
                       return (
                         <div key={`action-${index}`} className="space-y-2">
-                          <span className="inline-flex px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide">
-                            {part.label}
-                          </span>
-                          {actionAttachments.length > 0 ? (
-                            <div className="flex flex-wrap gap-2">
-                              {actionAttachments.map((attachment, attachmentIndex) => {
-                                const isImage = (attachment.content_type ?? "").startsWith(
-                                  "image/"
-                                )
-                                if (isImage) {
-                                  return (
-                                    <Button
-                                      key={`${attachment.file_name}-${attachmentIndex}`}
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                                      onClick={() =>
-                                        onPreviewAttachment({
-                                          file_name: attachment.file_name,
-                                          content_type: attachment.content_type,
-                                          data_base64: attachment.data_base64,
-                                          content_url: attachment.content_url,
-                                        })
-                                      }
-                                    >
-                                      <img
-                                        src={attachmentSrc(attachment)}
-                                        alt={attachment.file_name}
-                                        className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
-                                      />
-                                    </Button>
-                                  )
-                                }
-                                return (
-                                  <a
-                                    key={`${attachment.file_name}-${attachmentIndex}`}
-                                    className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                                    href={attachmentHref(attachment)}
-                                    download={attachment.file_name}
-                                  >
-                                    {attachment.file_name}
-                                  </a>
-                                )
-                              })}
+                          <details className="group/action text-xs text-muted-foreground">
+                            <summary className="flex items-start gap-1.5 leading-5 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                              <span aria-hidden="true" className="select-none opacity-50">
+                                ›
+                              </span>
+                              <span className="min-w-0 wrap-break-word">{part.label}</span>
+                            </summary>
+                            <div className="mt-2 ml-3 space-y-2 text-foreground">
+                              <ToolEventDetails
+                                toolEvent={toolEvent}
+                                t={t}
+                                onPreviewAttachment={onPreviewAttachment}
+                              />
                             </div>
-                          ) : null}
+                          </details>
+                          {attachmentRow}
                         </div>
                       )
                     }
