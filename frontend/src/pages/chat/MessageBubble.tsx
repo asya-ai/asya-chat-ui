@@ -202,11 +202,9 @@ const copyToClipboard = async (text: string) => {
 const ToolEventDetails = ({
   toolEvent,
   t,
-  onPreviewAttachment,
 }: {
   toolEvent: ToolEvent
   t: I18nContextValue["t"]
-  onPreviewAttachment: (attachment: ChatMessageAttachmentInput) => void
 }) => {
   if (toolEvent.type === "code_execution") {
     return (
@@ -240,49 +238,6 @@ const ToolEventDetails = ({
               .join("\n") || t("chat_execution_no_output")}
           </pre>
         </div>
-        {toolEvent.output?.output_files && toolEvent.output.output_files.length > 0 ? (
-          <div className="space-y-2">
-            <p className="opacity-70 text-xs uppercase">{t("chat_execution_outputs")}</p>
-            <div className="flex flex-wrap gap-2">
-              {toolEvent.output.output_files
-                .filter((file) => (file.content_type ?? "").startsWith("image/"))
-                .map((file, index) => (
-                  <Button
-                    key={`${file.file_name}-${index}`}
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                    onClick={() =>
-                      onPreviewAttachment({
-                        file_name: file.file_name,
-                        content_type: file.content_type,
-                        data_base64: file.data_base64,
-                      })
-                    }
-                  >
-                    <img
-                      src={`data:${file.content_type};base64,${file.data_base64}`}
-                      alt={file.file_name}
-                      className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
-                    />
-                  </Button>
-                ))}
-              {toolEvent.output.output_files
-                .filter((file) => !(file.content_type ?? "").startsWith("image/"))
-                .map((file, index) => (
-                  <a
-                    key={`${file.file_name}-${index}`}
-                    className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                    href={`data:${file.content_type};base64,${file.data_base64}`}
-                    download={file.file_name}
-                  >
-                    {file.file_name}
-                  </a>
-                ))}
-            </div>
-          </div>
-        ) : null}
       </div>
     )
   }
@@ -898,19 +853,11 @@ const MessageBubbleComponent = ({
                 {t("chat_execution_details")}
               </summary>
               {codeEvent ? (
-                <ToolEventDetails
-                  toolEvent={codeEvent}
-                  t={t}
-                  onPreviewAttachment={onPreviewAttachment}
-                />
+                <ToolEventDetails toolEvent={codeEvent} t={t} />
               ) : null}
             </details>
           ) : toolCallEvent ? (
-            <ToolEventDetails
-              toolEvent={toolCallEvent}
-              t={t}
-              onPreviewAttachment={onPreviewAttachment}
-            />
+            <ToolEventDetails toolEvent={toolCallEvent} t={t} />
           ) : chatViewEvent ? (
             <div className="space-y-1 py-1 text-xs">
               {(chatViewEvent.opens ?? []).map((open, index) => {
@@ -936,11 +883,7 @@ const MessageBubbleComponent = ({
               <summary className="text-xs uppercase tracking-wide cursor-pointer">
                 {t("chat_downloaded_attachments")}
               </summary>
-              <ToolEventDetails
-                toolEvent={urlAttachmentsEvent}
-                t={t}
-                onPreviewAttachment={onPreviewAttachment}
-              />
+              <ToolEventDetails toolEvent={urlAttachmentsEvent} t={t} />
             </details>
           ) : isContextSummaryEvent ? (
             <details className="space-y-3">
@@ -948,11 +891,7 @@ const MessageBubbleComponent = ({
                 {t("chat_context_summarized")}
               </summary>
               {contextSummaryEvent ? (
-                <ToolEventDetails
-                  toolEvent={contextSummaryEvent}
-                  t={t}
-                  onPreviewAttachment={onPreviewAttachment}
-                />
+                <ToolEventDetails toolEvent={contextSummaryEvent} t={t} />
               ) : null}
             </details>
           ) : isEditing ? (
@@ -1183,11 +1122,7 @@ const MessageBubbleComponent = ({
                               <span className="min-w-0 wrap-break-word">{part.label}</span>
                             </summary>
                             <div className="mt-2 ml-3 space-y-2 text-foreground">
-                              <ToolEventDetails
-                                toolEvent={toolEvent}
-                                t={t}
-                                onPreviewAttachment={onPreviewAttachment}
-                              />
+                              <ToolEventDetails toolEvent={toolEvent} t={t} />
                             </div>
                           </details>
                           {attachmentRow}

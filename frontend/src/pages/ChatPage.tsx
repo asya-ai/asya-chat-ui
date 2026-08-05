@@ -767,30 +767,22 @@ export const ChatPage = () => {
             toolEvent.output.attachments.length > 0
           ) {
             const attachments = toolEvent.output.attachments
-            const label =
-              (typeof toolEvent.action_summary === "string" &&
-              toolEvent.action_summary.trim()
-                ? toolEvent.action_summary
-                : null) ||
-              (toolEvent.tool_name === "generate_image" ? "Generating image" : null) ||
-              (toolEvent.tool_name === "edit_image" ? "Editing image" : null)
-            if (label) {
-              updateChatMessagesFor(targetChatId, (prev) =>
-                prev.map((msg) =>
-                  matchesAssistant(msg)
-                    ? {
-                        ...msg,
-                        stream_parts: attachStreamActionAttachments(
-                          msg.stream_parts,
-                          label,
-                          attachments
-                        ),
-                        attachments: mergeMessageAttachments(msg.attachments, attachments),
-                      }
-                    : msg
-                )
+            const label = resolveToolEventActionLabel(toolEvent)
+            updateChatMessagesFor(targetChatId, (prev) =>
+              prev.map((msg) =>
+                matchesAssistant(msg)
+                  ? {
+                      ...msg,
+                      stream_parts: attachStreamActionAttachments(
+                        msg.stream_parts,
+                        label,
+                        attachments
+                      ),
+                      attachments: mergeMessageAttachments(msg.attachments, attachments),
+                    }
+                  : msg
               )
-            }
+            )
           }
         }
         return

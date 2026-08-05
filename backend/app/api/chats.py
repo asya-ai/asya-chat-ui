@@ -1636,13 +1636,7 @@ def _build_stream_parts_from_events(
             continue
         label = payload.get("action_summary")
         if not isinstance(label, str) or not label.strip():
-            tool_name = payload.get("tool_name")
-            if tool_name == "generate_image":
-                label = "Generating image"
-            elif tool_name == "edit_image":
-                label = "Editing image"
-            else:
-                label = "Attachment"
+            label = _tool_event_action_label(payload)
         _attach_stream_action_attachments(parts, label, attachments)
 
     parts_text = "".join(

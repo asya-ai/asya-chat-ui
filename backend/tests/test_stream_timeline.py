@@ -108,6 +108,64 @@ def test_build_stream_parts_keeps_specialized_tool_event_over_generic_tool_call(
     assert parts[0]["tool_event"]["id"] == "exec-1"
 
 
+def test_build_stream_parts_attaches_code_outputs_to_running_code_action():
+    events = [
+        _event("activity", {"label": "Running code", "state": "start"}, 1),
+        _event(
+            "tool_event",
+            {
+                "type": "code_execution",
+                "id": "exec-2",
+                "code": "open('/outputs/chart.png','wb').write(b'x')",
+                "output": {
+                    "stdout": "",
+                    "exit_code": 0,
+                    "outputs": ["chart.png"],
+                    "output_files": [
+                        {
+                            "file_name": "chart.png",
+                            "content_type": "image/png",
+                        }
+                    ],
+                },
+            },
+            2,
+        ),
+        _event(
+            "tool_event",
+            {
+                "type": "tool_call",
+                "id": "call:exec-2",
+                "tool_name": "code_execution",
+                "state": "end",
+                "output": {
+                    "status": "ok",
+                    "attachments": [
+                        {
+                            "file_name": "chart.png",
+                            "content_type": "image/png",
+                            "data_base64": "abc",
+                        }
+                    ],
+                },
+            },
+            3,
+        ),
+    ]
+
+    parts, _thinking_steps = _build_stream_parts_from_events(events, message_content="")
+    assert parts is not None
+    assert len(parts) == 1
+    assert parts[0]["label"] == "Running code"
+    assert parts[0]["attachments"] == [
+        {
+            "file_name": "chart.png",
+            "content_type": "image/png",
+            "data_base64": "abc",
+        }
+    ]
+
+
 def test_build_stream_parts_inserts_content_when_only_actions_exist():
     events = [
         _event("activity", {"label": "Generating image", "state": "start"}, 1),
