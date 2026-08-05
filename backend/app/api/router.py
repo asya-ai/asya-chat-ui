@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.api.models import router as models_router
 from app.api.openai_compat import router as openai_compat_router
 from app.api.orgs import router as orgs_router
+from app.api.teams import router as teams_router
 from app.api.usage import router as usage_router
 from app.core.config import settings
 from app.models import User
@@ -21,6 +22,7 @@ api_router.include_router(chats_router)
 api_router.include_router(models_router)
 api_router.include_router(openai_compat_router)
 api_router.include_router(orgs_router)
+api_router.include_router(teams_router)
 api_router.include_router(usage_router)
 
 

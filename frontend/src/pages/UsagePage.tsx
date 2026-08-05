@@ -304,6 +304,12 @@ export const UsagePage = () => {
       active: location.pathname.startsWith("/settings/users"),
     },
     {
+      label: t("org_section_teams"),
+      href: "/settings/teams",
+      visible: isAdmin,
+      active: location.pathname.startsWith("/settings/teams"),
+    },
+    {
       label: t("org_section_orgs"),
       href: "/settings/organisation",
       visible: isSuperAdmin,

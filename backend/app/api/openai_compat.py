@@ -12,8 +12,9 @@ import json
 
 from app.api.deps import AuthContext, get_auth_context, get_db
 from app.core.config import settings
-from app.models import ChatModel, OrgModel, OrgProviderConfig, UsageEvent
+from app.models import ChatModel, OrgProviderConfig, UsageEvent
 from app.services.org_service import require_provider_enabled
+from app.services.team_service import allowed_model_ids
 from app.services.model_capabilities import persist_responses_api_discovery
 from app.services.providers.base import ChatToolSpec
 from app.services.providers.registry import get_provider
@@ -432,11 +433,7 @@ def list_models(
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
 ) -> ModelListResponse:
-    enabled_model_ids = session.exec(
-        select(OrgModel.model_id).where(
-            OrgModel.org_id == auth.org_id, OrgModel.is_enabled == True
-        )
-    ).all()
+    enabled_model_ids = list(allowed_model_ids(session, auth.org_id, auth.user.id))
     if not enabled_model_ids:
         return ModelListResponse(data=[])
 
@@ -495,14 +492,7 @@ async def chat_completions(
 
     org_id = auth.org_id
     model = resolve_model(session, payload.model)
-    enabled = session.exec(
-        select(OrgModel).where(
-            OrgModel.org_id == org_id,
-            OrgModel.model_id == model.id,
-            OrgModel.is_enabled == True,
-        )
-    ).first()
-    if not enabled:
+    if model.id not in allowed_model_ids(session, org_id, auth.user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model is not enabled for this organization",
@@ -661,14 +651,7 @@ async def create_response(
     auth: AuthContext = Depends(get_auth_context),
 ) -> Any:
     model = resolve_model(session, payload.model)
-    enabled = session.exec(
-        select(OrgModel).where(
-            OrgModel.org_id == auth.org_id,
-            OrgModel.model_id == model.id,
-            OrgModel.is_enabled == True,
-        )
-    ).first()
-    if not enabled:
+    if model.id not in allowed_model_ids(session, auth.org_id, auth.user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model is not enabled for this organization",

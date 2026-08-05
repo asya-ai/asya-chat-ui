@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, JSON, String, event, inspect, update
+from sqlalchemy import Column, JSON, String, UniqueConstraint, event, inspect, update
 from sqlmodel import Field, Relationship, SQLModel, Session
 
 
@@ -61,6 +61,7 @@ class Org(SQLModel, table=True):
     memberships: List["OrgMembership"] = Relationship(back_populates="org")
     roles: List["Role"] = Relationship(back_populates="org")
     invites: List["Invite"] = Relationship(back_populates="org")
+    teams: List["Team"] = Relationship(back_populates="org")
     chats: List["Chat"] = Relationship(back_populates="org")
     usage_events: List["UsageEvent"] = Relationship(back_populates="org")
     api_keys: List["ApiKey"] = Relationship(back_populates="org")
@@ -184,6 +185,56 @@ class OrgModel(SQLModel, table=True):
 
     org: Org = Relationship()
     model: ChatModel = Relationship(back_populates="org_links")
+
+
+class Team(SQLModel, table=True):
+    __tablename__ = "teams"
+    __table_args__ = (
+        UniqueConstraint("org_id", "oidc_group", name="uq_teams_org_oidc_group"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    name: str
+    is_default: bool = Field(default=False, index=True)
+    oidc_group: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    org: Org = Relationship(back_populates="teams")
+    memberships: List["TeamMembership"] = Relationship(back_populates="team")
+    model_links: List["TeamModel"] = Relationship(back_populates="team")
+
+
+class TeamMembership(SQLModel, table=True):
+    __tablename__ = "team_memberships"
+    __table_args__ = (
+        UniqueConstraint("team_id", "user_id", name="uq_team_memberships_team_user"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    team_id: UUID = Field(foreign_key="teams.id", index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    source: str = Field(default="manual", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    team: Team = Relationship(back_populates="memberships")
+    user: User = Relationship()
+
+
+class TeamModel(SQLModel, table=True):
+    __tablename__ = "team_models"
+    __table_args__ = (
+        UniqueConstraint("team_id", "model_id", name="uq_team_models_team_model"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    team_id: UUID = Field(foreign_key="teams.id", index=True)
+    model_id: UUID = Field(foreign_key="chat_models.id", index=True)
+    is_enabled: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    team: Team = Relationship(back_populates="model_links")
+    model: ChatModel = Relationship()
 
 
 class OrgProviderConfig(SQLModel, table=True):

@@ -907,6 +907,12 @@ export const OrgPage = () => {
       active: activeSection === "users",
     },
     {
+      label: t("org_section_teams"),
+      href: "/settings/teams",
+      visible: true,
+      active: false,
+    },
+    {
       label: t("org_section_orgs"),
       href: "/settings/organisation",
       visible: isSuperAdmin,

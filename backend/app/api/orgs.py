@@ -23,6 +23,7 @@ from app.services.org_service import (
     require_super_admin,
     validate_login_domains,
 )
+from app.services.team_service import ensure_default_team
 
 router = APIRouter(prefix="/orgs", tags=["orgs"])
 
@@ -221,6 +222,7 @@ def create_org(
     session.refresh(org)
 
     admin_role, _ = ensure_default_roles(session, org.id)
+    ensure_default_team(session, org.id)
     if not current_user.is_super_admin:
         membership = OrgMembership(
             org_id=org.id, user_id=current_user.id, role_id=admin_role.id

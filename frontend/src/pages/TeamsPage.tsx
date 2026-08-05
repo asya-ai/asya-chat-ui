@@ -1,0 +1,439 @@
+import { useEffect, useState } from "react"
+import { useLocation, useNavigate } from "react-router"
+
+import { authApi, orgApi } from "@/lib/api"
+import { orgStore } from "@/lib/storage"
+import { useI18n } from "@/lib/i18n-context"
+import { SettingsShell } from "@/components/SettingsShell"
+import type { Org, OrgMember, Team, TeamMember, TeamModel } from "@/lib/types"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+
+export const TeamsPage = () => {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { t } = useI18n()
+  const [authChecked, setAuthChecked] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [orgs, setOrgs] = useState<Org[]>([])
+  const [selectedOrg, setSelectedOrg] = useState<string | null>(orgStore.get())
+  const [teams, setTeams] = useState<Team[]>([])
+  const [members, setMembers] = useState<OrgMember[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [newTeamName, setNewTeamName] = useState("")
+  const [newTeamGroup, setNewTeamGroup] = useState("")
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editGroup, setEditGroup] = useState("")
+  const [teamModels, setTeamModels] = useState<TeamModel[]>([])
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    authApi
+      .me()
+      .then((me) => {
+        setIsSuperAdmin(me.is_super_admin)
+        setIsAdmin(me.is_admin)
+        setAuthChecked(true)
+      })
+      .catch(() => {
+        setIsSuperAdmin(false)
+        setIsAdmin(false)
+        setAuthChecked(true)
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!authChecked) return
+    if (!isSuperAdmin && !isAdmin) {
+      navigate("/settings/me")
+    }
+  }, [authChecked, isAdmin, isSuperAdmin, navigate])
+
+  useEffect(() => {
+    if (!authChecked || (!isAdmin && !isSuperAdmin)) return
+    orgApi
+      .list()
+      .then((list) => {
+        setOrgs(list)
+        if (!selectedOrg && list[0]) {
+          setSelectedOrg(list[0].id)
+          orgStore.set(list[0].id)
+        }
+      })
+      .catch(() => setOrgs([]))
+  }, [authChecked, isAdmin, isSuperAdmin, selectedOrg])
+
+  const loadTeams = async (orgId: string) => {
+    const [teamList, memberList] = await Promise.all([
+      orgApi.teams(orgId),
+      orgApi.members(orgId),
+    ])
+    setTeams(teamList)
+    setMembers(memberList)
+  }
+
+  useEffect(() => {
+    if (!selectedOrg || (!isAdmin && !isSuperAdmin)) return
+    loadTeams(selectedOrg).catch((err) =>
+      setError(err instanceof Error ? err.message : t("common_error"))
+    )
+  }, [selectedOrg, isAdmin, isSuperAdmin, t])
+
+  const selectOrg = (orgId: string) => {
+    setSelectedOrg(orgId)
+    orgStore.set(orgId)
+    setEditingTeam(null)
+  }
+
+  const createTeam = async () => {
+    if (!selectedOrg || !newTeamName.trim()) return
+    setError(null)
+    try {
+      await orgApi.createTeam(selectedOrg, {
+        name: newTeamName.trim(),
+        oidc_group: newTeamGroup.trim() || null,
+      })
+      setNewTeamName("")
+      setNewTeamGroup("")
+      await loadTeams(selectedOrg)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const openEdit = async (team: Team) => {
+    if (!selectedOrg) return
+    setError(null)
+    setEditingTeam(team)
+    setEditName(team.name)
+    setEditGroup(team.oidc_group ?? "")
+    try {
+      const [models, currentMembers] = await Promise.all([
+        orgApi.teamModels(selectedOrg, team.id),
+        team.is_default
+          ? Promise.resolve([] as TeamMember[])
+          : orgApi.teamMembers(selectedOrg, team.id),
+      ])
+      setTeamModels(models)
+      setTeamMembers(currentMembers)
+      setSelectedMemberIds(new Set(currentMembers.map((m) => m.user_id)))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const saveTeam = async () => {
+    if (!selectedOrg || !editingTeam) return
+    setSaving(true)
+    setError(null)
+    try {
+      await orgApi.updateTeam(selectedOrg, editingTeam.id, {
+        name: editName.trim(),
+        oidc_group: editingTeam.is_default ? null : editGroup.trim() || null,
+      })
+      await orgApi.setTeamModels(
+        selectedOrg,
+        editingTeam.id,
+        teamModels.map((model) => ({
+          model_id: model.model_id,
+          is_enabled: model.is_enabled,
+        }))
+      )
+      if (!editingTeam.is_default) {
+        await orgApi.setTeamMembers(selectedOrg, editingTeam.id, [
+          ...selectedMemberIds,
+        ])
+      }
+      await loadTeams(selectedOrg)
+      setEditingTeam(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteTeam = async (team: Team) => {
+    if (!selectedOrg || team.is_default) return
+    if (!window.confirm(t("org_teams_delete_confirm"))) return
+    setError(null)
+    try {
+      await orgApi.deleteTeam(selectedOrg, team.id)
+      if (editingTeam?.id === team.id) setEditingTeam(null)
+      await loadTeams(selectedOrg)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const toggleModel = (modelId: string, enabled: boolean) => {
+    setTeamModels((prev) =>
+      prev.map((model) =>
+        model.model_id === modelId ? { ...model, is_enabled: enabled } : model
+      )
+    )
+  }
+
+  const toggleMember = (userId: string, checked: boolean) => {
+    setSelectedMemberIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(userId)
+      else next.delete(userId)
+      return next
+    })
+  }
+
+  if (!authChecked) return null
+  if (!isSuperAdmin && !isAdmin) return null
+
+  const navItems = [
+    { label: t("me_settings"), href: "/settings/me", active: false },
+    {
+      label: t("org_section_users"),
+      href: "/settings/users",
+      visible: true,
+      active: location.pathname.startsWith("/settings/users"),
+    },
+    {
+      label: t("org_section_teams"),
+      href: "/settings/teams",
+      visible: true,
+      active: true,
+    },
+    {
+      label: t("org_section_orgs"),
+      href: "/settings/organisation",
+      visible: isSuperAdmin,
+      active: false,
+    },
+    {
+      label: t("org_section_models"),
+      href: "/settings/models",
+      visible: isSuperAdmin,
+      active: false,
+    },
+    {
+      label: t("usage_title"),
+      href: "/usage",
+      visible: isAdmin,
+      active: false,
+    },
+  ]
+
+  return (
+    <SettingsShell
+      title={t("org_section_teams")}
+      items={navItems}
+      actions={
+        <div className="flex items-center gap-2">
+          {isSuperAdmin ? (
+            <Select value={selectedOrg ?? ""} onValueChange={selectOrg}>
+              <SelectTrigger className="w-64">
+                <SelectValue placeholder={t("org_select_placeholder")} />
+              </SelectTrigger>
+              <SelectContent>
+                {orgs.map((org) => (
+                  <SelectItem key={org.id} value={org.id}>
+                    {org.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          <Button variant="outline" onClick={() => navigate("/chat")} disabled={!selectedOrg}>
+            {t("common_back_to_chat")}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-6">
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <p className="text-muted-foreground text-sm">{t("org_teams_intro")}</p>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("org_teams_create")}</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 sm:flex-row">
+            <Input
+              placeholder={t("org_teams_name")}
+              value={newTeamName}
+              onChange={(event) => setNewTeamName(event.target.value)}
+            />
+            <Input
+              placeholder={t("org_teams_oidc_group")}
+              value={newTeamGroup}
+              onChange={(event) => setNewTeamGroup(event.target.value)}
+            />
+            <Button onClick={createTeam} disabled={!newTeamName.trim() || !selectedOrg}>
+              {t("org_teams_create")}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("org_section_teams")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {teams.map((team) => (
+              <div
+                key={team.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-4"
+              >
+                <div>
+                  <p className="font-medium">
+                    {team.name}
+                    {team.is_default ? (
+                      <span className="text-muted-foreground ml-2 text-xs">
+                        ({t("org_teams_default_badge")})
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    {t("org_teams_models")}: {team.model_count}
+                    {!team.is_default
+                      ? ` · ${t("org_teams_members")}: ${team.member_count}`
+                      : ""}
+                    {team.oidc_group ? ` · ${t("org_teams_oidc_group")}: ${team.oidc_group}` : ""}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => openEdit(team)}>
+                    {t("org_teams_edit")}
+                  </Button>
+                  {!team.is_default ? (
+                    <Button variant="outline" size="sm" onClick={() => deleteTeam(team)}>
+                      {t("common_delete")}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            {teams.length === 0 ? (
+              <p className="text-muted-foreground text-sm">{t("org_teams_no_teams")}</p>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Dialog open={Boolean(editingTeam)} onOpenChange={(open) => !open && setEditingTeam(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("org_teams_edit")}</DialogTitle>
+            <DialogDescription>
+              {editingTeam?.is_default
+                ? t("org_teams_default_members_hint")
+                : t("org_teams_oidc_group_hint")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">{t("org_teams_name")}</label>
+              <Input value={editName} onChange={(event) => setEditName(event.target.value)} />
+            </div>
+            {!editingTeam?.is_default ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">{t("org_teams_oidc_group")}</label>
+                <Input
+                  value={editGroup}
+                  onChange={(event) => setEditGroup(event.target.value)}
+                />
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">{t("org_teams_models")}</p>
+              {teamModels.map((model) => (
+                <div
+                  key={model.model_id}
+                  className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                >
+                  <div>
+                    <p className="text-sm">{model.display_name}</p>
+                    <p className="text-muted-foreground text-xs">
+                      {model.provider} / {model.model_name}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={model.is_enabled}
+                    onCheckedChange={(checked) => toggleModel(model.model_id, checked)}
+                  />
+                </div>
+              ))}
+              {teamModels.length === 0 ? (
+                <p className="text-muted-foreground text-sm">{t("org_teams_no_teams")}</p>
+              ) : null}
+            </div>
+
+            {!editingTeam?.is_default ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">{t("org_teams_members")}</p>
+                {members.map((member) => {
+                  const existing = teamMembers.find((m) => m.user_id === member.user_id)
+                  const checked = selectedMemberIds.has(member.user_id)
+                  return (
+                    <label
+                      key={member.user_id}
+                      className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+                    >
+                      <span>
+                        {member.email}
+                        {existing ? (
+                          <span className="text-muted-foreground ml-2 text-xs">
+                            (
+                            {existing.source === "oidc"
+                              ? t("org_teams_source_oidc")
+                              : t("org_teams_source_manual")}
+                            )
+                          </span>
+                        ) : null}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={existing?.source === "oidc" && checked}
+                        onChange={(event) =>
+                          toggleMember(member.user_id, event.target.checked)
+                        }
+                      />
+                    </label>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingTeam(null)}>
+              {t("chat_cancel")}
+            </Button>
+            <Button onClick={saveTeam} disabled={saving || !editName.trim()}>
+              {t("org_teams_save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </SettingsShell>
+  )
+}

@@ -49,12 +49,12 @@ from app.models.entities import (
     ChatViewEvent,
     GenerationStatus,
     Org,
-    OrgModel,
     UsageEvent,
     User,
     UserMemory,
 )
 from app.services.org_service import require_provider_enabled
+from app.services.team_service import allowed_model_ids
 from app.services.file_storage import delete_file
 from app.services.agents.runtime import reindex_source
 from app.services.tools.code_execution import project_source_exec_path
@@ -500,13 +500,7 @@ async def _run_generation(task_id: UUID) -> None:
             session.commit()
             return
 
-        enabled = session.scalars(
-            select(OrgModel).where(
-                OrgModel.org_id == chat.org_id,
-                OrgModel.model_id == model.id,
-                OrgModel.is_enabled.is_(True),
-            )
-        ).first()
+        enabled = model.id in allowed_model_ids(session, chat.org_id, chat.user_id)
         if not enabled:
             task.status = GenerationStatus.failed
             task.error = "Model is not enabled for this organization"
@@ -853,7 +847,7 @@ async def _run_generation(task_id: UUID) -> None:
                 if latest_image_attachment:
                     image_result = await edit_image(
                         ImageToolContext(
-                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id), user_id=str(chat.user_id)
                         ),
                         prompt=image_prompt,
                         image_id=str(latest_image_attachment.id),
@@ -862,7 +856,7 @@ async def _run_generation(task_id: UUID) -> None:
                 else:
                     image_result = await generate_image(
                         ImageToolContext(
-                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id), user_id=str(chat.user_id)
                         ),
                         prompt=image_prompt,
                         model_override=model,

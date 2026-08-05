@@ -26,6 +26,9 @@ import type {
   AgentShare,
   AgentShareSuggestion,
   AgentSource,
+  Team,
+  TeamMember,
+  TeamModel,
 } from "@/lib/types"
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api"
@@ -412,6 +415,41 @@ export const orgApi = {
     apiFetch<OrgAuthSettings>(`/orgs/${orgId}/auth-settings`, {
       method: "PUT",
       body: JSON.stringify(payload),
+    }),
+  teams: (orgId: string) => apiFetch<Team[]>(`/orgs/${orgId}/teams`),
+  createTeam: (orgId: string, payload: { name: string; oidc_group?: string | null }) =>
+    apiFetch<Team>(`/orgs/${orgId}/teams`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTeam: (
+    orgId: string,
+    teamId: string,
+    payload: { name?: string; oidc_group?: string | null }
+  ) =>
+    apiFetch<Team>(`/orgs/${orgId}/teams/${teamId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteTeam: (orgId: string, teamId: string) =>
+    apiFetch(`/orgs/${orgId}/teams/${teamId}`, { method: "DELETE" }),
+  teamModels: (orgId: string, teamId: string) =>
+    apiFetch<TeamModel[]>(`/orgs/${orgId}/teams/${teamId}/models`),
+  setTeamModels: (
+    orgId: string,
+    teamId: string,
+    payload: { model_id: string; is_enabled: boolean }[]
+  ) =>
+    apiFetch<TeamModel[]>(`/orgs/${orgId}/teams/${teamId}/models`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  teamMembers: (orgId: string, teamId: string) =>
+    apiFetch<TeamMember[]>(`/orgs/${orgId}/teams/${teamId}/members`),
+  setTeamMembers: (orgId: string, teamId: string, userIds: string[]) =>
+    apiFetch<TeamMember[]>(`/orgs/${orgId}/teams/${teamId}/members`, {
+      method: "PUT",
+      body: JSON.stringify({ user_ids: userIds }),
     }),
 }
 

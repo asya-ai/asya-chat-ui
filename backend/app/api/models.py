@@ -15,7 +15,12 @@ from app.services.model_capabilities import (
     resolve_capabilities_for_storage,
 )
 from app.services.model_suggestions import get_model_suggestions
-from app.services.org_service import require_provider_enabled, require_super_admin
+from app.services.org_service import (
+    require_org_admin,
+    require_provider_enabled,
+    require_super_admin,
+)
+from app.services.team_service import allowed_model_ids, seed_default_team_model
 from app.services.providers.registry import get_provider
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -250,6 +255,7 @@ def create_model(
             session.add(link)
     else:
         session.add(OrgModel(org_id=org_uuid, model_id=model.id, is_enabled=True))
+    seed_default_team_model(session, org_uuid, model.id, enabled=True)
     session.commit()
 
     return ModelRead(
@@ -273,6 +279,7 @@ def list_models(
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ModelRead]:
+    use_org_scope = False
     if current_user.is_super_admin and org_id:
         try:
             org_uuid = UUID(org_id)
@@ -280,6 +287,7 @@ def list_models(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
             ) from exc
+        use_org_scope = True
     elif current_user.is_super_admin and not org_id:
         models = session.exec(
             select(ChatModel)
@@ -310,12 +318,32 @@ def list_models(
         if not membership:
             return []
         org_uuid = membership.org_id
+        # Org admins may request full org catalog when managing settings.
+        if org_id:
+            try:
+                requested = UUID(org_id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+                ) from exc
+            if requested == org_uuid:
+                try:
+                    require_org_admin(session, org_uuid, current_user.id)
+                    use_org_scope = True
+                except HTTPException:
+                    use_org_scope = False
 
-    enabled_model_ids = session.exec(
-        select(OrgModel.model_id).where(
-            OrgModel.org_id == org_uuid, OrgModel.is_enabled.is_(True)
+    if use_org_scope:
+        enabled_model_ids = session.exec(
+            select(OrgModel.model_id).where(
+                OrgModel.org_id == org_uuid, OrgModel.is_enabled.is_(True)
+            )
+        ).all()
+    else:
+        enabled_model_ids = list(
+            allowed_model_ids(session, org_uuid, current_user.id)
         )
-    ).all()
+
     if not enabled_model_ids:
         return []
 
@@ -541,6 +569,9 @@ def set_org_models(
                     org_id=org_uuid, model_id=model_uuid, is_enabled=item.is_enabled
                 )
             )
+        seed_default_team_model(
+            session, org_uuid, model_uuid, enabled=item.is_enabled
+        )
     session.commit()
 
     enabled_model_ids = session.exec(

@@ -287,6 +287,31 @@ export type OrgMember = {
   is_super_admin: boolean
 }
 
+export type Team = {
+  id: string
+  name: string
+  is_default: boolean
+  oidc_group?: string | null
+  member_count: number
+  model_count: number
+}
+
+export type TeamMember = {
+  user_id: string
+  email: string
+  username?: string | null
+  display_name?: string | null
+  source: string
+}
+
+export type TeamModel = {
+  model_id: string
+  display_name: string
+  provider: string
+  model_name: string
+  is_enabled: boolean
+}
+
 export type ProviderConfig = {
   provider: string
   is_enabled: boolean

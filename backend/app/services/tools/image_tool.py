@@ -17,6 +17,7 @@ from sqlalchemy import or_
 from app.core.config import settings
 from app.models import ChatMessage, ChatMessageAttachment, ChatModel, OrgModel, OrgProviderConfig
 from app.services.org_service import require_provider_enabled
+from app.services.team_service import allowed_model_ids
 from app.services.tools.registry import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class ImageToolContext:
     session: Session
     org_id: str
     chat_id: str | None = None
+    user_id: str | None = None
 
 
 def _coerce_attachment_uuid(value: str | None) -> UUID | None:
@@ -44,14 +46,36 @@ def _coerce_attachment_uuid(value: str | None) -> UUID | None:
     return None
 
 
+def _enabled_image_model_ids(
+    session: Session, org_id: str, user_id: str | UUID | None = None
+) -> list:
+    try:
+        org_uuid = UUID(str(org_id))
+    except ValueError:
+        return []
+    if user_id is not None:
+        try:
+            user_uuid = UUID(str(user_id))
+        except ValueError:
+            return []
+        return list(allowed_model_ids(session, org_uuid, user_uuid))
+    return list(
+        session.exec(
+            select(OrgModel.model_id).where(
+                OrgModel.org_id == org_uuid, OrgModel.is_enabled.is_(True)
+            )
+        ).all()
+    )
+
+
 def get_image_model(
-    session: Session, org_id: str, *, preferred_provider: str | None = None
+    session: Session,
+    org_id: str,
+    *,
+    preferred_provider: str | None = None,
+    user_id: str | UUID | None = None,
 ) -> ChatModel | None:
-    enabled_model_ids = session.exec(
-        select(OrgModel.model_id).where(
-            OrgModel.org_id == org_id, OrgModel.is_enabled.is_(True)
-        )
-    ).all()
+    enabled_model_ids = _enabled_image_model_ids(session, org_id, user_id)
     if not enabled_model_ids:
         return None
     base_query = select(ChatModel).where(
@@ -92,12 +116,9 @@ def _get_edit_compatible_image_model(
     *,
     provider: str,
     exclude_model_id: UUID | None = None,
+    user_id: str | UUID | None = None,
 ) -> ChatModel | None:
-    enabled_model_ids = session.exec(
-        select(OrgModel.model_id).where(
-            OrgModel.org_id == org_id, OrgModel.is_enabled.is_(True)
-        )
-    ).all()
+    enabled_model_ids = _enabled_image_model_ids(session, org_id, user_id)
     if not enabled_model_ids:
         return None
     candidates = session.exec(
@@ -127,14 +148,11 @@ def _get_responses_compatible_image_model(
     *,
     provider: str,
     exclude_model_id: UUID | None = None,
+    user_id: str | UUID | None = None,
 ) -> ChatModel | None:
     if provider != "openai":
         return None
-    enabled_model_ids = session.exec(
-        select(OrgModel.model_id).where(
-            OrgModel.org_id == org_id, OrgModel.is_enabled.is_(True)
-        )
-    ).all()
+    enabled_model_ids = _enabled_image_model_ids(session, org_id, user_id)
     if not enabled_model_ids:
         return None
     candidates = session.exec(
@@ -161,7 +179,10 @@ async def generate_image(
 ) -> ToolResult:
     session = context.session
     model = model_override or get_image_model(
-        session, context.org_id, preferred_provider=model_override.provider if model_override else None
+        session,
+        context.org_id,
+        preferred_provider=model_override.provider if model_override else None,
+        user_id=context.user_id,
     )
     if not model:
         logger.info("Image generation requested but no image model for org_id=%s", context.org_id)
@@ -260,7 +281,10 @@ async def edit_image(
 ) -> ToolResult:
     session = context.session
     model = model_override or get_image_model(
-        session, context.org_id, preferred_provider=model_override.provider if model_override else None
+        session,
+        context.org_id,
+        preferred_provider=model_override.provider if model_override else None,
+        user_id=context.user_id,
     )
     if not model:
         logger.info("Image edit requested but no image model for org_id=%s", context.org_id)
@@ -330,7 +354,11 @@ async def edit_image(
     supports_edit_api = _supports_openai_edit_api(model.model_name)
     if model.provider in {"openai", "azure"} and not supports_edit_api:
         fallback = _get_edit_compatible_image_model(
-            session, context.org_id, provider=model.provider, exclude_model_id=model.id
+            session,
+            context.org_id,
+            provider=model.provider,
+            exclude_model_id=model.id,
+            user_id=context.user_id,
         )
         if fallback and fallback.id != model.id:
             logger.info(
@@ -410,6 +438,7 @@ async def edit_image(
                         context.org_id,
                         provider=model.provider,
                         exclude_model_id=model.id,
+                        user_id=context.user_id,
                     )
                     if fallback:
                         logger.info(

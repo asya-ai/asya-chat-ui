@@ -39,12 +39,12 @@ from app.models import (
     ChatModel,
     GenerationStatus,
     Org,
-    OrgModel,
     UsageEvent,
     User,
     UserMemory,
 )
 from app.services.org_service import require_org_member, require_provider_enabled
+from app.services.team_service import allowed_model_ids
 from app.services.model_capabilities import (
     ensure_model_capabilities,
     persist_responses_api_discovery,
@@ -100,6 +100,10 @@ MAX_WEB_SCRAPE_CALLS = 10
 WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
 WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
 CHAT_NOT_SHARED_DETAIL = "CHAT_NOT_SHARED"
+
+
+def _user_can_use_model(session: Session, org_id: UUID, user_id: UUID, model_id: UUID) -> bool:
+    return model_id in allowed_model_ids(session, org_id, user_id)
 
 
 def _viewer_label(user: User | None) -> str:
@@ -324,7 +328,10 @@ def _build_tool_registry(
     pending_attachments: list[dict[str, Any]] | None = None,
 ) -> ToolRegistry:
     image_model = get_image_model(
-        session, str(org_id), preferred_provider=preferred_provider
+        session,
+        str(org_id),
+        preferred_provider=preferred_provider,
+        user_id=user_id,
     )
     if not image_model:
         logger.info("No image model enabled for org_id=%s (tool still exposed)", org_id)
@@ -335,6 +342,7 @@ def _build_tool_registry(
                 session=session,
                 org_id=str(org_id),
                 chat_id=str(chat_id) if chat_id else None,
+                user_id=str(user_id) if user_id else None,
             ),
             prompt=args.get("prompt", ""),
         )
@@ -359,6 +367,7 @@ def _build_tool_registry(
                 session=session,
                 org_id=str(org_id),
                 chat_id=str(chat_id) if chat_id else None,
+                user_id=str(user_id) if user_id else None,
             ),
             prompt=args.get("prompt", ""),
             image_id=args.get("image_id"),
@@ -2651,14 +2660,7 @@ async def _stream_message_ws(
         await _ws_send_event(websocket, {"error": "Model not found"})
         return
     model = ensure_model_capabilities(session, model)
-    enabled = session.exec(
-        select(OrgModel).where(
-            OrgModel.org_id == chat.org_id,
-            OrgModel.model_id == model.id,
-            OrgModel.is_enabled.is_(True),
-        )
-    ).first()
-    if not enabled:
+    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
         await _ws_send_event(
             websocket, {"error": "Model is not enabled for this organization"}
         )
@@ -2801,14 +2803,7 @@ async def _stream_edit_ws(
         await _ws_send_event(websocket, {"error": "Model not found"})
         return
     model = ensure_model_capabilities(session, model)
-    enabled = session.exec(
-        select(OrgModel).where(
-            OrgModel.org_id == chat.org_id,
-            OrgModel.model_id == model.id,
-            OrgModel.is_enabled.is_(True),
-        )
-    ).first()
-    if not enabled:
+    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
         await _ws_send_event(
             websocket, {"error": "Model is not enabled for this organization"}
         )
@@ -3771,14 +3766,7 @@ async def create_message(
             status_code=status.HTTP_404_NOT_FOUND, detail="Model not found"
         )
     model = ensure_model_capabilities(session, model)
-    enabled = session.exec(
-        select(OrgModel).where(
-            OrgModel.org_id == chat.org_id,
-            OrgModel.model_id == model.id,
-            OrgModel.is_enabled.is_(True),
-        )
-    ).first()
-    if not enabled:
+    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model is not enabled for this organization",
@@ -4037,7 +4025,7 @@ async def create_message(
         async def image_stream():
             image_result = await generate_image(
                 ImageToolContext(
-                    session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                    session=session, org_id=str(chat.org_id), chat_id=str(chat.id), user_id=str(chat.user_id)
                 ),
                 prompt=payload.content,
                 model_override=model,
@@ -4099,7 +4087,7 @@ async def create_message(
     if _is_image_output_model(model):
         image_result = await generate_image(
             ImageToolContext(
-                session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                session=session, org_id=str(chat.org_id), chat_id=str(chat.id), user_id=str(chat.user_id)
             ),
             prompt=payload.content,
             model_override=model,
@@ -4664,14 +4652,7 @@ async def edit_message(
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     model = ensure_model_capabilities(session, model)
-    enabled = session.exec(
-        select(OrgModel).where(
-            OrgModel.org_id == chat.org_id,
-            OrgModel.model_id == model.id,
-            OrgModel.is_enabled.is_(True),
-        )
-    ).first()
-    if not enabled:
+    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model is not enabled for this organization",
@@ -4961,7 +4942,7 @@ async def edit_message(
     if model.supports_image_output:
         image_result = await generate_image(
             ImageToolContext(
-                session=session, org_id=str(chat.org_id), chat_id=str(chat.id)
+                session=session, org_id=str(chat.org_id), chat_id=str(chat.id), user_id=str(chat.user_id)
             ),
             prompt=payload.content,
             model_override=model,

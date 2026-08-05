@@ -32,6 +32,9 @@ const SsoCallbackPage = lazy(() =>
 const UsagePage = lazy(() =>
   import("@/pages/UsagePage").then((mod) => ({ default: mod.UsagePage }))
 )
+const TeamsPage = lazy(() =>
+  import("@/pages/TeamsPage").then((mod) => ({ default: mod.TeamsPage }))
+)
 
 const RequireAuth = ({ children }: { children: ReactNode }) => {
   const { token } = useAuth()
@@ -141,6 +144,14 @@ const App = () => {
           element={
             <RequireAuth>
               <OrgPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/teams"
+          element={
+            <RequireAuth>
+              <TeamsPage />
             </RequireAuth>
           }
         />
