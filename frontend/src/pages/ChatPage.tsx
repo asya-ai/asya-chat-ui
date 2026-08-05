@@ -34,7 +34,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import ChatSidebar from "@/pages/chat/ChatSidebar"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
-import { MessageList, type MessageListHandle } from "@/pages/chat/MessageList"
+import { MessageList } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 import {
@@ -263,8 +263,9 @@ export const ChatPage = () => {
   >([])
   const [editingAttachmentError, setEditingAttachmentError] = useState<string | null>(null)
   const [isEditDragActive, setIsEditDragActive] = useState(false)
-  const messageListRef = useRef<MessageListHandle | null>(null)
-  // Stable across temp→server id remaps (prefer task_id for assistants).
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null)
+  // Stable across temp→server id remaps (conversation turn count).
   const lastScrolledKeyRef = useRef<string | null>(null)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const [pendingAttachments, setPendingAttachments] = useState<
@@ -1461,8 +1462,39 @@ export const ChatPage = () => {
     actionInfoLevel,
   ])
 
-  const handleAtBottomChange = useCallback((atBottom: boolean) => {
-    setAutoScrollEnabled(atBottom)
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const container = messagesContainerRef.current
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior })
+      return
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" })
+  }, [])
+
+  const scrollToMessageStart = useCallback(
+    (messageId: string, behavior: ScrollBehavior = "smooth") => {
+      const container = messagesContainerRef.current
+      const target = container?.querySelector(`[data-message-id="${messageId}"]`)
+      if (!container || !(target instanceof HTMLElement)) {
+        scrollToBottom(behavior)
+        return
+      }
+      const top =
+        target.getBoundingClientRect().top -
+        container.getBoundingClientRect().top +
+        container.scrollTop
+      container.scrollTo({ top, behavior })
+    },
+    [scrollToBottom]
+  )
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    const threshold = 80
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight
+    setAutoScrollEnabled(distanceFromBottom <= threshold)
   }, [])
 
   useEffect(() => {
@@ -1483,24 +1515,12 @@ export const ChatPage = () => {
 
     const behavior: ScrollBehavior = isChatSwitchRef.current ? "instant" : "smooth"
     isChatSwitchRef.current = false
-    // Prefer the conversation message itself — tool rows may sit after it in the list.
-    let lastIndex = -1
-    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-      if (visibleMessages[i].id === lastMsg.id) {
-        lastIndex = i
-        break
-      }
-    }
-    if (lastIndex < 0) return
     if (lastMsg.role === "user") {
-      messageListRef.current?.scrollToBottom(behavior)
+      scrollToBottom(behavior)
     } else {
-      messageListRef.current?.scrollToIndex(lastIndex, {
-        align: "start",
-        behavior,
-      })
+      scrollToMessageStart(lastMsg.id, behavior)
     }
-  }, [visibleMessages, autoScrollEnabled])
+  }, [visibleMessages, autoScrollEnabled, scrollToBottom, scrollToMessageStart])
 
   const startNewChat = () => {
     replaceCurrentChatMessages([])
@@ -2757,12 +2777,13 @@ export const ChatPage = () => {
                 </label>
               </div>
               <MessageList
-                ref={messageListRef}
                 key={chatId ?? "new"}
                 messages={visibleMessages}
                 welcomeTitle={welcomeTitle}
                 isLoading={isMessagesLoading}
-                onAtBottomChange={handleAtBottomChange}
+                onScroll={handleMessagesScroll}
+                containerRef={messagesContainerRef}
+                endRef={messagesEndRef}
                 renderMessage={renderMessage}
               />
               <ChatComposer
