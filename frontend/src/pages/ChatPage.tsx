@@ -24,11 +24,11 @@ import type {
 import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Image as ImageIcon, Menu, PanelLeftOpen, Plus } from "lucide-react"
+import { toast } from "sonner"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
@@ -56,6 +56,27 @@ const DEFAULT_ATTACHMENT_LIMITS = {
   max_files: 50,
   max_file_bytes: 20_000_000,
   max_total_bytes: 50_000_000,
+}
+
+const SESSION_OWNED_CHAT_IDS_KEY = "chatui_session_owned_chat_ids"
+
+const readSessionOwnedChatIds = (): string[] => {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_OWNED_CHAT_IDS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string")
+      : []
+  } catch {
+    return []
+  }
+}
+
+const rememberSessionOwnedChatId = (chatId: string) => {
+  const next = Array.from(new Set([...readSessionOwnedChatIds(), chatId]))
+  window.sessionStorage.setItem(SESSION_OWNED_CHAT_IDS_KEY, JSON.stringify(next))
+  return next
 }
 
 const estimateBase64Bytes = (value: string): number => {
@@ -299,28 +320,25 @@ export const ChatPage = () => {
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
-  const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null)
-  const [shareCopied, setShareCopied] = useState<boolean | null>(null)
+  const [sessionOwnedChatIds, setSessionOwnedChatIds] = useState<string[]>(() =>
+    readSessionOwnedChatIds()
+  )
   const [sourcesPanelSources, setSourcesPanelSources] = useState<SourceItem[] | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const { locale, t, tCount } = useI18n()
-  const shareToken = useMemo(() => {
-    if (shareTokenParam) return shareTokenParam
-    return new URLSearchParams(location.search).get("share")
-  }, [location.search, shareTokenParam])
   const isHistoryView = location.pathname === "/history"
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => oneDark, [])
 
   const { data: currentUser } = useMe()
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
   const { data: models = [] } = useModels(orgId)
-  const { data: chats = [], refetch: refetchChats } = useChats(orgId)
+  const { data: chats = [], isFetched: chatsFetched, refetch: refetchChats } = useChats(orgId)
   const { data: searchedChats = [] } = useChatSearch(orgId, chatSearchDebounced)
   const {
     data: serverMessages = [],
     isLoading: isMessagesLoading,
     error: messagesError,
-  } = useChatMessages(chatId ?? null, shareToken)
+  } = useChatMessages(chatId ?? null)
   const createChatMutation = useCreateChat(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
 
@@ -1224,7 +1242,7 @@ export const ChatPage = () => {
       .resolveShared(shareTokenParam)
       .then((resolved) => {
         if (cancelled) return
-        navigate(`/chat/${resolved.chat_id}?share=${encodeURIComponent(shareTokenParam)}`, {
+        navigate(`/chat/${resolved.chat_id}`, {
           replace: true,
         })
       })
@@ -1239,6 +1257,21 @@ export const ChatPage = () => {
       cancelled = true
     }
   }, [chatId, navigate, shareTokenParam])
+
+  useEffect(() => {
+    if (!chatId) return
+    const params = new URLSearchParams(location.search)
+    if (!params.has("share")) return
+    params.delete("share")
+    const nextSearch = params.toString()
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : "",
+      },
+      { replace: true }
+    )
+  }, [chatId, location.pathname, location.search, navigate])
 
   useEffect(() => {
     if (!chatId) return
@@ -1272,21 +1305,36 @@ export const ChatPage = () => {
     setSelectedModel(selectableChatModels[0].id)
   }, [selectableChatModels, selectedModel])
 
-  const activeChat = useMemo(
-    () =>
-      chats.find((item) => item.id === chatId) ??
-      (chatId && !shareToken
-        ? {
-            id: chatId,
-            created_at: "",
-            last_activity_at: "",
-          }
-        : null),
-    [chatId, chats, shareToken]
-  )
+  const activeChat = useMemo(() => {
+    const fromList = chats.find((item) => item.id === chatId)
+    if (fromList) return fromList
+    if (chatId && sessionOwnedChatIds.includes(chatId)) {
+      return {
+        id: chatId,
+        created_at: "",
+        last_activity_at: "",
+        is_incognito: true,
+      }
+    }
+    // Keep a temporary stub while the chat list is still loading.
+    if (chatId && !chatsFetched) {
+      return {
+        id: chatId,
+        created_at: "",
+        last_activity_at: "",
+      }
+    }
+    return null
+  }, [chatId, chats, chatsFetched, sessionOwnedChatIds])
   const activeAgentId = activeAgentIdFromQuery ?? activeChat?.agent_id ?? null
   const isAgentMode = Boolean(activeAgentId)
-  const isSharedView = Boolean(chatId && shareToken && !activeChat)
+  const isSharedView = Boolean(
+    chatId &&
+      orgId &&
+      chatsFetched &&
+      !chats.some((item) => item.id === chatId) &&
+      !sessionOwnedChatIds.includes(chatId)
+  )
   const currentChatLoading = Boolean(chatId && loadingByChat[chatId])
 
   const isChatSwitchRef = useRef(false)
@@ -1544,6 +1592,7 @@ export const ChatPage = () => {
       agent_id: isAgentMode && activeAgentId ? activeAgentId : undefined,
       is_incognito: incognitoEnabled,
     })
+    setSessionOwnedChatIds(rememberSessionOwnedChatId(chat.id))
     navigate(
       isAgentMode && activeAgentId
         ? `/chat/${chat.id}?agent=${encodeURIComponent(activeAgentId)}`
@@ -1616,12 +1665,9 @@ export const ChatPage = () => {
             )
           : prev
       )
-      if (chatId === chat.id && shareToken) {
-        navigate(`/chat/${chat.id}`, { replace: true })
-      }
       return
     }
-    const shared = await chatApi.share(chat.id)
+    await chatApi.share(chat.id)
     queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
       prev
         ? prev.map((item) =>
@@ -1634,18 +1680,14 @@ export const ChatPage = () => {
           )
         : prev
     )
-    if (shared.share_token) {
-      const sharedPath = `/shared/${encodeURIComponent(shared.share_token)}`
-      const fullUrl = `${window.location.origin}${sharedPath}`
-      let copied: boolean
-      try {
-        await navigator.clipboard.writeText(fullUrl)
-        copied = true
-      } catch {
-        copied = false
-      }
-      setShareDialogUrl(fullUrl)
-      setShareCopied(copied)
+    const fullUrl = `${window.location.origin}/chat/${chat.id}`
+    try {
+      await navigator.clipboard.writeText(fullUrl)
+      toast.success(t("chat_share_dialog_copied"))
+    } catch {
+      toast.message(t("chat_share_dialog_title"), {
+        description: fullUrl,
+      })
     }
   }
 
@@ -2641,6 +2683,7 @@ export const ChatPage = () => {
             setSidebarOpen(false)
             navigate("/projects")
           }}
+          onToggleShareChat={toggleShareChat}
           onRequestClose={() => setSidebarOpen(false)}
           footer={sidebarFooter}
         />
@@ -2687,6 +2730,7 @@ export const ChatPage = () => {
           onNewChat={startNewChat}
           onOpenHistory={() => navigate("/history")}
           onOpenProjects={() => navigate("/projects")}
+          onToggleShareChat={toggleShareChat}
           footer={sidebarFooter}
         />
       </aside>
@@ -2930,35 +2974,6 @@ export const ChatPage = () => {
                 }}
               >
                 {t("chat_delete")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-        <Dialog
-          open={Boolean(shareDialogUrl)}
-          onOpenChange={(open) => {
-            if (!open) {
-              setShareDialogUrl(null)
-              setShareCopied(null)
-            }
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("chat_share_dialog_title")}</DialogTitle>
-              <DialogDescription>{t("chat_share_dialog_desc")}</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-2">
-              <Input readOnly value={shareDialogUrl ?? ""} />
-              {shareCopied ? (
-                <p className="text-muted-foreground text-sm">
-                  {t("chat_share_dialog_copied")}
-                </p>
-              ) : null}
-            </div>
-            <DialogFooter>
-              <Button onClick={() => setShareDialogUrl(null)}>
-                {t("common_close")}
               </Button>
             </DialogFooter>
           </DialogContent>

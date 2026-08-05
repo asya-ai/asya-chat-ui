@@ -46,7 +46,7 @@ const MessageListComponent = ({
           )
         : null}
       {messages.map((msg) => (
-        <div key={msg.id} className="min-w-0 max-w-full overflow-x-hidden" data-message-id={msg.id}>
+        <div key={msg.id} className="min-w-0 max-w-full shrink-0" data-message-id={msg.id}>
           {renderMessage(msg)}
         </div>
       ))}

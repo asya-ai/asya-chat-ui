@@ -521,12 +521,12 @@ export const chatApi = {
   resolveShared: (shareToken: string) =>
     apiFetch<{ chat_id: string }>(`/chats/shared/${encodeURIComponent(shareToken)}`),
   share: (chatId: string) =>
-    apiFetch<{ chat_id: string; is_shared: boolean; share_token?: string | null; share_url?: string | null }>(
+    apiFetch<{ chat_id: string; is_shared: boolean; share_url?: string | null }>(
       `/chats/${chatId}/share`,
       { method: "POST" }
     ),
   unshare: (chatId: string) =>
-    apiFetch<{ chat_id: string; is_shared: boolean; share_token?: string | null; share_url?: string | null }>(
+    apiFetch<{ chat_id: string; is_shared: boolean; share_url?: string | null }>(
       `/chats/${chatId}/share`,
       { method: "DELETE" }
     ),
@@ -571,12 +571,7 @@ export const chatApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  messages: (chatId: string, shareToken?: string | null) => {
-    const params = new URLSearchParams()
-    if (shareToken) params.set("share", shareToken)
-    const query = params.toString()
-    return apiFetch<ChatMessage[]>(`/chats/${chatId}/messages${query ? `?${query}` : ""}`)
-  },
+  messages: (chatId: string) => apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`),
   sendMessage: (
     chatId: string,
     content: string,

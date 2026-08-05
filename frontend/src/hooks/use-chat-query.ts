@@ -62,12 +62,12 @@ export const useChatSearch = (orgId: string | null, query: string) =>
     staleTime: 10_000,
   })
 
-export const useChatMessages = (chatId: string | null, shareToken?: string | null) =>
+export const useChatMessages = (chatId: string | null) =>
   useQuery({
     queryKey: chatId ? chatKeys.messages(chatId) : ["chatMessages"],
     queryFn: () => {
       if (!chatId) return []
-      return chatApi.messages(chatId, shareToken)
+      return chatApi.messages(chatId)
     },
     enabled: Boolean(chatId),
     staleTime: 10_000,

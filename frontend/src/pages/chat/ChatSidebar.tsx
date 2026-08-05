@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useNavigate, useParams } from "react-router"
-import { useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, Plus, Search, X } from "lucide-react"
 
-import { agentApi, chatApi } from "@/lib/api"
+import { agentApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
 import { orgStore, sidebarSectionsStore } from "@/lib/storage"
 import type { Agent, Chat } from "@/lib/types"
@@ -48,6 +47,7 @@ type ChatSidebarProps = {
   onNewChat: () => void
   onOpenHistory: () => void
   onOpenProjects: () => void
+  onToggleShareChat?: (chat: Chat) => void
   footer?: ReactNode
   onRequestClose?: () => void
 }
@@ -66,12 +66,12 @@ export const ChatSidebar = ({
   onNewChat,
   onOpenHistory,
   onOpenProjects,
+  onToggleShareChat,
   footer,
   onRequestClose,
 }: ChatSidebarProps) => {
   const navigate = useNavigate()
   const { chatId: routeChatId } = useParams()
-  const queryClient = useQueryClient()
   const { locale, t } = useI18n()
   const { data: orgs = [] } = useOrgsMine()
   const orgId = orgStore.get() ?? orgs[0]?.id ?? null
@@ -199,32 +199,6 @@ export const ChatSidebar = ({
     setDeleteConfirmChat(null)
     if (currentChatId === chatIdToDelete) {
       navigate("/chat", { replace: true })
-    }
-  }
-
-  const toggleShare = async (chat: Chat) => {
-    if (chat.is_shared) {
-      await chatApi.unshare(chat.id)
-      if (orgId) {
-        queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
-          prev
-            ? prev.map((item) =>
-                item.id === chat.id ? { ...item, is_shared: false } : item
-              )
-            : prev
-        )
-      }
-      return
-    }
-    await chatApi.share(chat.id)
-    if (orgId) {
-      queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
-        prev
-          ? prev.map((item) =>
-              item.id === chat.id ? { ...item, is_shared: true } : item
-            )
-          : prev
-      )
     }
   }
 
@@ -409,7 +383,11 @@ export const ChatSidebar = ({
                               <ContextMenuItem onClick={() => openRename(chat)}>
                                 {t("chat_rename")}
                               </ContextMenuItem>
-                              <ContextMenuItem onClick={() => void toggleShare(chat)}>
+                              <ContextMenuItem
+                                onClick={() => {
+                                  if (onToggleShareChat) onToggleShareChat(chat)
+                                }}
+                              >
                                 {chat.is_shared ? t("chat_unshare") : t("chat_share")}
                               </ContextMenuItem>
                               <ContextMenuSeparator />

@@ -17,7 +17,7 @@ import sql from "react-syntax-highlighter/dist/esm/languages/prism/sql"
 import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx"
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript"
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml"
-import { Copy, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
+import { Copy, Check, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ActionInfoLevel } from "@/lib/storage"
@@ -315,41 +315,86 @@ const ToolEventDetails = ({
 const CopyTextButton = ({
   text,
   label,
+  copiedLabel,
   className = "",
   iconOnly = false,
 }: {
   text: string
   label: string
+  copiedLabel: string
   className?: string
   iconOnly?: boolean
-}) => (
-  <Button
-    type="button"
-    variant="ghost"
-    size={iconOnly ? "icon" : "sm"}
-    className={className}
-    onClick={() => void copyToClipboard(text)}
-    aria-label={label}
-  >
-    {iconOnly ? (
-      <Copy aria-hidden="true" className="w-3.5 h-3.5" />
-    ) : (
-      label
-    )}
-  </Button>
-)
+}) => {
+  const [copied, setCopied] = useState(false)
+  const resetTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (resetTimeoutRef.current != null) {
+        window.clearTimeout(resetTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const handleCopy = async () => {
+    try {
+      await copyToClipboard(text)
+      setCopied(true)
+      if (resetTimeoutRef.current != null) {
+        window.clearTimeout(resetTimeoutRef.current)
+      }
+      resetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        resetTimeoutRef.current = null
+      }, 1600)
+    } catch {
+      // Keep the idle label if clipboard access fails.
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size={iconOnly ? "icon" : "sm"}
+      className={className}
+      onClick={() => void handleCopy()}
+      aria-label={copied ? copiedLabel : label}
+    >
+      {iconOnly ? (
+        copied ? (
+          <Check
+            aria-hidden="true"
+            className="h-3.5 w-3.5 animate-in fade-in zoom-in-95 duration-200"
+          />
+        ) : (
+          <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+        )
+      ) : (
+        <span
+          key={copied ? "copied" : "idle"}
+          className="inline-block animate-in fade-in zoom-in-95 duration-200"
+        >
+          {copied ? copiedLabel : label}
+        </span>
+      )}
+    </Button>
+  )
+}
 
 const HighlightedCodeBlock = ({
   code,
   language,
   codeTheme,
   copyLabel,
+  copiedLabel,
   restProps,
 }: {
   code: string
   language: string
   codeTheme: Record<string, CSSProperties>
   copyLabel: string
+  copiedLabel: string
   restProps: Record<string, unknown>
 }) => {
   const [highlight, setHighlight] = useState(false)
@@ -370,6 +415,7 @@ const HighlightedCodeBlock = ({
       <CopyTextButton
         text={code}
         label={copyLabel}
+        copiedLabel={copiedLabel}
         className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
       />
       {highlight ? (
@@ -443,10 +489,12 @@ const DeferredMarkdown = ({
 const MermaidDiagram = ({
   chart,
   copyLabel,
+  copiedLabel,
   renderFailedLabel,
 }: {
   chart: string
   copyLabel: string
+  copiedLabel: string
   renderFailedLabel: string
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -486,6 +534,7 @@ const MermaidDiagram = ({
         <CopyTextButton
           text={chart}
           label={copyLabel}
+          copiedLabel={copiedLabel}
           className="top-2 right-2 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
         />
         <pre className="bg-destructive/10 p-2 rounded text-destructive text-xs whitespace-pre-wrap">
@@ -500,6 +549,7 @@ const MermaidDiagram = ({
       <CopyTextButton
         text={chart}
         label={copyLabel}
+        copiedLabel={copiedLabel}
         className="top-2 right-2 z-10 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
       />
       <div
@@ -721,6 +771,7 @@ const MessageBubbleComponent = ({
             <MermaidDiagram
               chart={mermaidChart}
               copyLabel={t("chat_copy_mermaid")}
+              copiedLabel={t("common_copied")}
               renderFailedLabel={t("chat_mermaid_render_failed")}
             />
           )
@@ -733,6 +784,7 @@ const MessageBubbleComponent = ({
                 language={match[1]}
                 codeTheme={codeTheme}
                 copyLabel={t("chat_copy_code")}
+                copiedLabel={t("common_copied")}
                 restProps={rest}
               />
             )
@@ -742,6 +794,7 @@ const MessageBubbleComponent = ({
               <CopyTextButton
                 text={codeContent}
                 label={t("chat_copy_code")}
+                copiedLabel={t("common_copied")}
                 className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
               />
               <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
@@ -829,7 +882,7 @@ const MessageBubbleComponent = ({
     >
       <div className={`group min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
         <div
-          className={`min-w-0 overflow-hidden rounded-lg wrap-break-word whitespace-normal ${
+          className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal ${
             isUser
               ? "bg-secondary p-2 text-base leading-5 font-semibold text-foreground"
               : hasEventHeader
@@ -1372,6 +1425,7 @@ const MessageBubbleComponent = ({
                 <CopyTextButton
                   text={msg.content}
                   label={t("chat_copy_message")}
+                  copiedLabel={t("common_copied")}
                   iconOnly
                   className="opacity-70 hover:opacity-100"
                 />

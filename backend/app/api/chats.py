@@ -166,7 +166,7 @@ def _attachment_content_url(attachment_id: UUID) -> str:
 def _chat_share_url(chat: Chat) -> str | None:
     if not chat.share_token:
         return None
-    return f"/shared/{chat.share_token}"
+    return f"/chat/{chat.id}"
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
@@ -3181,7 +3181,6 @@ def search_chats(
 @router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
 def list_messages(
     chat_id: str,
-    share: str | None = None,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ChatMessageRead]:
@@ -3197,9 +3196,8 @@ def list_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
     is_owner = chat.user_id == current_user.id
     if not is_owner:
-        shared_token = (chat.share_token or "").strip()
-        provided_token = (share or "").strip()
-        if not shared_token or provided_token != shared_token:
+        # Shared chats are reachable via the normal /chat/{id} link while share_token is set.
+        if not (chat.share_token or "").strip():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=CHAT_NOT_SHARED_DETAIL,
@@ -3772,7 +3770,6 @@ def share_chat(
     return ChatShareRead(
         chat_id=str(chat.id),
         is_shared=True,
-        share_token=chat.share_token,
         share_url=_chat_share_url(chat),
     )
 

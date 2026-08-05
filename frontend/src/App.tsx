@@ -5,6 +5,7 @@ import { Suspense, lazy, useEffect } from "react"
 
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
+import { Toaster } from "@/components/ui/sonner"
 import { useI18n } from "@/lib/i18n-context"
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((mod) => ({ default: mod.ChatPage })))
@@ -232,6 +233,7 @@ const App = () => {
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
+      <Toaster />
     </ErrorBoundary>
   )
 }
