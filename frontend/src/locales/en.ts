@@ -20,6 +20,7 @@ export const en = {
   common_back_to_chat: "Back to chat",
   common_disabled: "Disabled",
   common_settings: "Settings",
+  common_more: "More options",
   common_usage: "Usage",
   sidebar_title: "Sidebar",
   sidebar_mobile_description: "Displays the mobile sidebar.",

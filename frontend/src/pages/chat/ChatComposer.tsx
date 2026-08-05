@@ -2,9 +2,17 @@ import { useRef, type ReactNode } from "react"
 
 import type { ChatMessageAttachmentInput } from "@/lib/types"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowUp, Plus, Square, X } from "lucide-react"
+import { ArrowUp, MoreHorizontal, Plus, Square, X } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { cn } from "@/lib/utils"
@@ -87,24 +95,47 @@ export const ChatComposer = ({
   }
 
   const canSend = !readOnly && Boolean(message.trim() || pendingAttachments.length > 0)
+  const toolsDisabled = loading || readOnly
+
+  const toolToggle = (
+    label: string,
+    checked: boolean,
+    onCheckedChange: (enabled: boolean) => void
+  ) => (
+    <label
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-2 text-sm",
+        toolsDisabled && "pointer-events-none opacity-50"
+      )}
+    >
+      <Switch
+        size="sm"
+        checked={checked}
+        disabled={toolsDisabled}
+        onCheckedChange={onCheckedChange}
+        aria-label={label}
+      />
+      <span className="whitespace-nowrap text-xs text-foreground/80">{label}</span>
+    </label>
+  )
 
   return (
     <div
       className={cn(
         "z-10",
         centered
-          ? "absolute left-1/2 top-1/2 flex w-(--chat-content-width) -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-8 p-0 max-md:top-auto max-md:bottom-4 max-md:w-[calc(100%-2rem)] max-md:translate-y-0 max-md:gap-6"
+          ? "absolute inset-x-0 top-15 bottom-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col items-center justify-center gap-8 px-4 max-md:justify-end max-md:gap-6"
           : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]"
       )}
     >
       {centered ? (
-        <h2 className="max-md:hidden w-full font-heading font-normal text-4xl text-center leading-10">
+        <h2 className="max-md:hidden w-full max-w-(--chat-content-width) shrink-0 font-heading font-normal text-4xl text-center leading-10">
           {welcomeTitle}
         </h2>
       ) : null}
       <div
         className={cn(
-          "flex flex-col justify-between bg-card border border-border rounded-2xl w-full",
+          "flex w-full max-w-(--chat-content-width) flex-col justify-between bg-card border border-border rounded-2xl",
           centered ? "min-h-26 gap-0 p-0" : "gap-2 p-2",
           "shadow-none transition-[box-shadow,border-color]",
           "focus-within:border-primary/40 focus-within:shadow-[0_0_0_3px] focus-within:shadow-primary/30",
@@ -131,10 +162,12 @@ export const ChatComposer = ({
           placeholder={placeholder}
           rows={centered ? 1 : 2}
           className={cn(
-            "bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
+            // Grow with content via field-sizing-content until available viewport
+            // space is used, then scroll. Do not restore a small hard max (e.g. max-h-52).
+            "min-h-13 max-h-[calc(100svh-12rem)] bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
             centered
-              ? "-mx-px -mt-px h-13 min-h-13 max-h-52 w-[calc(100%+2px)] px-5 py-4 leading-5"
-              : "max-h-52 min-h-13 px-1.5 py-1",
+              ? "-mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
+              : "px-1.5 py-1",
             "placeholder:text-muted-foreground",
             "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
           )}
@@ -191,7 +224,7 @@ export const ChatComposer = ({
             centered ? "h-13 items-center p-2" : "items-end"
           )}
         >
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1">
             <input
               ref={fileInputRef}
               type="file"
@@ -210,43 +243,78 @@ export const ChatComposer = ({
             >
               <Plus aria-hidden="true" className="size-4" />
             </Button>
-            <label
-              className={cn(
-                "inline-flex cursor-pointer items-center gap-2 text-sm",
-                (loading || readOnly) && "pointer-events-none opacity-50"
+
+            <div className="hidden min-w-0 items-center gap-2 md:flex">
+              {toolToggle(
+                t("chat_web_search"),
+                webSearchEnabled,
+                onWebSearchEnabledChange
               )}
-            >
-              <Switch
-                size="sm"
-                checked={webSearchEnabled}
-                disabled={loading || readOnly}
-                onCheckedChange={onWebSearchEnabledChange}
-                aria-label={t("chat_web_search")}
-              />
-              <span className="whitespace-nowrap text-xs text-foreground/80">
-                {t("chat_web_search")}
-              </span>
-            </label>
-            <label
-              className={cn(
-                "inline-flex cursor-pointer items-center gap-2 text-sm",
-                (loading || readOnly) && "pointer-events-none opacity-50"
+              {toolToggle(
+                t("org_code_execution"),
+                codeExecutionEnabled,
+                onCodeExecutionEnabledChange
               )}
-            >
-              <Switch
-                size="sm"
-                checked={codeExecutionEnabled}
-                disabled={loading || readOnly}
-                onCheckedChange={onCodeExecutionEnabledChange}
-                aria-label={t("org_code_execution")}
-              />
-              <span className="whitespace-nowrap text-xs text-foreground/80">
-                {t("org_code_execution")}
-              </span>
-            </label>
+            </div>
+
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 shrink-0 text-muted-foreground md:hidden"
+                  disabled={toolsDisabled}
+                  aria-label={t("common_more")}
+                >
+                  <MoreHorizontal aria-hidden="true" className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-72">
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={(event) => event.preventDefault()}
+                  onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
+                >
+                  <span className="flex-1">{t("chat_web_search")}</span>
+                  <Switch
+                    size="sm"
+                    checked={webSearchEnabled}
+                    onCheckedChange={onWebSearchEnabledChange}
+                    aria-label={t("chat_web_search")}
+                  />
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={(event) => event.preventDefault()}
+                  onClick={() =>
+                    onCodeExecutionEnabledChange(!codeExecutionEnabled)
+                  }
+                >
+                  <span className="flex-1">{t("org_code_execution")}</span>
+                  <Switch
+                    size="sm"
+                    checked={codeExecutionEnabled}
+                    onCheckedChange={onCodeExecutionEnabledChange}
+                    aria-label={t("org_code_execution")}
+                  />
+                </DropdownMenuItem>
+                {showModelSelect && modelSelect ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t("chat_select_model")}</DropdownMenuLabel>
+                    <div className="px-1 pb-1 [&_[data-slot=select-trigger]]:h-9 [&_[data-slot=select-trigger]]:w-full [&_[data-slot=select-trigger]]:max-w-none">
+                      {modelSelect}
+                    </div>
+                  </>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            {showModelSelect && modelSelect && !loading ? modelSelect : null}
+            {showModelSelect && modelSelect && !loading ? (
+              <div className="hidden md:block">{modelSelect}</div>
+            ) : null}
             {loading ? (
               <Button
                 variant="destructive"

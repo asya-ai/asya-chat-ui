@@ -923,7 +923,7 @@ const MessageBubbleComponent = ({
                   }
                 }}
                 rows={3}
-                className="bg-muted min-h-32 max-h-[60vh] overflow-y-auto text-foreground"
+                className="bg-muted min-h-32 max-h-[calc(100svh-12rem)] overflow-y-auto text-foreground"
               />
               {editAttachmentError ? (
                 <p className="text-destructive text-sm" role="alert">

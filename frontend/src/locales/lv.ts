@@ -22,6 +22,7 @@ export const lv = {
   common_back_to_chat: "Atpakaļ uz čatu",
   common_disabled: "Atspējots",
   common_settings: "Iestatījumi",
+  common_more: "Vairāk opciju",
   common_usage: "Lietojums",
   sidebar_title: "Sānjosla",
   sidebar_mobile_description: "Parāda mobilo sānjoslu.",

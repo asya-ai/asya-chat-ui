@@ -2789,7 +2789,7 @@ export const ChatPage = () => {
                     >
                       <SelectValue placeholder={t("chat_best_available_model")} />
                     </SelectTrigger>
-                    <SelectContent className="max-h-96">
+                    <SelectContent className="z-100 max-h-96">
                       {selectableChatModels.map((model) => (
                         <SelectItem
                           key={model.id}

@@ -22,6 +22,7 @@ export const ja = {
   common_back_to_chat: "チャットに戻る",
   common_disabled: "無効",
   common_settings: "設定",
+  common_more: "その他のオプション",
   common_usage: "利用状況",
   sidebar_title: "サイドバー",
   sidebar_mobile_description: "モバイル用サイドバーを表示します。",
