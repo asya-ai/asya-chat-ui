@@ -101,6 +101,7 @@ class LoginResolveResponse(BaseModel):
     action: str
     redirect_url: str | None = None
     org: str | None = None
+    org_selection_required: bool = True
 
 
 class TokenResponse(BaseModel):
@@ -236,6 +237,14 @@ def _get_request_login_host(request: Request, client_host: str | None = None) ->
     return None
 
 
+def _active_orgs_sample(session: Session, *, limit: int = 2) -> list[Org]:
+    return session.exec(select(Org).where(Org.is_active == True).limit(limit)).all()
+
+
+def _org_selection_required(session: Session) -> bool:
+    return len(_active_orgs_sample(session, limit=2)) != 1
+
+
 def _resolve_login_org(
     session: Session,
     request: Request,
@@ -252,7 +261,7 @@ def _resolve_login_org(
         explicit_org_match = _get_org_by_slug(session, explicit_org.strip())
         if explicit_org_match:
             return explicit_org_match
-    active_orgs = session.exec(select(Org).where(Org.is_active == True).limit(2)).all()
+    active_orgs = _active_orgs_sample(session, limit=2)
     return active_orgs[0] if len(active_orgs) == 1 else None
 
 
@@ -517,6 +526,7 @@ async def login_resolve(
     request: Request,
     session: Session = Depends(get_db),
 ) -> LoginResolveResponse:
+    selection_required = _org_selection_required(session)
     org = _resolve_login_org(
         session,
         request,
@@ -531,9 +541,16 @@ async def login_resolve(
             if org.oidc_enabled:
                 redirect_url = await _build_oidc_authorize_url(request, org)
                 return LoginResolveResponse(
-                    action="sso", redirect_url=redirect_url, org=org_slug
+                    action="sso",
+                    redirect_url=redirect_url,
+                    org=org_slug,
+                    org_selection_required=selection_required,
                 )
-            return LoginResolveResponse(action="local", org=org_slug)
+            return LoginResolveResponse(
+                action="local",
+                org=org_slug,
+                org_selection_required=selection_required,
+            )
         identifier = payload.identifier.strip()
         if not identifier:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
@@ -545,13 +562,24 @@ async def login_resolve(
                 )
             ).first()
             if membership and user.auth_provider == "local":
-                return LoginResolveResponse(action="local", org=org_slug)
+                return LoginResolveResponse(
+                    action="local",
+                    org=org_slug,
+                    org_selection_required=selection_required,
+                )
         if org.oidc_enabled:
             redirect_url = await _build_oidc_authorize_url(request, org)
             return LoginResolveResponse(
-                action="sso", redirect_url=redirect_url, org=org_slug
+                action="sso",
+                redirect_url=redirect_url,
+                org=org_slug,
+                org_selection_required=selection_required,
             )
-        return LoginResolveResponse(action="local", org=org_slug)
+        return LoginResolveResponse(
+            action="local",
+            org=org_slug,
+            org_selection_required=selection_required,
+        )
 
     if not payload.identifier:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization required")
@@ -569,8 +597,12 @@ async def login_resolve(
     org = orgs[0]
     if org.oidc_enabled and user.auth_provider != "local":
         redirect_url = await _build_oidc_authorize_url(request, org)
-        return LoginResolveResponse(action="sso", redirect_url=redirect_url)
-    return LoginResolveResponse(action="local")
+        return LoginResolveResponse(
+            action="sso",
+            redirect_url=redirect_url,
+            org_selection_required=selection_required,
+        )
+    return LoginResolveResponse(action="local", org_selection_required=selection_required)
 
 
 @router.get("/oidc/start")

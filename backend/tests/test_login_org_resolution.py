@@ -2,7 +2,7 @@ from fastapi import Request
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.api.auth import _resolve_login_org
+from app.api.auth import _org_selection_required, _resolve_login_org
 from app.models import Org
 
 
@@ -104,3 +104,21 @@ def test_valid_explicit_org_takes_precedence_with_multiple_active_orgs():
 
         assert resolved is not None
         assert resolved.id == selected_org.id
+
+
+def test_org_selection_not_required_for_single_active_org():
+    with _session() as session:
+        session.add(Org(name="Acme", slug="acme"))
+        session.add(Org(name="Old Acme", slug="old-acme", is_active=False))
+        session.commit()
+
+        assert _org_selection_required(session) is False
+
+
+def test_org_selection_required_for_multiple_active_orgs():
+    with _session() as session:
+        session.add(Org(name="Acme", slug="acme"))
+        session.add(Org(name="Beta", slug="beta"))
+        session.commit()
+
+        assert _org_selection_required(session) is True

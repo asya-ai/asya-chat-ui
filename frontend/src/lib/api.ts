@@ -250,14 +250,16 @@ export const authApi = {
       body: JSON.stringify({ identifier, password, org, host }),
     }),
   loginResolve: (identifier: string, org?: string | null, host?: string | null) =>
-    apiFetch<{ action: string; redirect_url?: string | null; org?: string | null }>(
-      "/auth/login-resolve",
-      {
-        method: "POST",
-        skipAuth: true,
-        body: JSON.stringify({ identifier, org, host }),
-      }
-    ),
+    apiFetch<{
+      action: string
+      redirect_url?: string | null
+      org?: string | null
+      org_selection_required?: boolean
+    }>("/auth/login-resolve", {
+      method: "POST",
+      skipAuth: true,
+      body: JSON.stringify({ identifier, org, host }),
+    }),
   acceptInvite: (token: string, password?: string) =>
     apiFetch<{ access_token: string }>("/auth/invites/accept", {
       method: "POST",

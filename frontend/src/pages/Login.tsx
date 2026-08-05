@@ -14,6 +14,13 @@ import { loginOrgStore } from "@/lib/storage"
 
 type Stage = "org" | "sso" | "credentials"
 
+type LoginResolveResult = {
+  action: string
+  redirect_url?: string | null
+  org?: string | null
+  org_selection_required?: boolean
+}
+
 export const LoginPage = () => {
   const navigate = useNavigate()
   const { setToken } = useAuth()
@@ -24,9 +31,10 @@ export const LoginPage = () => {
   const [ssoRedirectUrl, setSsoRedirectUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [resolving, setResolving] = useState(false)
+  const [resolving, setResolving] = useState(true)
   const [registrationEnabled, setRegistrationEnabled] = useState(false)
   const [stage, setStage] = useState<Stage>("org")
+  const [orgSelectionRequired, setOrgSelectionRequired] = useState(true)
   const hasError = Boolean(error)
   const [searchParams] = useSearchParams()
 
@@ -35,7 +43,10 @@ export const LoginPage = () => {
     const initialOrg = orgParam ? orgParam.trim().toLowerCase() : loginOrgStore.get()
     const clientHost = window.location.host
 
-    const applyResolve = (resolve: { action: string; redirect_url?: string | null; org?: string | null }) => {
+    const applyResolve = (resolve: LoginResolveResult) => {
+      if (typeof resolve.org_selection_required === "boolean") {
+        setOrgSelectionRequired(resolve.org_selection_required)
+      }
       const resolvedOrg = resolve.org?.trim().toLowerCase()
       if (resolvedOrg) {
         setOrg(resolvedOrg)
@@ -48,7 +59,13 @@ export const LoginPage = () => {
       }
       if (resolvedOrg) {
         setStage("credentials")
+        return
       }
+      if (resolve.org_selection_required === false) {
+        setStage("credentials")
+        return
+      }
+      setStage("org")
     }
 
     if (initialOrg) {
@@ -65,6 +82,7 @@ export const LoginPage = () => {
         .catch(() => {
           if (cancelled) return
           setStage("org")
+          setOrgSelectionRequired(true)
         })
         .finally(() => {
           if (!cancelled) setResolving(false)
@@ -86,6 +104,7 @@ export const LoginPage = () => {
       .catch(() => {
         if (cancelled) return
         setStage("org")
+        setOrgSelectionRequired(true)
       })
       .finally(() => {
         if (!cancelled) setResolving(false)
@@ -104,6 +123,7 @@ export const LoginPage = () => {
   }, [])
 
   const resetToOrg = () => {
+    if (!orgSelectionRequired) return
     setStage("org")
     setSsoRedirectUrl(null)
     setIdentifier("")
@@ -123,12 +143,9 @@ export const LoginPage = () => {
         return
       }
       loginOrgStore.set(orgValue)
-      if (stage === "org") {
+      if (stage === "org" && orgSelectionRequired) {
         const resolve = await authApi.loginResolve("", orgValue, clientHost)
-        if (resolve.org) {
-          setOrg(resolve.org)
-          loginOrgStore.set(resolve.org)
-        }
+        applySubmitResolve(resolve)
         if (resolve.action === "sso" && resolve.redirect_url) {
           setSsoRedirectUrl(resolve.redirect_url)
           setStage("sso")
@@ -138,10 +155,7 @@ export const LoginPage = () => {
         return
       }
       const resolve = await authApi.loginResolve(identifier, orgValue, clientHost)
-      if (resolve.org) {
-        setOrg(resolve.org)
-        loginOrgStore.set(resolve.org)
-      }
+      applySubmitResolve(resolve)
       if (resolve.action === "sso" && resolve.redirect_url) {
         window.location.href = resolve.redirect_url
         return
@@ -160,6 +174,19 @@ export const LoginPage = () => {
     }
   }
 
+  const applySubmitResolve = (resolve: LoginResolveResult) => {
+    if (typeof resolve.org_selection_required === "boolean") {
+      setOrgSelectionRequired(resolve.org_selection_required)
+    }
+    if (resolve.org) {
+      setOrg(resolve.org)
+      loginOrgStore.set(resolve.org)
+    }
+  }
+
+  const showOrgStage = !resolving && stage === "org" && orgSelectionRequired
+  const showOrgSwitcher = stage !== "org" && orgSelectionRequired && Boolean(org)
+
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-4 sm:p-6">
       <div className="w-full max-w-md space-y-3">
@@ -174,7 +201,7 @@ export const LoginPage = () => {
                 <CardTitle className="font-heading text-4xl font-normal leading-10">
                   {t("auth_sign_in")}
                 </CardTitle>
-                {stage !== "org" ? (
+                {showOrgSwitcher ? (
                   <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
                     <span>{t("auth_signing_in_to", { org })}</span>
                     <button
@@ -212,7 +239,7 @@ export const LoginPage = () => {
               </div>
             ) : (
               <form onSubmit={onSubmit} className="space-y-4">
-                {stage === "org" ? (
+                {showOrgStage ? (
                   <Input
                     placeholder={t("auth_org")}
                     value={org}
@@ -221,7 +248,7 @@ export const LoginPage = () => {
                     className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
                     required
                   />
-                ) : (
+                ) : !resolving ? (
                   <>
                     <Input
                       placeholder={t("auth_identifier")}
@@ -240,7 +267,7 @@ export const LoginPage = () => {
                       required
                     />
                   </>
-                )}
+                ) : null}
                 {error ? (
                   <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>
@@ -249,7 +276,7 @@ export const LoginPage = () => {
                 <Button className="w-full" disabled={loading || resolving}>
                   {loading || resolving
                     ? t("auth_sign_in_loading")
-                    : stage === "org"
+                    : showOrgStage
                       ? t("auth_continue")
                       : t("auth_sign_in")}
                 </Button>
@@ -261,7 +288,7 @@ export const LoginPage = () => {
                     </Link>
                   </div>
                 ) : null}
-                {stage === "credentials" ? (
+                {!resolving && stage === "credentials" ? (
                   <div className="text-center text-sm">
                     <Link to="/reset-password" className="underline">
                       {t("auth_forgot_password")}

@@ -309,7 +309,7 @@ export const OrgPage = () => {
   }, [activeSection, isSuperAdmin, selectedOrg])
 
   useEffect(() => {
-    if (!isSuperAdmin || activeSection !== "models" || orgs.length === 0) {
+    if (!isSuperAdmin || activeSection !== "models" || orgs.length <= 1) {
       setAccessByOrgId({})
       return
     }
@@ -1617,74 +1617,72 @@ export const OrgPage = () => {
               </Card>
             ) : null}
 
-            {isSuperAdmin ? (
+            {isSuperAdmin && orgs.length > 1 ? (
               <Card>
                 <CardHeader>
                   <CardTitle>{t("org_models_access")}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {orgs.length > 0 ? (
-                    <div className="border rounded-md w-full overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="left-0 z-10 sticky bg-card min-w-64">
-                              {t("usage_model")}
+                  <div className="border rounded-md w-full overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="left-0 z-10 sticky bg-card min-w-64">
+                            {t("usage_model")}
+                          </TableHead>
+                          {orgs.map((org) => (
+                            <TableHead key={org.id} className="min-w-44 text-center">
+                              {org.name}
                             </TableHead>
-                            {orgs.map((org) => (
-                              <TableHead key={org.id} className="min-w-44 text-center">
-                                {org.name}
-                              </TableHead>
-                            ))}
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {orderedModels.map((model) => (
-                            <TableRow key={`access-${model.id}`}>
-                              <TableCell className="left-0 z-10 sticky bg-card">
-                                <div className="flex items-center gap-2">
-                                  <p className="font-medium text-sm">{model.display_name}</p>
-                                  {isImageModel(model) ? (
-                                    <Image className="w-4 h-4 text-muted-foreground" />
-                                  ) : isEmbeddingModel(model) ? (
-                                    <Database className="w-4 h-4 text-muted-foreground" />
-                                  ) : null}
-                                </div>
-                                <p className="text-muted-foreground text-xs">
-                                  {model.provider} · {model.model_name}
-                                </p>
-                              </TableCell>
-                              {orgs.map((org) => {
-                                const enabled = (accessByOrgId[org.id] ?? []).includes(model.id)
-                                const key = `${org.id}:${model.id}`
-                                return (
-                                  <TableCell key={key} className="text-center">
-                                    <input
-                                      type="checkbox"
-                                      className="w-4 h-4 accent-primary"
-                                      checked={enabled}
-                                      onChange={() => toggleModelAccess(org.id, model.id)}
-                                      disabled={Boolean(updatingAccess[key]) || !org.is_active}
-                                    />
-                                  </TableCell>
-                                )
-                              })}
-                            </TableRow>
                           ))}
-                          {orderedModels.length === 0 ? (
-                            <TableRow>
-                              <TableCell
-                                colSpan={Math.max(orgs.length + 1, 2)}
-                                className="text-muted-foreground text-xs"
-                              >
-                                {t("org_models_no_access")}
-                              </TableCell>
-                            </TableRow>
-                          ) : null}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  ) : null}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {orderedModels.map((model) => (
+                          <TableRow key={`access-${model.id}`}>
+                            <TableCell className="left-0 z-10 sticky bg-card">
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium text-sm">{model.display_name}</p>
+                                {isImageModel(model) ? (
+                                  <Image className="w-4 h-4 text-muted-foreground" />
+                                ) : isEmbeddingModel(model) ? (
+                                  <Database className="w-4 h-4 text-muted-foreground" />
+                                ) : null}
+                              </div>
+                              <p className="text-muted-foreground text-xs">
+                                {model.provider} · {model.model_name}
+                              </p>
+                            </TableCell>
+                            {orgs.map((org) => {
+                              const enabled = (accessByOrgId[org.id] ?? []).includes(model.id)
+                              const key = `${org.id}:${model.id}`
+                              return (
+                                <TableCell key={key} className="text-center">
+                                  <input
+                                    type="checkbox"
+                                    className="w-4 h-4 accent-primary"
+                                    checked={enabled}
+                                    onChange={() => toggleModelAccess(org.id, model.id)}
+                                    disabled={Boolean(updatingAccess[key]) || !org.is_active}
+                                  />
+                                </TableCell>
+                              )
+                            })}
+                          </TableRow>
+                        ))}
+                        {orderedModels.length === 0 ? (
+                          <TableRow>
+                            <TableCell
+                              colSpan={Math.max(orgs.length + 1, 2)}
+                              className="text-muted-foreground text-xs"
+                            >
+                              {t("org_models_no_access")}
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </CardContent>
               </Card>
             ) : null}
