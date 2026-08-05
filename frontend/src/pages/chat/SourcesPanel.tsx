@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react"
 
 import type { SourceItem } from "@/lib/types"
+import { dedupeSources } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { X } from "lucide-react"
@@ -39,7 +40,9 @@ export const SourcesPanel = ({
   closeLabel,
   onClose,
   onNavigateInternal,
-}: SourcesPanelProps) => (
+}: SourcesPanelProps) => {
+  const uniqueSources = dedupeSources(sources)
+  return (
   <aside className="flex h-full w-full max-w-[28.5rem] shrink-0 flex-col border-l border-border bg-background">
     <div className="flex h-15 shrink-0 items-center justify-between gap-3 px-3 py-2.5">
       <h2 className="truncate font-heading text-4xl leading-10">{title}</h2>
@@ -55,10 +58,10 @@ export const SourcesPanel = ({
     </div>
     <ScrollArea className="min-h-0 flex-1">
       <div className="flex flex-col gap-1 px-2 pb-4">
-        {sources.length === 0 ? (
+        {uniqueSources.length === 0 ? (
           <p className="p-6 text-center text-sm text-muted-foreground">{emptyLabel}</p>
         ) : (
-          sources.map((source, index) => {
+          uniqueSources.map((source, index) => {
             const url = sourceUrl(source)
             const host = hostFromSource(source)
             const isInternal = url.startsWith("/chat/")
@@ -119,6 +122,7 @@ export const SourcesPanel = ({
       </div>
     </ScrollArea>
   </aside>
-)
+  )
+}
 
 export default SourcesPanel

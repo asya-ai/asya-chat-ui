@@ -27,6 +27,7 @@ import type {
   SourceItem,
   ToolEvent,
 } from "@/lib/types"
+import { dedupeSources } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -559,6 +560,7 @@ const MessageBubbleComponent = ({
       isContextSummaryEvent
   )
   const canCopyMessage = Boolean(msg.content.trim())
+  const uniqueSources = msg.sources?.length ? dedupeSources(msg.sources) : []
   const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
   const streamParts = msg.stream_parts ?? []
   const streamTextLength = streamParts.reduce(
@@ -1354,7 +1356,7 @@ const MessageBubbleComponent = ({
         {!isEditing &&
         (canCopyMessage ||
           (actionsEnabled && (isUser || msg.generation_status === "failed")) ||
-          (!isUser && msg.sources && msg.sources.length > 0) ||
+          (!isUser && uniqueSources.length > 0) ||
           (!isUser && Boolean(msg.model_name))) ? (
           <div
             className={`mt-2 flex flex-wrap items-center gap-2 transition ${
@@ -1413,17 +1415,17 @@ const MessageBubbleComponent = ({
             </div>
             {!isUser ? (
               <div className="flex min-w-0 items-center gap-2">
-                {msg.sources && msg.sources.length > 0 ? (
+                {uniqueSources.length > 0 ? (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     className="h-7 rounded-full px-2.5 text-xs"
-                    onClick={() => onOpenSources?.(msg.sources ?? [])}
+                    onClick={() => onOpenSources?.(uniqueSources)}
                   >
-                    {msg.sources.length === 1
-                      ? t("chat_sources_count_one", { count: msg.sources.length })
-                      : t("chat_sources_count", { count: msg.sources.length })}
+                    {uniqueSources.length === 1
+                      ? t("chat_sources_count_one", { count: uniqueSources.length })
+                      : t("chat_sources_count", { count: uniqueSources.length })}
                   </Button>
                 ) : null}
                 {msg.model_name ? (

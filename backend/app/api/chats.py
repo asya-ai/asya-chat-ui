@@ -927,10 +927,43 @@ async def _resolve_source_urls(urls: list[str]) -> list[dict]:
     return results
 
 
+def _source_identity(item: dict) -> str | None:
+    source_id = item.get("source_id")
+    if source_id is not None and str(source_id).strip():
+        return f"id:{str(source_id).strip()}"
+    url = item.get("url")
+    if isinstance(url, str) and url.strip():
+        return f"url:{url.strip()}"
+    title = item.get("title")
+    if isinstance(title, str) and title.strip():
+        return f"title:{title.strip().casefold()}"
+    return None
+
+
+def _dedupe_sources(items: list[dict] | None) -> list[dict]:
+    """Keep first occurrence of each source; same site/file counted once."""
+    if not items:
+        return []
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = _source_identity(item)
+        if key is None:
+            unique.append(item)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
 def _limit_sources(items: list[dict] | None, max_items: int = 5) -> list[dict]:
     if not items:
         return []
-    return items[:max_items]
+    return _dedupe_sources(items)[:max_items]
 
 
 def _sanitize_tool_output_for_context(value: object) -> object:
@@ -2334,7 +2367,7 @@ async def _run_agentic_loop(
                     await _emit(label, "end")
         finally:
             await _emit(step_label, "end")
-    unique = {item.get("url"): item for item in sources if isinstance(item, dict)}
+    unique_sources = _dedupe_sources(sources)
     if not response.content:
         logger.info("Tool loop reached max steps; requesting final response")
         has_tool_history = any(
@@ -2359,7 +2392,7 @@ async def _run_agentic_loop(
             return (
                 fallback,
                 attachments,
-                _limit_sources(list(unique.values())),
+                _limit_sources(unique_sources),
                 image_usages,
                 total_usage,
             )
@@ -2367,7 +2400,7 @@ async def _run_agentic_loop(
     return (
         response.content,
         attachments,
-        _limit_sources(list(unique.values())),
+        _limit_sources(unique_sources),
         image_usages,
         total_usage,
     )

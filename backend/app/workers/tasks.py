@@ -21,6 +21,7 @@ from app.api.chats import (
     _grounding_enabled,
     _is_image_output_model,
     _maybe_update_chat_title,
+    _dedupe_sources,
     _normalize_sources,
     _prepend_tool_guidance,
     _effective_web_tool_enabled,
@@ -699,15 +700,19 @@ async def _run_generation(task_id: UUID) -> None:
                         limit=6,
                     )
                     context_blocks: list[str] = []
+                    seen_agent_source_ids: set[str] = set()
                     for idx, (chunk, source, _score) in enumerate(chunks, start=1):
-                        agent_sources.append(
-                            {
-                                "source_id": str(source.id),
-                                "title": source.title,
-                                "url": source.url,
-                                "snippet": chunk.content[:300],
-                            }
-                        )
+                        source_key = str(source.id)
+                        if source_key not in seen_agent_source_ids:
+                            seen_agent_source_ids.add(source_key)
+                            agent_sources.append(
+                                {
+                                    "source_id": source_key,
+                                    "title": source.title,
+                                    "url": source.url,
+                                    "snippet": chunk.content[:300],
+                                }
+                            )
                         context_blocks.append(f"[Source {idx}] {source.title}\n{chunk.content}")
                     _append_event(
                         session,
@@ -994,19 +999,7 @@ async def _run_generation(task_id: UUID) -> None:
                 if agent_sources:
                     merged_sources.extend(agent_sources)
                 if merged_sources:
-                    seen: set[tuple[str, str, str]] = set()
-                    deduped: list[dict[str, Any]] = []
-                    for source in merged_sources:
-                        key = (
-                            str(source.get("title") or ""),
-                            str(source.get("url") or ""),
-                            str(source.get("snippet") or ""),
-                        )
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        deduped.append(source)
-                    assistant_message.sources = deduped
+                    assistant_message.sources = _dedupe_sources(merged_sources)
                     session.add(assistant_message)
                     session.commit()
                 if tool_attachments:

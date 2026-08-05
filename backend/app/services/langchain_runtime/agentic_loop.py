@@ -211,6 +211,11 @@ async def run_agentic_loop_langchain(
     image_usages: list[dict] = []
     usage: ChatUsage | None = None
 
+    from app.api.chats import _dedupe_sources, _limit_sources
+
+    def _finalize_sources() -> list[dict]:
+        return _limit_sources(_dedupe_sources(sources))
+
     async def _emit_activity(label: str, state: str) -> None:
         if activity_sender:
             await activity_sender.send({"label": label, "state": state})
@@ -266,7 +271,7 @@ async def run_agentic_loop_langchain(
         if not tool_calls:
             await _emit_activity(thinking_label, "end")
             await _emit_activity("Answering", "start")
-            return _visible_content(content), attachments, sources, image_usages, usage
+            return _visible_content(content), attachments, _finalize_sources(), image_usages, usage
 
         await _emit_activity(thinking_label, "end")
         messages.append(
@@ -431,7 +436,7 @@ async def run_agentic_loop_langchain(
     return (
         "I reached the tool step limit before finishing. Please refine your request and try again.",
         attachments,
-        sources,
+        _finalize_sources(),
         image_usages,
         usage,
     )

@@ -138,6 +138,32 @@ export type SourceItem = {
   url?: string | null
   title?: string | null
   host?: string | null
+  source_id?: string | null
+  snippet?: string | null
+}
+
+/** Same site/file once — matches backend `_dedupe_sources` identity rules. */
+export const dedupeSources = (sources: SourceItem[]): SourceItem[] => {
+  const seen = new Set<string>()
+  const unique: SourceItem[] = []
+  for (const source of sources) {
+    const sourceId = source.source_id?.trim()
+    const url = source.url?.trim()
+    const title = source.title?.trim()
+    const key = sourceId
+      ? `id:${sourceId}`
+      : url
+        ? `url:${url}`
+        : title
+          ? `title:${title.toLowerCase()}`
+          : null
+    if (key) {
+      if (seen.has(key)) continue
+      seen.add(key)
+    }
+    unique.push(source)
+  }
+  return unique
 }
 
 export type CodeExecutionToolEvent = {
