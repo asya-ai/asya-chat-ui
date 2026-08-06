@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
 type ChatSidebarProps = {
@@ -85,6 +86,11 @@ export const ChatSidebar = ({
   const [renameChat, setRenameChat] = useState<Chat | null>(null)
   const [renameValue, setRenameValue] = useState("")
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState("")
+  const [newInstructions, setNewInstructions] = useState("")
+  const [createError, setCreateError] = useState<string | null>(null)
   const { data: searchedChats = [] } = useChatSearch(orgId, sessionQueryDebounced)
   const currentChatId = activeChatId ?? routeChatId ?? null
 
@@ -179,6 +185,38 @@ export const ChatSidebar = ({
     navigate(`/projects/${encodeURIComponent(agent.id)}`)
   }
 
+  const openCreateSpace = () => {
+    setCreateError(null)
+    setCreateOpen(true)
+    if (!sectionsOpen.spaces) setSectionOpen("spaces", true)
+  }
+
+  const handleCreateSpace = async () => {
+    const name = newName.trim()
+    if (!name) {
+      setCreateError(t("project_name_required"))
+      return
+    }
+    try {
+      setCreating(true)
+      setCreateError(null)
+      const created = await agentApi.create({
+        name,
+        master_prompt: newInstructions.trim() || null,
+      })
+      setAgents((prev) => [created, ...prev])
+      setCreateOpen(false)
+      setNewName("")
+      setNewInstructions("")
+      onRequestClose?.()
+      navigate(`/projects/${created.id}`)
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : t("project_create_failed"))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const openRename = (chat: Chat) => {
     setRenameChat(chat)
     setRenameValue(chat.title || "")
@@ -203,7 +241,7 @@ export const ChatSidebar = ({
   }
 
   return (
-    <nav aria-label={title} className="flex h-full min-h-0 flex-col">
+    <nav aria-label={title} className="flex h-full min-h-0 min-w-0 flex-col">
       <div className="flex h-15 shrink-0 items-center justify-between gap-2 px-1.5 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex size-11 shrink-0 items-center justify-center">
@@ -228,7 +266,7 @@ export const ChatSidebar = ({
         ) : null}
       </div>
 
-      <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3">
+      <div className="mt-3 flex min-h-0 min-w-0 flex-1 flex-col gap-3">
         <Button className="w-full shrink-0" onClick={onNewChat}>
           <Plus aria-hidden="true" />
           {labels.newChat}
@@ -236,104 +274,107 @@ export const ChatSidebar = ({
 
         <div className="h-0 shrink-0 border-t border-border" />
 
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="flex flex-col gap-0.5 pb-2">
+        {/* Radix wraps viewport content in a display:table div, which grows to
+            max-content and drags every w-full row wide on long chat titles. */}
+        <ScrollArea className="min-h-0 min-w-0 flex-1 [&>[data-slot=scroll-area-viewport]>div]:block!">
+          <div className="flex min-w-0 flex-col gap-0.5 pb-2 pr-1">
             <div>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-9 w-full justify-start gap-0.5 p-0 data-[active=true]:bg-sidebar-accent"
-                data-active={activeSection === "projects"}
-                aria-expanded={sectionsOpen.spaces}
-                onClick={() => setSectionOpen("spaces", !sectionsOpen.spaces)}
-                onDoubleClick={(event) => {
-                  event.preventDefault()
-                  onOpenProjects()
-                }}
-              >
-                <span className="flex size-9 shrink-0 items-center justify-center">
-                  <span
-                    aria-hidden="true"
-                    className="figma-icon size-5"
-                    style={{ maskImage: "url('/icon-spaces.svg')" }}
-                  />
+              <div className="flex h-9 w-full min-w-0 items-center">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 min-w-0 flex-1 justify-start gap-0.5 p-0 data-[active=true]:bg-sidebar-accent"
+                  data-active={activeSection === "projects"}
+                  aria-expanded={sectionsOpen.spaces}
+                  onClick={() => setSectionOpen("spaces", !sectionsOpen.spaces)}
+                  onDoubleClick={(event) => {
+                    event.preventDefault()
+                    onOpenProjects()
+                  }}
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center">
+                    <span
+                      aria-hidden="true"
+                      className="figma-icon size-5"
+                      style={{ maskImage: "url('/icon-spaces.svg')" }}
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
+                    {labels.projects}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0 text-muted-foreground"
+                  aria-label={t("project_new")}
+                  onClick={openCreateSpace}
+                >
+                  <Plus aria-hidden="true" className="size-4" />
+                </Button>
+                <span className="mr-2 flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+                  {sectionsOpen.spaces ? (
+                    <ChevronDown aria-hidden="true" className="size-4" />
+                  ) : (
+                    <ChevronRight aria-hidden="true" className="size-4" />
+                  )}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
-                  {labels.projects}
-                </span>
-                {sectionsOpen.spaces ? (
-                  <ChevronDown
-                    aria-hidden="true"
-                    className="mr-2 size-4 shrink-0 text-muted-foreground"
-                  />
-                ) : (
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="mr-2 size-4 shrink-0 text-muted-foreground"
-                  />
-                )}
-              </Button>
+              </div>
               {sectionsOpen.spaces ? (
                 <div className="mt-0.5 flex flex-col gap-0.5">
-                  {agents.length === 0 ? (
-                    <p className="px-3 py-2 text-xs text-muted-foreground">
-                      {t("project_empty_title")}
-                    </p>
-                  ) : (
-                    agents.map((agent) => (
-                      <Button
-                        key={agent.id}
-                        type="button"
-                        variant="ghost"
-                        className={cn(
-                          "h-8 w-full justify-start px-3 text-left text-sm font-normal",
-                          activeAgentId === agent.id && "bg-sidebar-accent"
-                        )}
-                        onClick={() => selectAgent(agent)}
-                      >
-                        <span className="truncate">{agent.name}</span>
-                      </Button>
-                    ))
-                  )}
+                  {agents.map((agent) => (
+                    <Button
+                      key={agent.id}
+                      type="button"
+                      variant="ghost"
+                      className={cn(
+                        "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
+                        activeAgentId === agent.id && "bg-sidebar-accent"
+                      )}
+                      onClick={() => selectAgent(agent)}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                    </Button>
+                  ))}
                 </div>
               ) : null}
             </div>
 
             <div>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-9 w-full justify-start gap-0.5 p-0 data-[active=true]:bg-sidebar-accent"
-                data-active={activeSection === "history"}
-                aria-expanded={sectionsOpen.sessions}
-                onClick={() => setSectionOpen("sessions", !sectionsOpen.sessions)}
-                onDoubleClick={(event) => {
-                  event.preventDefault()
-                  onOpenHistory()
-                }}
-              >
-                <span className="flex size-9 shrink-0 items-center justify-center">
-                  <span
-                    aria-hidden="true"
-                    className="figma-icon size-5"
-                    style={{ maskImage: "url('/icon-history.svg')" }}
-                  />
+              <div className="flex h-9 w-full min-w-0 items-center">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 min-w-0 flex-1 justify-start gap-0.5 p-0 data-[active=true]:bg-sidebar-accent"
+                  data-active={activeSection === "history"}
+                  aria-expanded={sectionsOpen.sessions}
+                  onClick={() => setSectionOpen("sessions", !sectionsOpen.sessions)}
+                  onDoubleClick={(event) => {
+                    event.preventDefault()
+                    onOpenHistory()
+                  }}
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center">
+                    <span
+                      aria-hidden="true"
+                      className="figma-icon size-5"
+                      style={{ maskImage: "url('/icon-history.svg')" }}
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
+                    {labels.history}
+                  </span>
+                </Button>
+                <span className="size-7 shrink-0" aria-hidden="true" />
+                <span className="mr-2 flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+                  {sectionsOpen.sessions ? (
+                    <ChevronDown aria-hidden="true" className="size-4" />
+                  ) : (
+                    <ChevronRight aria-hidden="true" className="size-4" />
+                  )}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
-                  {labels.history}
-                </span>
-                {sectionsOpen.sessions ? (
-                  <ChevronDown
-                    aria-hidden="true"
-                    className="mr-2 size-4 shrink-0 text-muted-foreground"
-                  />
-                ) : (
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="mr-2 size-4 shrink-0 text-muted-foreground"
-                  />
-                )}
-              </Button>
+              </div>
               {sectionsOpen.sessions ? (
                 <div className="mt-0.5 flex flex-col gap-2">
                   <div className="relative px-1.5">
@@ -369,12 +410,12 @@ export const ChatSidebar = ({
                                 type="button"
                                 variant="ghost"
                                 className={cn(
-                                  "h-8 w-full justify-start px-3 text-left text-sm font-normal",
+                                  "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
                                   currentChatId === chat.id && "bg-sidebar-accent"
                                 )}
                                 onClick={() => selectChat(chat)}
                               >
-                                <span className="truncate">
+                                <span className="min-w-0 flex-1 truncate">
                                   {chat.title || t("chat_untitled")}
                                 </span>
                               </Button>
@@ -411,6 +452,58 @@ export const ChatSidebar = ({
       </div>
 
       {footer ? <div className="flex shrink-0 flex-col gap-0.5">{footer}</div> : null}
+
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open)
+          if (!open) {
+            setCreateError(null)
+            setNewName("")
+            setNewInstructions("")
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("project_create_title")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              autoFocus
+              placeholder={t("project_name_placeholder")}
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void handleCreateSpace()
+                }
+              }}
+            />
+            <Textarea
+              rows={4}
+              placeholder={t("project_instructions_placeholder")}
+              value={newInstructions}
+              onChange={(event) => setNewInstructions(event.target.value)}
+            />
+            {createError ? (
+              <p className="text-destructive text-sm">{createError}</p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>
+              {t("common_cancel")}
+            </Button>
+            <Button
+              onClick={() => void handleCreateSpace()}
+              disabled={creating || !newName.trim()}
+            >
+              {t("project_create_action")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(renameChat)}

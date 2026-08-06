@@ -145,6 +145,10 @@ export const ja = {
   chat_generation_cancelled: "生成をキャンセルしました。",
   chat_retry: "再試行",
   chat_edit_message: "メッセージを編集",
+  chat_delete_message: "メッセージを削除",
+  chat_delete_message_confirm_title: "メッセージを削除しますか？",
+  chat_delete_message_confirm_desc:
+    "このメッセージとそれ以降のすべてのメッセージが削除されます。この操作は元に戻せません。",
   chat_copy_message: "メッセージをコピー",
   chat_copy_code: "コードをコピー",
   chat_copy_mermaid: "Mermaidをコピー",

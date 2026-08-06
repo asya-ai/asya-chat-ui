@@ -23,6 +23,7 @@ import type {
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
+import { getProviderIconUrl } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -320,6 +321,7 @@ export const ChatPage = () => {
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
+  const [deleteConfirmMessage, setDeleteConfirmMessage] = useState<ChatMessage | null>(null)
   const [sessionOwnedChatIds, setSessionOwnedChatIds] = useState<string[]>(() =>
     readSessionOwnedChatIds()
   )
@@ -2364,8 +2366,14 @@ export const ChatPage = () => {
     t,
   ])
 
-  const deleteFromMessage = useCallback(async (msg: ChatMessage) => {
-    if (!activeChat) return
+  const deleteFromMessage = useCallback((msg: ChatMessage) => {
+    setDeleteConfirmMessage(msg)
+  }, [])
+
+  const confirmDeleteFromMessage = useCallback(async () => {
+    if (!activeChat || !deleteConfirmMessage) return
+    const msg = deleteConfirmMessage
+    setDeleteConfirmMessage(null)
     stopGeneration()
     await chatApi.deleteBranchFromMessage(activeChat.id, msg.id)
     updateChatMessagesFor(activeChat.id, (prev) => {
@@ -2373,7 +2381,7 @@ export const ChatPage = () => {
       if (index === -1) return prev
       return prev.slice(0, index)
     })
-  }, [activeChat, stopGeneration, updateChatMessagesFor])
+  }, [activeChat, deleteConfirmMessage, stopGeneration, updateChatMessagesFor])
 
   const retryFailedMessage = useCallback(async (failedMessage: ChatMessage) => {
     if (!chatId || !activeChat) return
@@ -2516,7 +2524,9 @@ export const ChatPage = () => {
       const thinkingLabels =
         nonStepThinking.length > 0
           ? nonStepThinking
-          : isImageMessage
+          : msg.role === "assistant" &&
+              isImageMessage &&
+              !isTerminalStatus(msg.generation_status ?? null)
             ? [t("chat_generating_image")]
             : []
       const isEditing = editingMessageId === msg.id
@@ -2855,28 +2865,34 @@ export const ChatPage = () => {
                       <SelectValue placeholder={t("chat_best_available_model")} />
                     </SelectTrigger>
                     <SelectContent className="z-100 max-h-96">
-                      {selectableChatModels.map((model) => (
-                        <SelectItem
-                          key={model.id}
-                          value={model.id}
-                          disabled={model.is_available === false}
-                        >
-                          <span className="inline-flex items-center gap-2">
-                            {model.provider === "openai" ? (
-                              <span
-                                aria-hidden="true"
-                                className="figma-icon size-5"
-                                style={{
-                                  maskImage: "url('/icon-provider-openai.svg')",
-                                }}
-                              />
-                            ) : isImageOutputModel(model) ? (
-                              <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : null}
-                            <span>{model.display_name}</span>
-                          </span>
-                        </SelectItem>
-                      ))}
+                      {selectableChatModels.map((model) => {
+                        const providerIconUrl = getProviderIconUrl(
+                          model.provider,
+                          model.model_name
+                        )
+                        return (
+                          <SelectItem
+                            key={model.id}
+                            value={model.id}
+                            disabled={model.is_available === false}
+                          >
+                            <span className="inline-flex items-center gap-2">
+                              {providerIconUrl ? (
+                                <span
+                                  aria-hidden="true"
+                                  className="figma-icon size-5 shrink-0"
+                                  style={{
+                                    maskImage: `url('${providerIconUrl}')`,
+                                  }}
+                                />
+                              ) : isImageOutputModel(model) ? (
+                                <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              ) : null}
+                              <span>{model.display_name}</span>
+                            </span>
+                          </SelectItem>
+                        )
+                      })}
                     </SelectContent>
                   </Select>
                 }
@@ -2974,6 +2990,38 @@ export const ChatPage = () => {
                 }}
               >
                 {t("chat_delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog
+          open={Boolean(deleteConfirmMessage)}
+          onOpenChange={(open) => {
+            if (!open) setDeleteConfirmMessage(null)
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("chat_delete_message_confirm_title")}</DialogTitle>
+              <DialogDescription>
+                {t("chat_delete_message_confirm_desc")}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                autoFocus
+                variant="outline"
+                onClick={() => setDeleteConfirmMessage(null)}
+              >
+                {t("chat_cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  confirmDeleteFromMessage().catch(() => null)
+                }}
+              >
+                {t("chat_delete_message")}
               </Button>
             </DialogFooter>
           </DialogContent>

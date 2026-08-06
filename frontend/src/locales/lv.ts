@@ -145,6 +145,10 @@ export const lv = {
   chat_generation_cancelled: "Ģenerēšana atcelta.",
   chat_retry: "Mēģināt vēlreiz",
   chat_edit_message: "Rediģēt ziņu",
+  chat_delete_message: "Dzēst ziņu",
+  chat_delete_message_confirm_title: "Dzēst ziņu?",
+  chat_delete_message_confirm_desc:
+    "Tiks dzēsta šī ziņa un visas tai sekojošās ziņas. Šo darbību nevar atsaukt.",
   chat_copy_message: "Kopēt ziņu",
   chat_copy_code: "Kopēt kodu",
   chat_copy_mermaid: "Kopēt Mermaid",

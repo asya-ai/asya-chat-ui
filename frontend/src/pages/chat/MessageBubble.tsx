@@ -1460,7 +1460,7 @@ const MessageBubbleComponent = ({
                     size="icon"
                     className="opacity-70 hover:opacity-100"
                     onClick={() => onDeleteFromMessage(msg)}
-                    aria-label={t("chat_delete")}
+                    aria-label={t("chat_delete_message")}
                   >
                     <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
                   </Button>

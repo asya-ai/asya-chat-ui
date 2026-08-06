@@ -143,6 +143,10 @@ export const en = {
   chat_generation_cancelled: "Generation cancelled.",
   chat_retry: "Retry",
   chat_edit_message: "Edit message",
+  chat_delete_message: "Delete message",
+  chat_delete_message_confirm_title: "Delete message?",
+  chat_delete_message_confirm_desc:
+    "This will delete this message and all messages after it. This cannot be undone.",
   chat_copy_message: "Copy message",
   chat_copy_code: "Copy code",
   chat_copy_mermaid: "Copy Mermaid",

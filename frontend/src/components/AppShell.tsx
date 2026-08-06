@@ -134,7 +134,7 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
       </aside>
       <main
         id="main-content"
-        className={`relative min-h-0 flex-1 overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
+        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
           desktopOpen ? "md:ml-0" : "md:ml-2"
         }`}
       >
