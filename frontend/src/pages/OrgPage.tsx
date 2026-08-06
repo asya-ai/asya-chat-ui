@@ -678,7 +678,6 @@ export const OrgPage = () => {
     { key: "web_grounding_openai", label: t("org_grounding_openai"), type: "boolean" },
     { key: "web_grounding_gemini", label: t("org_grounding_gemini"), type: "boolean" },
     { key: "exec_policy", label: t("org_code_execution"), type: "exec_policy" },
-    { key: "exec_network_enabled", label: t("org_code_execution_network"), type: "boolean" },
   ]
 
   const openRenameDialog = (org: Org) => {
@@ -1146,9 +1145,7 @@ export const OrgPage = () => {
                                         }
                                         disabled={
                                           isUpdating ||
-                                          !org.is_active ||
-                                          (row.key === "exec_network_enabled" &&
-                                            settings.exec_policy === "off")
+                                          !org.is_active
                                         }
                                       />
                                     </div>
@@ -1269,25 +1266,6 @@ export const OrgPage = () => {
                               </SelectItem>
                             </SelectContent>
                           </Select>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="font-medium text-sm">
-                              {t("org_code_execution_network")}
-                            </p>
-                            <p className="text-muted-foreground text-xs">
-                              {t("org_code_execution_network_desc")}
-                            </p>
-                          </div>
-                          <Switch
-                            checked={webSettings.exec_network_enabled}
-                            onCheckedChange={(value) =>
-                              updateWebSettings({ exec_network_enabled: value })
-                            }
-                            disabled={
-                              !canManageOrgSettings || webSettings.exec_policy === "off"
-                            }
-                          />
                         </div>
                       </div>
                     </div>

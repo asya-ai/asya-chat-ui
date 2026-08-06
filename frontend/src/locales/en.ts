@@ -282,8 +282,6 @@ export const en = {
   org_code_execution_off: "Off",
   org_code_execution_prompt: "Require acceptance",
   org_code_execution_always: "Always allow",
-  org_code_execution_network: "Network access",
-  org_code_execution_network_desc: "Allow outbound network access for execution containers.",
   org_users_invite_email: "Member email",
   org_users_generate_invite: "Generate invite",
   org_users_email: "Email",

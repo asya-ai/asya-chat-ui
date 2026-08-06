@@ -284,8 +284,6 @@ export const ja = {
   org_code_execution_off: "オフ",
   org_code_execution_prompt: "承認を要求",
   org_code_execution_always: "常に許可",
-  org_code_execution_network: "ネットワークアクセス",
-  org_code_execution_network_desc: "実行コンテナからの外向きネットワークアクセスを許可します。",
   org_users_invite_email: "メンバーのメール",
   org_users_generate_invite: "招待を生成",
   org_users_email: "メール",

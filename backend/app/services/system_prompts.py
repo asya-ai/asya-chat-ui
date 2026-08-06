@@ -31,6 +31,8 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "claim you cannot access Python or files. Use real tool calls (not plain-text pseudo "
         "calls). Always set `purpose` to a short plain-language goal for the run "
         "(what you are trying to learn or produce), not imports or code. "
+        "The sandbox has no network access — use web_search/web_scrape for internet data. "
+        "Do not probe host CPU, RAM, cgroup, or kernel details. "
         "Uploaded chat files are available under /inputs with the listed filenames. "
         "When working in a project, project source files are also available under "
         "/inputs/project/. "

@@ -51,6 +51,62 @@ def test_validate_imports_allows_presentation_dependencies() -> None:
     _validate_imports("import geopandas as gpd\nimport shapefile\nfrom pptx import Presentation")
 
 
+def test_validate_imports_allows_scientific_and_document_stack() -> None:
+    _validate_imports(
+        "\n".join(
+            [
+                "import numpy",
+                "import scipy",
+                "import pandas",
+                "import matplotlib",
+                "import sklearn",
+                "import statsmodels",
+                "from PIL import Image",
+                "import cv2",
+                "import openpyxl",
+                "import docx",
+                "import pptx",
+                "import reportlab",
+                "import odf",
+                "import pypandoc",
+                "import bs4",
+                "import sympy",
+                "import shapely",
+                "import networkx",
+                "import xarray",
+                "import polars",
+                "import torch",
+                "import tensorflow",
+                "import qiskit",
+                "import rdkit",
+                "import math",
+                "import statistics",
+                "import json",
+                "import csv",
+                "import re",
+                "import pathlib",
+                "import datetime",
+                "import sqlite3",
+            ]
+        )
+    )
+
+
+def test_validate_imports_blocks_network_and_host_introspection() -> None:
+    for code in (
+        "import requests",
+        "import httpx",
+        "import psutil",
+        "from fake_useragent import UserAgent",
+    ):
+        try:
+            _validate_imports(code)
+        except ValueError as exc:
+            assert "Import not allowed" in str(exc)
+        else:
+            raise AssertionError(f"Expected import rejection for: {code}")
+
+
 def test_write_inputs_stages_raw_attachments_without_preprocessing(tmp_path) -> None:
     shp_id = "11111111-1111-1111-1111-111111111111"
     zip_id = "22222222-2222-2222-2222-222222222222"

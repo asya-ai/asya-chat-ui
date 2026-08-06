@@ -320,7 +320,6 @@ def _build_tool_registry(
     web_search_enabled: bool = False,
     web_scrape_enabled: bool = False,
     exec_policy: str = "off",
-    exec_network_enabled: bool = False,
     locale: str | None = None,
     memory_enabled: bool = False,
     user_id: UUID | None = None,
@@ -576,7 +575,6 @@ def _build_tool_registry(
                     session=session,
                     org_id=str(org_id),
                     chat_id=str(chat_id),
-                    network_enabled=exec_network_enabled,
                     agent_id=str(agent_id) if agent_id else None,
                 ),
                 code=code,
@@ -591,6 +589,8 @@ def _build_tool_registry(
                     "Your given code will be put in main.py and executed in a sandbox."
                     "Given that it is run as `python main.py`, you need to use `print()` statements to see results."
                     "Use this for any data analysis, plotting, or file-based tasks."
+                    "The sandbox has no network access; use web_search/web_scrape for internet data."
+                    "Do not probe host system resources (CPU, RAM, cgroup, kernel, network interfaces)."
                     "All files from this chat are available as read-only under /inputs."
                     "When this chat belongs to a project, project source files are also available "
                     "as read-only under /inputs/project/ (original uploads when present, otherwise "
@@ -4097,7 +4097,6 @@ async def create_message(
         web_search_enabled=effective_web_search_enabled,
         web_scrape_enabled=effective_web_scrape_enabled,
         exec_policy=effective_exec_policy,
-        exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
         agent_id=chat.agent_id,
         pending_attachments=pending_tool_attachments,
@@ -5016,7 +5015,6 @@ async def edit_message(
         web_search_enabled=effective_web_search_enabled,
         web_scrape_enabled=effective_web_scrape_enabled,
         exec_policy=effective_exec_policy,
-        exec_network_enabled=org.exec_network_enabled,
         locale=payload.locale,
         agent_id=chat.agent_id,
         pending_attachments=pending_tool_attachments,

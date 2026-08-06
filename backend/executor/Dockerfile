@@ -24,6 +24,7 @@ RUN set -eux; \
     libpng16-16 \
     zlib1g \
     libopenblas0 \
+    pandoc \
     tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 

@@ -22,7 +22,7 @@ export type OrgWebSettings = {
   web_scrape_enabled: boolean
   web_grounding_openai: boolean
   web_grounding_gemini: boolean
-  exec_network_enabled: boolean
+  exec_network_enabled?: boolean
   exec_policy: "off" | "prompt" | "always"
 }
 

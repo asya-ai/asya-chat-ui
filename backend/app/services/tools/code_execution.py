@@ -29,19 +29,23 @@ DEFAULT_ALLOWLIST = {
     "pandas",
     "geopandas",
     "shapefile",
+    "shapely",
     "matplotlib",
     "cv2",
     "seaborn",
     "scipy",
     "sklearn",
+    "statsmodels",
     "PIL",
-    "requests",
     "bs4",
     "lxml",
     "sympy",
     "openpyxl",
     "docx",
     "pptx",
+    "reportlab",
+    "odf",
+    "pypandoc",
     "pypdf",
     "pdfplumber",
     "fitz",
@@ -53,18 +57,55 @@ DEFAULT_ALLOWLIST = {
     "rich",
     "orjson",
     "pyarrow",
-    "httpx",
     "chardet",
     "charset_normalizer",
     "magic",
-    "psutil",
     "watchdog",
     "regex",
     "rapidfuzz",
-    "fake_useragent",
     "duckdb",
+    "networkx",
+    "xarray",
+    "polars",
 }
 ALLOWED_IMPORTS_HINT = ", ".join(sorted(DEFAULT_ALLOWLIST))
+
+# Docker replaces its default MaskedPaths when this is set — keep defaults + harden.
+_EXEC_MASKED_PATHS = (
+    # Docker / runc defaults
+    "/proc/asound",
+    "/proc/acpi",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/sys/firmware",
+    "/sys/devices/virtual/powercap",
+    # Host fingerprinting / resource disclosure
+    "/proc/cpuinfo",
+    "/proc/meminfo",
+    "/proc/stat",
+    "/proc/version",
+    "/proc/uptime",
+    "/proc/loadavg",
+    "/proc/cmdline",
+    "/proc/devices",
+    "/proc/diskstats",
+    "/proc/partitions",
+    "/proc/interrupts",
+    "/proc/schedstat",
+    "/proc/zoneinfo",
+    "/proc/vmstat",
+    "/proc/net",
+    "/sys/fs/cgroup",
+    "/sys/devices/system/cpu",
+    "/sys/devices/system/node",
+    "/sys/class/net",
+    "/sys/class/dmi",
+)
 
 
 @dataclass
@@ -72,7 +113,6 @@ class CodeExecutionContext:
     session: Session
     org_id: str
     chat_id: str
-    network_enabled: bool
     agent_id: str | None = None
 
 
@@ -507,13 +547,11 @@ def _run_container(
     host_inputs_dir: Path,
     host_work_dir: Path,
     host_outputs_dir: Path,
-    network_enabled: bool,
     timeout_seconds: int,
 ) -> tuple[str, str, int | None, bool]:
     client = docker.from_env()
     _cleanup_stale_containers(client)
     labels = {"chatui.exec": "true"}
-    network_mode = None if network_enabled else "none"
     container = None
     timed_out = False
     exit_code = None
@@ -543,35 +581,46 @@ def _run_container(
                 hard=max(1, timeout_seconds),
             ),
         ]
-        return client.containers.run(
-            settings.exec_docker_image,
-            command=["python", "/workspace/main.py"],
-            detach=True,
-            working_dir="/workspace",
-            network_mode=network_mode,
+        volumes = {
+            str(host_inputs_dir): {"bind": "/inputs", "mode": "ro"},
+            str(host_work_dir): {"bind": "/workspace", "mode": "rw"},
+            str(host_outputs_dir): {"bind": "/outputs", "mode": "rw"},
+        }
+        # docker-py HostConfig has no masked_paths kwarg; inject OCI MaskedPaths
+        # so host CPU/RAM/cgroup details are not readable inside the sandbox.
+        host_config = client.api.create_host_config(
+            binds=volumes,
+            network_mode="none",
             nano_cpus=max(1, int(settings.exec_cpu_limit * 1e9)),
             mem_limit=memory_limit,
             memswap_limit=memory_limit,
             pids_limit=max(1, settings.exec_pids_limit),
             ulimits=ulimits,
-            labels=labels,
-            user="65534:65534",
             read_only=True,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
-            environment={"MPLCONFIGDIR": "/tmp/matplotlib", "HOME": "/tmp"},
             tmpfs={
                 "/tmp": (
                     f"rw,nosuid,nodev,size={settings.exec_tmpfs_size},"
                     "mode=1777"
                 ),
             },
-            volumes={
-                str(host_inputs_dir): {"bind": "/inputs", "mode": "ro"},
-                str(host_work_dir): {"bind": "/workspace", "mode": "rw"},
-                str(host_outputs_dir): {"bind": "/outputs", "mode": "rw"},
-            },
         )
+        host_config["MaskedPaths"] = list(_EXEC_MASKED_PATHS)
+        resp = client.api.create_container(
+            settings.exec_docker_image,
+            command=["python", "/workspace/main.py"],
+            working_dir="/workspace",
+            user="65534:65534",
+            labels=labels,
+            environment={"MPLCONFIGDIR": "/tmp/matplotlib", "HOME": "/tmp"},
+            host_config=host_config,
+            volumes=["/inputs", "/workspace", "/outputs"],
+            network_disabled=True,
+        )
+        created = client.containers.get(resp["Id"])
+        created.start()
+        return created
 
     try:
         container = _start_container()
@@ -687,7 +736,6 @@ async def run_code_execution(
             host_inputs_dir=host_inputs_dir,
             host_work_dir=host_work_dir,
             host_outputs_dir=host_outputs_dir,
-            network_enabled=context.network_enabled,
             timeout_seconds=settings.exec_timeout_seconds,
         )
     try:

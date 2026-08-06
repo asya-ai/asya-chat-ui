@@ -284,8 +284,6 @@ export const lv = {
   org_code_execution_off: "Izslēgts",
   org_code_execution_prompt: "Prasa apstiprinājumu",
   org_code_execution_always: "Vienmēr atļaut",
-  org_code_execution_network: "Tīkla piekļuve",
-  org_code_execution_network_desc: "Atļaut izejošo tīkla piekļuvi izpildes konteineriem.",
   org_users_invite_email: "Lietotāja e-pasts",
   org_users_generate_invite: "Izveidot ielūgumu",
   org_users_email: "E-pasts",

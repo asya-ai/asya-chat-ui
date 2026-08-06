@@ -75,7 +75,7 @@ class OrgWebSettingsRead(BaseModel):
     web_search_enabled: bool
     web_scrape_enabled: bool
     web_grounding_openai: bool
-    exec_network_enabled: bool
+    exec_network_enabled: bool = False
     exec_policy: str
 
 
@@ -84,7 +84,6 @@ class OrgWebSettingsUpdate(BaseModel):
     web_search_enabled: bool | None = None
     web_scrape_enabled: bool | None = None
     web_grounding_openai: bool | None = None
-    exec_network_enabled: bool | None = None
     exec_policy: str | None = None
 
 
@@ -348,7 +347,7 @@ def get_web_settings(
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         web_grounding_openai=org.web_grounding_openai,
-        exec_network_enabled=org.exec_network_enabled,
+        exec_network_enabled=False,
         exec_policy=org.exec_policy,
     )
 
@@ -380,6 +379,8 @@ def update_web_settings(
         )
     for key, value in updates.items():
         setattr(org, key, value)
+    # Sandbox networking is permanently disabled.
+    org.exec_network_enabled = False
     session.add(org)
     session.commit()
     session.refresh(org)
@@ -388,7 +389,7 @@ def update_web_settings(
         web_search_enabled=org.web_search_enabled,
         web_scrape_enabled=org.web_scrape_enabled,
         web_grounding_openai=org.web_grounding_openai,
-        exec_network_enabled=org.exec_network_enabled,
+        exec_network_enabled=False,
         exec_policy=org.exec_policy,
     )
 

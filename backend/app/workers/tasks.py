@@ -630,7 +630,6 @@ async def _run_generation(task_id: UUID) -> None:
                     (task.metadata_json or {}).get("code_execution_enabled"),
                 )
             ),
-            exec_network_enabled=org.exec_network_enabled,
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
             memory_enabled=chat_user.memory_enabled if chat_user else False,
             user_id=chat.user_id,
