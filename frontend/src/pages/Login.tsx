@@ -44,10 +44,14 @@ export const LoginPage = () => {
     const clientHost = window.location.host
 
     const applyResolve = (resolve: LoginResolveResult) => {
+      const resolvedOrg = resolve.org?.trim().toLowerCase()
+      // Domain-matched (and single-org) responses set this false so the org
+      // input and "change organisation" switcher stay hidden.
       if (typeof resolve.org_selection_required === "boolean") {
         setOrgSelectionRequired(resolve.org_selection_required)
+      } else if (resolvedOrg) {
+        setOrgSelectionRequired(false)
       }
-      const resolvedOrg = resolve.org?.trim().toLowerCase()
       if (resolvedOrg) {
         setOrg(resolvedOrg)
         loginOrgStore.set(resolvedOrg)
@@ -57,11 +61,7 @@ export const LoginPage = () => {
         setStage("sso")
         return
       }
-      if (resolvedOrg) {
-        setStage("credentials")
-        return
-      }
-      if (resolve.org_selection_required === false) {
+      if (resolvedOrg || resolve.org_selection_required === false) {
         setStage("credentials")
         return
       }
@@ -177,6 +177,8 @@ export const LoginPage = () => {
   const applySubmitResolve = (resolve: LoginResolveResult) => {
     if (typeof resolve.org_selection_required === "boolean") {
       setOrgSelectionRequired(resolve.org_selection_required)
+    } else if (resolve.org) {
+      setOrgSelectionRequired(false)
     }
     if (resolve.org) {
       setOrg(resolve.org)

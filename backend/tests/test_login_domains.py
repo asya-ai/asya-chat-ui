@@ -23,6 +23,10 @@ def test_normalize_login_domains_dedupes_and_lowercases():
     ]
 
 
+def test_normalize_login_domains_accepts_single_string():
+    assert normalize_login_domains("Acme.Example.COM") == ["acme.example.com"]
+
+
 def test_validate_login_domains_rejects_invalid_domain():
     try:
         validate_login_domains(["not a domain!"])

@@ -251,18 +251,25 @@ def _resolve_login_org(
     *,
     explicit_org: str | None,
     client_host: str | None,
-) -> Org | None:
+) -> tuple[Org | None, str | None]:
+    """Resolve login org and how it was chosen.
+
+    Source is ``domain`` (login hostname), ``explicit`` (slug), ``single``
+    (only one active org), or ``None`` when unresolved.
+    """
     host = _get_request_login_host(request, client_host)
     if host:
         host_org = get_org_by_login_domain(session, host)
         if host_org:
-            return host_org
+            return host_org, "domain"
     if explicit_org:
         explicit_org_match = _get_org_by_slug(session, explicit_org.strip())
         if explicit_org_match:
-            return explicit_org_match
+            return explicit_org_match, "explicit"
     active_orgs = _active_orgs_sample(session, limit=2)
-    return active_orgs[0] if len(active_orgs) == 1 else None
+    if len(active_orgs) == 1:
+        return active_orgs[0], "single"
+    return None, None
 
 
 def _org_login_slug(org: Org) -> str:
@@ -494,7 +501,7 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
         )
-    org = _resolve_login_org(
+    org, _source = _resolve_login_org(
         session,
         request,
         explicit_org=payload.org,
@@ -520,26 +527,36 @@ def login(
     return TokenResponse(access_token=token)
 
 
+async def _try_oidc_redirect_url(request: Request, org: Org) -> str | None:
+    if not org.oidc_enabled:
+        return None
+    try:
+        return await _build_oidc_authorize_url(request, org)
+    except HTTPException:
+        return None
+
+
 @router.post("/login-resolve", response_model=LoginResolveResponse)
 async def login_resolve(
     payload: LoginResolveRequest,
     request: Request,
     session: Session = Depends(get_db),
 ) -> LoginResolveResponse:
-    selection_required = _org_selection_required(session)
-    org = _resolve_login_org(
+    org, source = _resolve_login_org(
         session,
         request,
         explicit_org=payload.org,
         client_host=payload.host,
     )
+    # Hostname login domains lock the org — never ask for organisation input.
+    selection_required = False if source == "domain" else _org_selection_required(session)
     if not org and payload.org:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if org:
         org_slug = _org_login_slug(org)
         if not payload.identifier:
-            if org.oidc_enabled:
-                redirect_url = await _build_oidc_authorize_url(request, org)
+            redirect_url = await _try_oidc_redirect_url(request, org)
+            if redirect_url:
                 return LoginResolveResponse(
                     action="sso",
                     redirect_url=redirect_url,
@@ -567,8 +584,8 @@ async def login_resolve(
                     org=org_slug,
                     org_selection_required=selection_required,
                 )
-        if org.oidc_enabled:
-            redirect_url = await _build_oidc_authorize_url(request, org)
+        redirect_url = await _try_oidc_redirect_url(request, org)
+        if redirect_url:
             return LoginResolveResponse(
                 action="sso",
                 redirect_url=redirect_url,
@@ -596,12 +613,13 @@ async def login_resolve(
 
     org = orgs[0]
     if org.oidc_enabled and user.auth_provider != "local":
-        redirect_url = await _build_oidc_authorize_url(request, org)
-        return LoginResolveResponse(
-            action="sso",
-            redirect_url=redirect_url,
-            org_selection_required=selection_required,
-        )
+        redirect_url = await _try_oidc_redirect_url(request, org)
+        if redirect_url:
+            return LoginResolveResponse(
+                action="sso",
+                redirect_url=redirect_url,
+                org_selection_required=selection_required,
+            )
     return LoginResolveResponse(action="local", org_selection_required=selection_required)
 
 

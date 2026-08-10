@@ -38,12 +38,16 @@ def is_valid_login_domain(domain: str) -> bool:
     return bool(_LOGIN_DOMAIN_RE.match(domain))
 
 
-def normalize_login_domains(domains: list[str] | None) -> list[str]:
+def normalize_login_domains(domains: list[str] | str | None) -> list[str]:
     if not domains:
         return []
+    if isinstance(domains, str):
+        domains = [domains]
     seen: set[str] = set()
     normalized: list[str] = []
     for item in domains:
+        if not isinstance(item, str):
+            continue
         value = normalize_login_domain(item)
         if not value or value in seen:
             continue
