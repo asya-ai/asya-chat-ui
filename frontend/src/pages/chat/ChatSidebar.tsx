@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useNavigate, useParams } from "react-router"
-import { ChevronDown, ChevronRight, Plus, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, Pin, Plus, Search, X } from "lucide-react"
 
 import { agentApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
@@ -11,6 +11,7 @@ import {
   useChatSearch,
   useDeleteChat,
   useOrgsMine,
+  usePinChat,
   useRenameChat,
 } from "@/hooks/use-chat-query"
 import { Button } from "@/components/ui/button"
@@ -79,6 +80,7 @@ export const ChatSidebar = ({
   const { data: chats = [] } = useChats(orgId)
   const deleteChatMutation = useDeleteChat(orgId)
   const renameChatMutation = useRenameChat(orgId)
+  const pinChatMutation = usePinChat(orgId)
   const [agents, setAgents] = useState<Agent[]>([])
   const [sectionsOpen, setSectionsOpen] = useState(() => sidebarSectionsStore.get())
   const [sessionQuery, setSessionQuery] = useState("")
@@ -124,7 +126,7 @@ export const ChatSidebar = ({
     })
   }
 
-  const sessionGroups = useMemo(() => {
+  const { pinnedChats, sessionGroups } = useMemo(() => {
     const currentOrgChatIds = new Set(chats.map((chat) => chat.id))
     const sourceChats = sessionQueryDebounced
       ? searchedChats.filter((chat) => currentOrgChatIds.has(chat.id))
@@ -134,6 +136,8 @@ export const ChatSidebar = ({
         parseChatDate(b.last_activity_at || b.created_at).getTime() -
         parseChatDate(a.last_activity_at || a.created_at).getTime()
     )
+    const pinned = sorted.filter((chat) => chat.is_pinned)
+    const unpinned = sorted.filter((chat) => !chat.is_pinned)
     const startOfToday = new Date()
     startOfToday.setHours(0, 0, 0, 0)
     const startOfYesterday = new Date(startOfToday)
@@ -142,7 +146,7 @@ export const ChatSidebar = ({
     const buckets = new Map<string, Chat[]>()
     const order: string[] = []
 
-    for (const chat of sorted) {
+    for (const chat of unpinned) {
       const date = parseChatDate(chat.last_activity_at || chat.created_at)
       const day = new Date(date)
       day.setHours(0, 0, 0, 0)
@@ -165,11 +169,25 @@ export const ChatSidebar = ({
       buckets.get(label)!.push(chat)
     }
 
-    return order.map((label) => ({
-      label,
-      chats: buckets.get(label) ?? [],
-    }))
+    return {
+      pinnedChats: pinned,
+      sessionGroups: order.map((label) => ({
+        label,
+        chats: buckets.get(label) ?? [],
+      })),
+    }
   }, [chats, locale, searchedChats, sessionQueryDebounced, t])
+
+  const togglePin = (chat: Chat) => {
+    const nextPinned = !chat.is_pinned
+    if (nextPinned && !sectionsOpen.pinned) {
+      setSectionOpen("pinned", true)
+    }
+    void pinChatMutation.mutateAsync({
+      chatId: chat.id,
+      is_pinned: nextPinned,
+    })
+  }
 
   const selectChat = (chat: Chat) => {
     onRequestClose?.()
@@ -278,6 +296,90 @@ export const ChatSidebar = ({
             max-content and drags every w-full row wide on long chat titles. */}
         <ScrollArea className="min-h-0 min-w-0 flex-1 [&>[data-slot=scroll-area-viewport]>div]:block!">
           <div className="flex min-w-0 flex-col gap-0.5 pb-2 pr-1">
+            {pinnedChats.length > 0 ? (
+              <div>
+                <div className="flex h-9 w-full min-w-0 items-center">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-9 min-w-0 flex-1 justify-start gap-0.5 p-0"
+                    aria-expanded={sectionsOpen.pinned}
+                    onClick={() => setSectionOpen("pinned", !sectionsOpen.pinned)}
+                  >
+                    <span className="flex size-9 shrink-0 items-center justify-center">
+                      <Pin aria-hidden="true" className="size-5 text-muted-foreground" />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
+                      {t("chat_pinned")}
+                    </span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="mr-2 shrink-0 text-muted-foreground"
+                    aria-label={
+                      sectionsOpen.pinned
+                        ? t("chat_collapse_pinned")
+                        : t("chat_expand_pinned")
+                    }
+                    onClick={() => setSectionOpen("pinned", !sectionsOpen.pinned)}
+                  >
+                    {sectionsOpen.pinned ? (
+                      <ChevronDown aria-hidden="true" className="size-4" />
+                    ) : (
+                      <ChevronRight aria-hidden="true" className="size-4" />
+                    )}
+                  </Button>
+                </div>
+                {sectionsOpen.pinned ? (
+                  <div className="mt-0.5 flex flex-col gap-0.5">
+                    {pinnedChats.map((chat) => (
+                      <ContextMenu key={chat.id}>
+                        <ContextMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className={cn(
+                              "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
+                              currentChatId === chat.id && "bg-sidebar-accent"
+                            )}
+                            onClick={() => selectChat(chat)}
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {chat.title || t("chat_untitled")}
+                            </span>
+                          </Button>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent>
+                          <ContextMenuItem onClick={() => togglePin(chat)}>
+                            {t("chat_unpin")}
+                          </ContextMenuItem>
+                          <ContextMenuItem onClick={() => openRename(chat)}>
+                            {t("chat_rename")}
+                          </ContextMenuItem>
+                          <ContextMenuItem
+                            onClick={() => {
+                              if (onToggleShareChat) onToggleShareChat(chat)
+                            }}
+                          >
+                            {chat.is_shared ? t("chat_unshare") : t("chat_share")}
+                          </ContextMenuItem>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem
+                            variant="destructive"
+                            onClick={() => setDeleteConfirmChat(chat)}
+                          >
+                            {t("chat_delete")}
+                          </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div>
               <div className="flex h-9 w-full min-w-0 items-center">
                 <Button
@@ -313,13 +415,24 @@ export const ChatSidebar = ({
                 >
                   <Plus aria-hidden="true" className="size-4" />
                 </Button>
-                <span className="mr-2 flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="mr-2 shrink-0 text-muted-foreground"
+                  aria-label={
+                    sectionsOpen.spaces
+                      ? t("chat_collapse_spaces")
+                      : t("chat_expand_spaces")
+                  }
+                  onClick={() => setSectionOpen("spaces", !sectionsOpen.spaces)}
+                >
                   {sectionsOpen.spaces ? (
                     <ChevronDown aria-hidden="true" className="size-4" />
                   ) : (
                     <ChevronRight aria-hidden="true" className="size-4" />
                   )}
-                </span>
+                </Button>
               </div>
               {sectionsOpen.spaces ? (
                 <div className="mt-0.5 flex flex-col gap-0.5">
@@ -367,13 +480,24 @@ export const ChatSidebar = ({
                   </span>
                 </Button>
                 <span className="size-7 shrink-0" aria-hidden="true" />
-                <span className="mr-2 flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="mr-2 shrink-0 text-muted-foreground"
+                  aria-label={
+                    sectionsOpen.sessions
+                      ? t("chat_collapse_sessions")
+                      : t("chat_expand_sessions")
+                  }
+                  onClick={() => setSectionOpen("sessions", !sectionsOpen.sessions)}
+                >
                   {sectionsOpen.sessions ? (
                     <ChevronDown aria-hidden="true" className="size-4" />
                   ) : (
                     <ChevronRight aria-hidden="true" className="size-4" />
                   )}
-                </span>
+                </Button>
               </div>
               {sectionsOpen.sessions ? (
                 <div className="mt-0.5 flex flex-col gap-2">
@@ -400,9 +524,11 @@ export const ChatSidebar = ({
                   ) : (
                     sessionGroups.map((group) => (
                       <div key={group.label} className="flex flex-col gap-0.5">
-                        <p className="px-3 py-1 text-xs font-medium text-muted-foreground">
-                          {group.label}
-                        </p>
+                        <div className="mx-3 mt-1 border-t border-border pt-2">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            {group.label}
+                          </p>
+                        </div>
                         {group.chats.map((chat) => (
                           <ContextMenu key={chat.id}>
                             <ContextMenuTrigger asChild>
@@ -421,6 +547,9 @@ export const ChatSidebar = ({
                               </Button>
                             </ContextMenuTrigger>
                             <ContextMenuContent>
+                              <ContextMenuItem onClick={() => togglePin(chat)}>
+                                {t("chat_pin")}
+                              </ContextMenuItem>
                               <ContextMenuItem onClick={() => openRename(chat)}>
                                 {t("chat_rename")}
                               </ContextMenuItem>

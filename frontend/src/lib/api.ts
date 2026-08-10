@@ -566,7 +566,7 @@ export const chatApi = {
     }),
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),
-  update: (chatId: string, payload: { title: string }) =>
+  update: (chatId: string, payload: { title?: string; is_pinned?: boolean }) =>
     apiFetch<Chat>(`/chats/${chatId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),

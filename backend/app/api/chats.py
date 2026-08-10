@@ -2415,7 +2415,8 @@ class ChatCreateRequest(BaseModel):
 
 
 class ChatUpdateRequest(BaseModel):
-    title: str
+    title: str | None = None
+    is_pinned: bool | None = None
 
 
 class ChatRead(BaseModel):
@@ -2425,8 +2426,23 @@ class ChatRead(BaseModel):
     agent_id: str | None
     is_shared: bool = False
     is_incognito: bool = False
+    is_pinned: bool = False
     created_at: datetime
     last_activity_at: datetime
+
+
+def _chat_read(chat: Chat) -> ChatRead:
+    return ChatRead(
+        id=str(chat.id),
+        title=chat.title,
+        model_id=str(chat.model_id) if chat.model_id else None,
+        agent_id=str(chat.agent_id) if chat.agent_id else None,
+        is_shared=bool(chat.share_token),
+        is_incognito=bool(chat.is_incognito),
+        is_pinned=bool(chat.is_pinned),
+        created_at=chat.created_at,
+        last_activity_at=chat.last_activity_at or chat.created_at,
+    )
 
 
 class ChatShareRead(BaseModel):
@@ -3038,16 +3054,7 @@ def create_chat(
     session.add(chat)
     session.commit()
     session.refresh(chat)
-    return ChatRead(
-        id=str(chat.id),
-        title=chat.title,
-        model_id=str(chat.model_id) if chat.model_id else None,
-        agent_id=str(chat.agent_id) if chat.agent_id else None,
-        is_shared=bool(chat.share_token),
-        is_incognito=chat.is_incognito,
-        created_at=chat.created_at,
-        last_activity_at=chat.created_at,
-    )
+    return _chat_read(chat)
 
 
 @router.get("", response_model=list[ChatRead])
@@ -3075,19 +3082,7 @@ def list_chats(
             Chat.is_incognito.is_(False),
         )
     ).all()
-    return [
-        ChatRead(
-            id=str(chat.id),
-            title=chat.title,
-            model_id=str(chat.model_id) if chat.model_id else None,
-            agent_id=str(chat.agent_id) if chat.agent_id else None,
-            is_shared=bool(chat.share_token),
-            is_incognito=chat.is_incognito,
-            created_at=chat.created_at,
-            last_activity_at=chat.last_activity_at,
-        )
-        for chat in chats
-    ]
+    return [_chat_read(chat) for chat in chats]
 
 
 @router.get("/search", response_model=list[ChatRead])
@@ -3163,19 +3158,7 @@ def search_chats(
         )
         .limit(capped_limit)
     ).all()
-    return [
-        ChatRead(
-            id=str(chat.id),
-            title=chat.title,
-            model_id=str(chat.model_id) if chat.model_id else None,
-            agent_id=str(chat.agent_id) if chat.agent_id else None,
-            is_shared=bool(chat.share_token),
-            is_incognito=chat.is_incognito,
-            created_at=chat.created_at,
-            last_activity_at=chat.last_activity_at,
-        )
-        for chat, _rank in chats
-    ]
+    return [_chat_read(chat) for chat, _rank in chats]
 
 
 @router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
@@ -3689,29 +3672,27 @@ def update_chat(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
-    title = (payload.title or "").strip()
-    if not title:
+    if payload.title is None and payload.is_pinned is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Title is required"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided"
         )
-    if len(title) > 200:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Title is too long"
-        )
-    chat.title = title
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Title is required"
+            )
+        if len(title) > 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Title is too long"
+            )
+        chat.title = title
+    if payload.is_pinned is not None:
+        chat.is_pinned = payload.is_pinned
     session.add(chat)
     session.commit()
     session.refresh(chat)
-    return ChatRead(
-        id=str(chat.id),
-        title=chat.title,
-        model_id=str(chat.model_id) if chat.model_id else None,
-        agent_id=str(chat.agent_id) if chat.agent_id else None,
-        is_shared=bool(chat.share_token),
-        is_incognito=bool(chat.is_incognito),
-        created_at=chat.created_at,
-        last_activity_at=chat.last_activity_at,
-    )
+    return _chat_read(chat)
 
 
 @router.get("/shared/{share_token}", response_model=SharedChatResolveRead)

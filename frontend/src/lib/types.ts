@@ -106,6 +106,7 @@ export type Chat = {
   agent_id?: string | null
   is_shared?: boolean
   is_incognito?: boolean
+  is_pinned?: boolean
   created_at: string
   last_activity_at: string
 }

@@ -162,9 +162,8 @@ export const ChatComposer = ({
           placeholder={placeholder}
           rows={centered ? 1 : 2}
           className={cn(
-            // Grow with content via field-sizing-content until available viewport
-            // space is used, then scroll. Do not restore a small hard max (e.g. max-h-52).
-            "min-h-13 max-h-[calc(100svh-12rem)] bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
+            // Grow with content via field-sizing-content up to 75vh, then scroll.
+            "min-h-13 max-h-[75vh] bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
             centered
               ? "-mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
               : "px-1.5 py-1",

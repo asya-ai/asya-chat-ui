@@ -11,11 +11,13 @@ const SIDEBAR_SECTIONS_KEY = "chatui_sidebar_sections"
 export type ActionInfoLevel = "none" | "short" | "detailed"
 
 export type SidebarSectionsState = {
+  pinned: boolean
   spaces: boolean
   sessions: boolean
 }
 
 const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionsState = {
+  pinned: true,
   spaces: false,
   sessions: true,
 }
@@ -25,6 +27,7 @@ const parseSidebarSections = (raw: string | null): SidebarSectionsState => {
   try {
     const parsed = JSON.parse(raw) as Partial<SidebarSectionsState>
     return {
+      pinned: parsed.pinned == null ? true : Boolean(parsed.pinned),
       spaces: Boolean(parsed.spaces),
       sessions: parsed.sessions == null ? true : Boolean(parsed.sessions),
     }
