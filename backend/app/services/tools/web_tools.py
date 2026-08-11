@@ -128,16 +128,26 @@ async def _perplexity_search_one(item: str, limit: int) -> dict:
 
 
 async def _ddgs_search_one(item: str, limit: int, region: str | None) -> dict:
-    def _run() -> list[dict]:
-        with DDGS(timeout=8) as ddgs:
-            return list(ddgs.text(
-                item,
-                max_results=limit,
-                region=region or "us-en",
-                backend="duckduckgo",
-            ))
+    _backends = ["duckduckgo", "brave", "startpage"]
 
-    with anyio.fail_after(15):
+    def _run() -> list[dict]:
+        for backend in _backends:
+            try:
+                with DDGS(timeout=8) as ddgs:
+                    rows = list(ddgs.text(
+                        item,
+                        max_results=limit,
+                        region=region or "us-en",
+                        backend=backend,
+                    ))
+                if rows:
+                    return rows
+            except Exception as exc:
+                logger.debug("DDGS backend %s failed: %s", backend, exc)
+                continue
+        return []
+
+    with anyio.fail_after(30):
         rows = await anyio.to_thread.run_sync(_run, abandon_on_cancel=True)
     results = [
         {
