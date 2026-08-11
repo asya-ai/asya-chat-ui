@@ -57,7 +57,7 @@ import { AppShell } from "@/components/AppShell"
 type Tab = "chats" | "files" | "instructions"
 
 const SOURCE_ACCEPT =
-  ".doc,.docx,.xls,.xlsx,.md,.txt,.pdf,.ppt,.pptx,.csv,.json,.xml,.html,.htm,.yaml,.yml"
+  ".doc,.docx,.xls,.xlsx,.md,.txt,.pdf,.ppt,.pptx,.csv,.json,.xml,.html,.htm,.yaml,.yml,.odt,.ods,.odp,.odg,.odf"
 
 const formatDate = (value: string) => {
   try {

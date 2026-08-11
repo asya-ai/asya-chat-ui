@@ -127,6 +127,21 @@ def _extract_xls(raw: bytes) -> str:
     return "\n".join(lines)
 
 
+def _extract_odf(raw: bytes) -> str:
+    """Extract text from Open Document Format files (.odt, .ods, .odp, etc.)."""
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        if "content.xml" not in archive.namelist():
+            raise ValueError("Invalid ODF file: missing content.xml")
+        root = ET.fromstring(archive.read("content.xml"))
+        texts: list[str] = []
+        for elem in root.iter():
+            if elem.text and elem.text.strip():
+                texts.append(elem.text.strip())
+            if elem.tail and elem.tail.strip():
+                texts.append(elem.tail.strip())
+    return "\n".join(texts)
+
+
 def extract_text_from_file(
     *,
     file_name: str | None,
@@ -148,6 +163,8 @@ def extract_text_from_file(
         return _trim_text(_extract_xls(data))
     if ext == ".pptx":
         return _trim_text(_extract_pptx(data))
+    if ext in {".odt", ".ods", ".odp", ".odg", ".odf"}:
+        return _trim_text(_extract_odf(data))
     if ext in {".doc", ".ppt"}:
         raise ValueError(
             f"Legacy binary format '{ext}' is not directly supported. Please convert to modern format "
