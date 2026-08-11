@@ -108,6 +108,15 @@ Compose files:
 - `docker-compose.override.yml` - development overrides (hot reload + frontend dev server)
 - `docker-compose.prod.yml` - production stack using published images
 
+## Operations Documentation
+
+For setup and maintenance, use these docs:
+
+- [Setup guide](docs/setup.md)
+- [Environment variables and configuration reference](docs/configuration.md)
+- [Maintenance runbook](docs/maintenance.md)
+- [Wiki publishing guide](docs/wiki-publish.md)
+
 ## Configuration
 
 1. Copy environment template:
@@ -170,6 +179,8 @@ Images (override tag with `CHATUI_TAG`):
 - `asyaai/asya-chat-ui-executor`
 
 Bind address/port defaults: `127.0.0.1:8085` (`CHATUI_BIND_ADDRESS`, `CHATUI_PORT`).
+
+To build and push a new release to Docker Hub, see [docs/docker-hub-publish.md](docs/docker-hub-publish.md).
 
 ### Python execution image (dind)
 

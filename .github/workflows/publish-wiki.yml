@@ -1,0 +1,46 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/publish-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout wiki repository
+        env:
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.WIKI_PUSH_TOKEN != '' && secrets.WIKI_PUSH_TOKEN || github.token }}
+        run: |
+          git clone "https://x-access-token:${TOKEN}@github.com/${REPO}.wiki.git" wiki
+
+      - name: Sync wiki files
+        run: |
+          rsync -av --delete "docs/wiki/" "wiki/"
+
+      - name: Commit and push
+        working-directory: wiki
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          if git diff --quiet; then
+            echo "No wiki changes to publish"
+            exit 0
+          fi
+          git add .
+          git commit -m "docs: sync wiki pages"
+          git push
