@@ -17,7 +17,20 @@ import sql from "react-syntax-highlighter/dist/esm/languages/prism/sql"
 import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx"
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript"
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml"
-import { Copy, Check, Pencil, RotateCcw, Trash2, Plus, X } from "lucide-react"
+import {
+  Copy,
+  Check,
+  Download,
+  Pencil,
+  RotateCcw,
+  Share,
+  Trash2,
+  Plus,
+  X,
+} from "lucide-react"
+import { Document, Packer, Paragraph, TextRun } from "docx"
+import html2canvas from "html2canvas"
+import { jsPDF } from "jspdf"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ActionInfoLevel } from "@/lib/storage"
@@ -30,7 +43,19 @@ import type {
 import { dedupeSources } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 SyntaxHighlighter.registerLanguage("bash", bash)
 SyntaxHighlighter.registerLanguage("sh", bash)
@@ -69,9 +94,11 @@ type MessageBubbleProps = {
   codeTheme: Record<string, CSSProperties>
   t: I18nContextValue["t"]
   onOpenSources?: (sources: SourceItem[]) => void
+  exportQuestion?: string | null
   onStartEdit: (msg: ChatMessage) => void
   onDeleteFromMessage: (msg: ChatMessage) => void
   onRetryMessage: (msg: ChatMessage) => void
+  onShareMessage?: (msg: ChatMessage) => void
   onSaveEditedMessage: (msg: ChatMessage) => void
   onCancelEdit: () => void
   onEditContentChange: (value: string) => void
@@ -202,6 +229,322 @@ const copyToClipboard = async (text: string) => {
   textarea.select()
   document.execCommand("copy")
   document.body.removeChild(textarea)
+}
+
+const downloadBlob = (blob: Blob, fileName: string) => {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = fileName
+  anchor.rel = "noopener"
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const answerFileStem = (msg: ChatMessage) => {
+  const stamp = msg.created_at ? msg.created_at.slice(0, 10) : "answer"
+  return `chat-answer-${stamp}`
+}
+
+/** Final answer only — drops preamble / thoughts before the first tool call. */
+const getFinalAnswerText = (msg: ChatMessage): string => {
+  const parts = msg.stream_parts ?? []
+  const firstActionIndex = parts.findIndex((part) => part.type === "action")
+  if (firstActionIndex >= 0) {
+    const afterTools = parts
+      .slice(firstActionIndex + 1)
+      .filter(
+        (part): part is Extract<NonNullable<ChatMessage["stream_parts"]>[number], { type: "text" }> =>
+          part.type === "text"
+      )
+      .map((part) => part.text)
+      .join("")
+      .trim()
+    if (afterTools) return afterTools
+  }
+  return msg.content.trim()
+}
+
+const escapeHtml = (value: string) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+
+const formatInlineMarkdown = (value: string) => {
+  let html = escapeHtml(value)
+  html = html.replace(/\[(\d+)\]/g, "<sup>[$1]</sup>")
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>")
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  html = html.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>")
+  return html
+}
+
+const markdownToExportHtml = (markdown: string) => {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n")
+  const blocks: string[] = []
+  let paragraph: string[] = []
+  let listItems: string[] = []
+  let listType: "ul" | "ol" | null = null
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return
+    blocks.push(`<p>${formatInlineMarkdown(paragraph.join(" "))}</p>`)
+    paragraph = []
+  }
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) {
+      listItems = []
+      listType = null
+      return
+    }
+    const tag = listType
+    blocks.push(
+      `<${tag}>${listItems.map((item) => `<li>${formatInlineMarkdown(item)}</li>`).join("")}</${tag}>`
+    )
+    listItems = []
+    listType = null
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd()
+    const trimmed = line.trim()
+    if (!trimmed) {
+      flushParagraph()
+      flushList()
+      continue
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed)
+    if (heading) {
+      flushParagraph()
+      flushList()
+      const level = heading[1].length
+      blocks.push(`<h${level}>${formatInlineMarkdown(heading[2])}</h${level}>`)
+      continue
+    }
+    const unordered = /^[-*•]\s+(.+)$/.exec(trimmed)
+    if (unordered) {
+      flushParagraph()
+      if (listType && listType !== "ul") flushList()
+      listType = "ul"
+      listItems.push(unordered[1])
+      continue
+    }
+    const ordered = /^\d+[.)]\s+(.+)$/.exec(trimmed)
+    if (ordered) {
+      flushParagraph()
+      if (listType && listType !== "ol") flushList()
+      listType = "ol"
+      listItems.push(ordered[1])
+      continue
+    }
+    flushList()
+    paragraph.push(trimmed)
+  }
+  flushParagraph()
+  flushList()
+  return blocks.join("")
+}
+
+const downloadAnswerMarkdown = (msg: ChatMessage) => {
+  const text = getFinalAnswerText(msg)
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" })
+  downloadBlob(blob, `${answerFileStem(msg)}.md`)
+}
+
+const downloadAnswerPdf = async (
+  msg: ChatMessage,
+  options: { question?: string | null; brandLabel: string }
+) => {
+  const text = getFinalAnswerText(msg)
+  const sources = msg.sources?.length ? dedupeSources(msg.sources) : []
+  const question = (options.question ?? "").trim()
+  const logoUrl = `${window.location.origin}/logo_chat.svg`
+  const bodyHtml = markdownToExportHtml(text)
+  const sourcesHtml =
+    sources.length > 0
+      ? `<div class="divider" aria-hidden="true">✦</div>
+         <ol class="sources">
+           ${sources
+             .map((source, index) => {
+               const href = source.url?.trim()
+               const label = href || source.title?.trim() || source.host?.trim() || `Source ${index + 1}`
+               return href
+                 ? `<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a></li>`
+                 : `<li>${escapeHtml(label)}</li>`
+             })
+             .join("")}
+         </ol>`
+      : ""
+
+  const root = document.createElement("div")
+  root.setAttribute("data-pdf-export", "true")
+  root.style.cssText =
+    "position:fixed;left:0;top:0;width:794px;opacity:0;pointer-events:none;z-index:-1;"
+  root.innerHTML = `
+    <style>
+      .pdf-page {
+        box-sizing: border-box;
+        width: 794px;
+        padding: 64px 72px 72px;
+        background: #ffffff;
+        color: #1a1210;
+      }
+      .pdf-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 36px;
+      }
+      .pdf-brand img {
+        width: 28px;
+        height: 32px;
+        object-fit: contain;
+      }
+      .pdf-brand span {
+        font: 600 18px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: -0.02em;
+        text-transform: lowercase;
+      }
+      .pdf-title {
+        margin: 0 0 28px;
+        font: 700 34px/1.2 "Instrument Serif", "Times New Roman", Times, serif;
+        letter-spacing: -0.02em;
+      }
+      .pdf-body {
+        font: 400 16px/1.55 "Times New Roman", Times, serif;
+      }
+      .pdf-body p {
+        margin: 0 0 16px;
+      }
+      .pdf-body h1,
+      .pdf-body h2,
+      .pdf-body h3 {
+        margin: 28px 0 12px;
+        font-family: "Instrument Serif", "Times New Roman", Times, serif;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+      .pdf-body h1 { font-size: 26px; }
+      .pdf-body h2 { font-size: 22px; }
+      .pdf-body h3 { font-size: 18px; }
+      .pdf-body ul,
+      .pdf-body ol {
+        margin: 0 0 16px;
+        padding-left: 22px;
+      }
+      .pdf-body li {
+        margin: 0 0 8px;
+      }
+      .pdf-body strong { font-weight: 700; }
+      .pdf-body em { font-style: italic; }
+      .pdf-body code {
+        font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: rgba(25, 9, 6, 0.06);
+        padding: 0 4px;
+        border-radius: 4px;
+      }
+      .pdf-body a { color: inherit; }
+      .pdf-body sup {
+        font-size: 10px;
+        line-height: 0;
+        vertical-align: super;
+      }
+      .divider {
+        margin: 36px 0 28px;
+        text-align: center;
+        color: #f9461f;
+        font-size: 14px;
+        letter-spacing: 6px;
+      }
+      .sources {
+        margin: 0;
+        padding-left: 18px;
+        font: 400 12px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: rgba(25, 9, 6, 0.78);
+      }
+      .sources li { margin: 0 0 6px; }
+      .sources a {
+        color: inherit;
+        text-decoration: underline;
+        word-break: break-all;
+      }
+    </style>
+    <div class="pdf-page">
+      <div class="pdf-brand">
+        <img src="${logoUrl}" alt="" />
+        <span>${escapeHtml(options.brandLabel)}</span>
+      </div>
+      ${question ? `<h1 class="pdf-title">${escapeHtml(question)}</h1>` : ""}
+      <div class="pdf-body">${bodyHtml || "<p></p>"}</div>
+      ${sourcesHtml}
+    </div>
+  `
+  document.body.appendChild(root)
+
+  try {
+    const page = root.querySelector(".pdf-page")
+    if (!(page instanceof HTMLElement)) return
+    await Promise.all(
+      Array.from(page.querySelectorAll("img")).map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) {
+              resolve()
+              return
+            }
+            img.onload = () => resolve()
+            img.onerror = () => resolve()
+          })
+      )
+    )
+    const canvas = await html2canvas(page, {
+      scale: 2,
+      backgroundColor: "#ffffff",
+      useCORS: true,
+      logging: false,
+    })
+    const imgData = canvas.toDataURL("image/png")
+    const doc = new jsPDF({ unit: "pt", format: "a4", compress: true })
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const imgWidth = pageWidth
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+    let heightLeft = imgHeight
+    let position = 0
+    doc.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
+    heightLeft -= pageHeight
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight
+      doc.addPage()
+      doc.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
+      heightLeft -= pageHeight
+    }
+    doc.save(`${answerFileStem(msg)}.pdf`)
+  } finally {
+    root.remove()
+  }
+}
+
+const downloadAnswerDocx = async (msg: ChatMessage) => {
+  const text = getFinalAnswerText(msg)
+  const paragraphs = text.split(/\n/).map(
+    (line) =>
+      new Paragraph({
+        children: [new TextRun({ text: line, size: 24 })],
+      })
+  )
+  const document = new Document({
+    sections: [{ children: paragraphs.length > 0 ? paragraphs : [new Paragraph("")] }],
+  })
+  const blob = await Packer.toBlob(document)
+  downloadBlob(blob, `${answerFileStem(msg)}.docx`)
 }
 
 const ToolEventDetails = ({
@@ -578,9 +921,11 @@ const MessageBubbleComponent = ({
   codeTheme,
   t,
   onOpenSources,
+  exportQuestion = null,
   onStartEdit,
   onDeleteFromMessage,
   onRetryMessage,
+  onShareMessage,
   onSaveEditedMessage,
   onCancelEdit,
   onEditContentChange,
@@ -609,7 +954,10 @@ const MessageBubbleComponent = ({
       urlAttachmentsEvent ||
       isContextSummaryEvent
   )
-  const canCopyMessage = Boolean(msg.content.trim())
+  const finalAnswerText = useMemo(() => getFinalAnswerText(msg), [msg])
+  const canCopyMessage = Boolean(
+    isUser ? msg.content.trim() : finalAnswerText
+  )
   const uniqueSources = msg.sources?.length ? dedupeSources(msg.sources) : []
   const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
   const streamParts = msg.stream_parts ?? []
@@ -630,7 +978,7 @@ const MessageBubbleComponent = ({
       p({ children, node, ...rest }: any) {
         void node
         return (
-          <p className={isUser ? "m-0 leading-5" : "my-2.5 leading-6"} {...rest}>
+          <p className={isUser ? "m-0 leading-5" : "my-1.5 leading-5"} {...rest}>
             {children}
           </p>
         )
@@ -638,7 +986,7 @@ const MessageBubbleComponent = ({
       ul({ children, node, ...rest }: any) {
         void node
         return (
-          <ul className="space-y-2 my-2.5 pl-6 list-disc" {...rest}>
+          <ul className="space-y-2 my-1.5 pl-6 list-disc" {...rest}>
             {children}
           </ul>
         )
@@ -646,7 +994,7 @@ const MessageBubbleComponent = ({
       ol({ children, node, ...rest }: any) {
         void node
         return (
-          <ol className="space-y-2 my-2.5 pl-6 list-decimal" {...rest}>
+          <ol className="space-y-2 my-1.5 pl-6 list-decimal" {...rest}>
             {children}
           </ol>
         )
@@ -654,7 +1002,7 @@ const MessageBubbleComponent = ({
       li({ children, node, ...rest }: any) {
         void node
         return (
-          <li className="leading-6" {...rest}>
+          <li className="leading-5" {...rest}>
             {children}
           </li>
         )
@@ -873,6 +1221,15 @@ const MessageBubbleComponent = ({
     event.target.value = ""
   }
   const canSaveEdit = Boolean(editingContent.trim() || editingAttachments.length > 0)
+  const showUserSideActions =
+    isUser && !isEditing && (canCopyMessage || actionsEnabled)
+  const showAssistantFooter =
+    !isUser &&
+    !isEditing &&
+    (canCopyMessage ||
+      uniqueSources.length > 0 ||
+      Boolean(msg.model_name) ||
+      (actionsEnabled && msg.generation_status === "failed"))
 
   return (
     <div
@@ -880,14 +1237,51 @@ const MessageBubbleComponent = ({
         isUser ? "justify-end" : "justify-start"
       }`}
     >
-      <div className={`group min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
+      <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
+        {showUserSideActions ? (
+          <div className="absolute right-full top-1/2 z-10 mr-0.5 flex -translate-y-1/2 items-center opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+            {actionsEnabled ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 opacity-70 hover:opacity-100"
+                onClick={() => onStartEdit(msg)}
+                aria-label={t("chat_edit_message")}
+              >
+                <Pencil aria-hidden="true" className="size-4" />
+              </Button>
+            ) : null}
+            {canCopyMessage ? (
+              <CopyTextButton
+                text={msg.content}
+                label={t("chat_copy_message")}
+                copiedLabel={t("common_copied")}
+                iconOnly
+                className="size-7 opacity-70 hover:opacity-100"
+              />
+            ) : null}
+            {actionsEnabled ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 opacity-70 hover:opacity-100"
+                onClick={() => onDeleteFromMessage(msg)}
+                aria-label={t("chat_delete_message")}
+              >
+                <Trash2 aria-hidden="true" className="size-4" />
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         <div
           className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal ${
             isUser
-              ? "bg-secondary p-2 text-base leading-5 font-semibold text-foreground"
+              ? "bg-secondary p-2 text-base leading-5 text-foreground"
               : hasEventHeader
-                ? "bg-transparent p-2 text-sm leading-4.5 text-foreground"
-                : "bg-transparent p-0 text-sm leading-4.5 text-foreground"
+                ? "bg-transparent p-2 text-base leading-5 text-foreground"
+                : "bg-transparent p-0 text-base leading-5 text-foreground"
           }`}
         >
           {hasEventHeader ? (
@@ -1406,87 +1800,124 @@ const MessageBubbleComponent = ({
             </>
           )}
         </div>
-        {!isEditing &&
-        (canCopyMessage ||
-          (actionsEnabled && (isUser || msg.generation_status === "failed")) ||
-          (!isUser && uniqueSources.length > 0) ||
-          (!isUser && Boolean(msg.model_name))) ? (
-          <div
-            className={`mt-2 flex flex-wrap items-center gap-2 transition ${
-              isUser ? "justify-end" : "justify-between"
-            }`}
-          >
-            <div
-              className={`flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 ${
-                isUser ? "justify-end" : "justify-start"
-              }`}
-            >
-              {canCopyMessage ? (
-                <CopyTextButton
-                  text={msg.content}
-                  label={t("chat_copy_message")}
-                  copiedLabel={t("common_copied")}
-                  iconOnly
-                  className="opacity-70 hover:opacity-100"
-                />
-              ) : null}
-              {!isUser && actionsEnabled && msg.generation_status === "failed" ? (
+        {showAssistantFooter ? (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 transition">
+            <div className="flex items-center justify-start gap-1">
+              <TooltipProvider delayDuration={300}>
+                <div className="flex items-center gap-1">
+                  {canCopyMessage ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <CopyTextButton
+                            text={finalAnswerText}
+                            label={t("chat_copy_message")}
+                            copiedLabel={t("common_copied")}
+                            iconOnly
+                            className="size-7 opacity-70 hover:opacity-100"
+                          />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("chat_copy_message")}</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  {canCopyMessage ? (
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 opacity-70 hover:opacity-100"
+                              aria-label={t("chat_download_answer")}
+                            >
+                              <Download aria-hidden="true" className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent>{t("chat_download_answer")}</TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            void downloadAnswerPdf(msg, {
+                              question: exportQuestion,
+                              brandLabel: t("chat_title"),
+                            })
+                          }}
+                        >
+                          {t("chat_download_pdf")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            void downloadAnswerDocx(msg)
+                          }}
+                        >
+                          {t("chat_download_docx")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => downloadAnswerMarkdown(msg)}>
+                          {t("chat_download_markdown")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null}
+                  {actionsEnabled && onShareMessage ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 opacity-70 hover:opacity-100"
+                          onClick={() => onShareMessage(msg)}
+                          aria-label={t("chat_share_answer")}
+                        >
+                          <Share aria-hidden="true" className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("chat_share_answer")}</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  {actionsEnabled ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 opacity-70 hover:opacity-100"
+                          onClick={() => onRetryMessage(msg)}
+                          aria-label={t("chat_retry")}
+                        >
+                          <RotateCcw aria-hidden="true" className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("chat_retry")}</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                </div>
+              </TooltipProvider>
+              {uniqueSources.length > 0 ? (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="px-2 h-7 text-xs"
-                  onClick={() => onRetryMessage(msg)}
+                  className="h-7 rounded-full px-2.5 text-xs"
+                  onClick={() => onOpenSources?.(uniqueSources)}
                 >
-                  <RotateCcw aria-hidden="true" className="mr-1 w-3.5 h-3.5" />
-                  {t("chat_retry")}
+                  {uniqueSources.length === 1
+                    ? t("chat_sources_count_one", { count: uniqueSources.length })
+                    : t("chat_sources_count", { count: uniqueSources.length })}
                 </Button>
               ) : null}
-              {isUser && actionsEnabled ? (
-                <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="opacity-70 hover:opacity-100"
-                    onClick={() => onStartEdit(msg)}
-                    aria-label={t("chat_edit_message")}
-                  >
-                    <Pencil aria-hidden="true" className="w-3.5 h-3.5" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="opacity-70 hover:opacity-100"
-                    onClick={() => onDeleteFromMessage(msg)}
-                    aria-label={t("chat_delete_message")}
-                  >
-                    <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
-                  </Button>
-                </>
-              ) : null}
             </div>
-            {!isUser ? (
+            {msg.model_name ? (
               <div className="flex min-w-0 items-center gap-2">
-                {uniqueSources.length > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 rounded-full px-2.5 text-xs"
-                    onClick={() => onOpenSources?.(uniqueSources)}
-                  >
-                    {uniqueSources.length === 1
-                      ? t("chat_sources_count_one", { count: uniqueSources.length })
-                      : t("chat_sources_count", { count: uniqueSources.length })}
-                  </Button>
-                ) : null}
-                {msg.model_name ? (
-                  <span className="truncate text-xs leading-4 text-muted-foreground">
-                    {msg.model_name}
-                  </span>
-                ) : null}
+                <span className="truncate text-xs leading-4 text-muted-foreground">
+                  {msg.model_name}
+                </span>
               </div>
             ) : null}
           </div>

@@ -289,6 +289,7 @@ export const ChatPage = () => {
   const messagesContainerRef = useRef<HTMLDivElement | null>(null)
   // Stable across temp→server id remaps (conversation turn count).
   const lastScrolledKeyRef = useRef<string | null>(null)
+  const deepLinkedScrolledRef = useRef<string | null>(null)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const [pendingAttachments, setPendingAttachments] = useState<
     ChatMessageAttachmentInput[]
@@ -1344,6 +1345,7 @@ export const ChatPage = () => {
   useEffect(() => {
     setToolEvents([])
     lastScrolledKeyRef.current = null
+    deepLinkedScrolledRef.current = null
     isChatSwitchRef.current = true
     setAutoScrollEnabled(true)
     Object.values(taskSubscriptionsRef.current).forEach((cancel) => cancel())
@@ -1572,6 +1574,32 @@ export const ChatPage = () => {
     }
   }, [visibleMessages, autoScrollEnabled, scrollToBottom, scrollToMessageStart])
 
+  const deepLinkedMessageId = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    return params.get("message")
+  }, [location.search])
+
+  useEffect(() => {
+    if (!chatId || !deepLinkedMessageId || isMessagesLoading) return
+    const scrollKey = `${chatId}:${deepLinkedMessageId}`
+    if (deepLinkedScrolledRef.current === scrollKey) return
+    const exists = visibleMessages.some((msg) => msg.id === deepLinkedMessageId)
+    if (!exists) return
+    deepLinkedScrolledRef.current = scrollKey
+    setAutoScrollEnabled(false)
+    lastScrolledKeyRef.current = `deep-link:${deepLinkedMessageId}`
+    const frame = window.requestAnimationFrame(() => {
+      scrollToMessageStart(deepLinkedMessageId, "smooth")
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    chatId,
+    deepLinkedMessageId,
+    isMessagesLoading,
+    scrollToMessageStart,
+    visibleMessages,
+  ])
+
   const startNewChat = () => {
     replaceCurrentChatMessages([])
     setToolEvents([])
@@ -1692,6 +1720,42 @@ export const ChatPage = () => {
       })
     }
   }
+
+  const shareMessage = useCallback(
+    async (msg: ChatMessage) => {
+      if (!chatId || !activeChat) return
+      if (msg.id.startsWith("temp-")) return
+      if (activeChat.is_incognito) {
+        toast.error(t("chat_share_incognito_blocked"))
+        return
+      }
+      if (!activeChat.is_shared) {
+        await chatApi.share(chatId)
+        queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
+          prev
+            ? prev.map((item) =>
+                item.id === chatId
+                  ? {
+                      ...item,
+                      is_shared: true,
+                    }
+                  : item
+              )
+            : prev
+        )
+      }
+      const fullUrl = `${window.location.origin}/chat/${chatId}?message=${encodeURIComponent(msg.id)}`
+      try {
+        await navigator.clipboard.writeText(fullUrl)
+        toast.success(t("chat_share_dialog_copied"))
+      } catch {
+        toast.message(t("chat_share_dialog_title"), {
+          description: fullUrl,
+        })
+      }
+    },
+    [activeChat, chatId, orgId, queryClient, t]
+  )
 
   const sendMessage = async () => {
     if (chatId && loadingByChat[chatId]) return
@@ -2530,6 +2594,13 @@ export const ChatPage = () => {
             ? [t("chat_generating_image")]
             : []
       const isEditing = editingMessageId === msg.id
+      const messageIndex = visibleMessages.findIndex((item) => item.id === msg.id)
+      const exportQuestion =
+        !isUser && messageIndex > 0
+          ? [...visibleMessages.slice(0, messageIndex)]
+              .reverse()
+              .find((item) => item.role === "user")?.content ?? null
+          : null
       return (
         <MessageBubble
           key={msg.id}
@@ -2550,9 +2621,11 @@ export const ChatPage = () => {
           codeTheme={codeTheme}
           t={t}
           onOpenSources={setSourcesPanelSources}
+          exportQuestion={exportQuestion}
           onStartEdit={startEditMessage}
           onDeleteFromMessage={deleteFromMessage}
           onRetryMessage={retryFailedMessage}
+          onShareMessage={shareMessage}
           onSaveEditedMessage={saveEditedMessage}
           onCancelEdit={cancelEditMessage}
           onEditContentChange={setEditingContent}
@@ -2579,6 +2652,7 @@ export const ChatPage = () => {
       startEditMessage,
       deleteFromMessage,
       retryFailedMessage,
+      shareMessage,
       saveEditedMessage,
       cancelEditMessage,
       handleEditPasteAttachments,
@@ -2590,6 +2664,7 @@ export const ChatPage = () => {
       removeEditingAttachment,
       isSharedView,
       actionInfoLevel,
+      visibleMessages,
     ]
   )
 

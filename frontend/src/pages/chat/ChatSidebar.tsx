@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useNavigate, useParams } from "react-router"
-import { ChevronDown, ChevronRight, Pin, Plus, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
 import { agentApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
@@ -30,6 +30,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
@@ -295,7 +302,7 @@ export const ChatSidebar = ({
         {/* Radix wraps viewport content in a display:table div, which grows to
             max-content and drags every w-full row wide on long chat titles. */}
         <ScrollArea className="min-h-0 min-w-0 flex-1 [&>[data-slot=scroll-area-viewport]>div]:block!">
-          <div className="flex min-w-0 flex-col gap-0.5 pb-2 pr-1">
+          <div className="flex min-w-0 flex-col gap-0.5 px-1 pb-2">
             {pinnedChats.length > 0 ? (
               <div>
                 <div className="flex h-9 w-full min-w-0 items-center">
@@ -337,19 +344,57 @@ export const ChatSidebar = ({
                     {pinnedChats.map((chat) => (
                       <ContextMenu key={chat.id}>
                         <ContextMenuTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
+                          <div
                             className={cn(
-                              "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
+                              "group/chat-item relative flex h-8 w-full min-w-0 items-center rounded-md",
                               currentChatId === chat.id && "bg-sidebar-accent"
                             )}
-                            onClick={() => selectChat(chat)}
                           >
-                            <span className="min-w-0 flex-1 truncate">
-                              {chat.title || t("chat_untitled")}
-                            </span>
-                          </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal"
+                              onClick={() => selectChat(chat)}
+                            >
+                              <span className="min-w-0 flex-1 truncate">
+                                {chat.title || t("chat_untitled")}
+                              </span>
+                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="absolute right-1 hidden size-6 rounded-md bg-sidebar-accent p-0 group-hover/chat-item:flex data-[state=open]:flex"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <MoreVertical className="size-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="start" side="right">
+                                <DropdownMenuItem onClick={() => togglePin(chat)}>
+                                  {t("chat_unpin")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => openRename(chat)}>
+                                  {t("chat_rename")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    if (onToggleShareChat) onToggleShareChat(chat)
+                                  }}
+                                >
+                                  {chat.is_shared ? t("chat_unshare") : t("chat_share")}
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onClick={() => setDeleteConfirmChat(chat)}
+                                >
+                                  {t("chat_delete")}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </ContextMenuTrigger>
                         <ContextMenuContent>
                           <ContextMenuItem onClick={() => togglePin(chat)}>
@@ -532,19 +577,57 @@ export const ChatSidebar = ({
                         {group.chats.map((chat) => (
                           <ContextMenu key={chat.id}>
                             <ContextMenuTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
+                              <div
                                 className={cn(
-                                  "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
+                                  "group/chat-item relative flex h-8 w-full min-w-0 items-center rounded-md",
                                   currentChatId === chat.id && "bg-sidebar-accent"
                                 )}
-                                onClick={() => selectChat(chat)}
                               >
-                                <span className="min-w-0 flex-1 truncate">
-                                  {chat.title || t("chat_untitled")}
-                                </span>
-                              </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal"
+                                  onClick={() => selectChat(chat)}
+                                >
+                                  <span className="min-w-0 flex-1 truncate">
+                                    {chat.title || t("chat_untitled")}
+                                  </span>
+                                </Button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="absolute right-1 hidden size-6 rounded-md bg-sidebar-accent p-0 group-hover/chat-item:flex data-[state=open]:flex"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <MoreVertical className="size-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="start" side="right">
+                                <DropdownMenuItem onClick={() => togglePin(chat)}>
+                                  {t("chat_pin")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => openRename(chat)}>
+                                  {t("chat_rename")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    if (onToggleShareChat) onToggleShareChat(chat)
+                                  }}
+                                >
+                                  {chat.is_shared ? t("chat_unshare") : t("chat_share")}
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onClick={() => setDeleteConfirmChat(chat)}
+                                >
+                                  {t("chat_delete")}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
                             </ContextMenuTrigger>
                             <ContextMenuContent>
                               <ContextMenuItem onClick={() => togglePin(chat)}>
