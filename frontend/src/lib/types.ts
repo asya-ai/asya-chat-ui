@@ -111,6 +111,14 @@ export type Chat = {
   last_activity_at: string
 }
 
+export type MessageUsage = {
+  input_tokens: number
+  output_tokens: number
+  cached_tokens: number
+  thinking_tokens: number
+  total_tokens: number
+}
+
 export type ChatMessage = {
   id: string
   role: string
@@ -133,6 +141,7 @@ export type ChatMessage = {
   } | null
   task_id?: string | null
   generation_status?: GenerationStatus | null
+  usage?: MessageUsage | null
 }
 
 export type SourceItem = {

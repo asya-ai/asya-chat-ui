@@ -10,8 +10,25 @@ from app.services.providers.base import ChatResponse, ChatToolCall, ChatUsage
 from app.services.tools.registry import ToolRegistry, ToolResult, ToolSpec
 
 
-def _usage() -> ChatUsage:
-    return ChatUsage(0, 0, 0, 0, 0, 0, 0)
+def _usage(
+    *,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cached_tokens: int = 0,
+    thinking_tokens: int = 0,
+) -> ChatUsage:
+    return ChatUsage(
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        thinking_tokens,
+    )
 
 
 @dataclass
@@ -165,9 +182,211 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
     assert isinstance(sources, list)
     assert image_usages == []
     assert usage is not None
+    assert usage.total_tokens == 0
     assert tool_events[-1]["state"] == "end"
     assert tool_events[-1]["input_preview"] == '{"text": "hello"}'
     assert tool_events[-1]["action_summary"] == "Running echo tool"
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_merges_usage_across_model_steps_and_tool_answers():
+    registry = ToolRegistry()
+
+    async def _web_scrape(args: dict) -> ToolResult:
+        return ToolResult(
+            name="web_scrape",
+            output={
+                "results": [
+                    {
+                        "url": "https://example.com",
+                        "question": "What is it?",
+                        "analysis_input": {"markdown": "Example Domain"},
+                    }
+                ]
+            },
+        )
+
+    registry.register(
+        ToolSpec(
+            name="web_scrape",
+            description="Scrape a page",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "output": {"type": "string"},
+                },
+                "required": ["url"],
+            },
+        ),
+        _web_scrape,
+    )
+
+    @dataclass
+    class _CountingProvider:
+        calls: int = 0
+        answer_calls: int = 0
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(
+                        prompt_tokens=10,
+                        completion_tokens=2,
+                        total_tokens=12,
+                        input_tokens=10,
+                        output_tokens=2,
+                    ),
+                    tool_calls=[
+                        ChatToolCall(
+                            id="tool-1",
+                            name="web_scrape",
+                            arguments={"url": "https://example.com", "output": "answer"},
+                        )
+                    ],
+                )
+            return ChatResponse(
+                content="final answer",
+                usage=_usage(
+                    prompt_tokens=20,
+                    completion_tokens=5,
+                    total_tokens=25,
+                    input_tokens=18,
+                    output_tokens=5,
+                    cached_tokens=2,
+                ),
+                tool_calls=[],
+            )
+
+        async def chat(self, model: str, messages: list[dict]):
+            self.answer_calls += 1
+            return ChatResponse(
+                content='{"answer":"Example Domain","insufficient_information":false,"quotes":["Example Domain"]}',
+                usage=_usage(
+                    prompt_tokens=7,
+                    completion_tokens=3,
+                    total_tokens=10,
+                    input_tokens=7,
+                    output_tokens=3,
+                    thinking_tokens=1,
+                ),
+            )
+
+    provider = _CountingProvider()
+    content, attachments, sources, image_usages, usage = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "scrape it"}],
+        tool_registry=registry,
+        max_steps=3,
+    )
+
+    assert content == "final answer"
+    assert provider.calls == 2
+    assert provider.answer_calls == 1
+    assert image_usages == []
+    assert usage is not None
+    assert usage.prompt_tokens == 37
+    assert usage.completion_tokens == 10
+    assert usage.total_tokens == 47
+    assert usage.input_tokens == 35
+    assert usage.output_tokens == 10
+    assert usage.cached_tokens == 2
+    assert usage.thinking_tokens == 1
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_records_image_usages_from_image_tools():
+    registry = ToolRegistry()
+
+    async def _generate_image(args: dict) -> ToolResult:
+        return ToolResult(
+            name="generate_image",
+            output={
+                "model_id": "11111111-1111-1111-1111-111111111111",
+                "image_width": 1024,
+                "image_height": 1024,
+                "image_count": 1,
+                "image_format": "png",
+            },
+            attachments=[
+                {
+                    "file_name": "generated.png",
+                    "content_type": "image/png",
+                    "data_base64": "abc",
+                }
+            ],
+        )
+
+    registry.register(
+        ToolSpec(
+            name="generate_image",
+            description="Generate an image",
+            parameters={
+                "type": "object",
+                "properties": {"prompt": {"type": "string"}},
+                "required": ["prompt"],
+            },
+        ),
+        _generate_image,
+    )
+
+    @dataclass
+    class _ImageProvider:
+        calls: int = 0
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(total_tokens=4, input_tokens=3, output_tokens=1, prompt_tokens=3, completion_tokens=1),
+                    tool_calls=[
+                        ChatToolCall(
+                            id="tool-1",
+                            name="generate_image",
+                            arguments={"prompt": "a cat"},
+                        )
+                    ],
+                )
+            return ChatResponse(
+                content="done",
+                usage=_usage(total_tokens=6, input_tokens=5, output_tokens=1, prompt_tokens=5, completion_tokens=1),
+                tool_calls=[],
+            )
+
+    provider = _ImageProvider()
+    content, attachments, sources, image_usages, usage = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "draw a cat"}],
+        tool_registry=registry,
+        max_steps=3,
+    )
+
+    assert content == "done"
+    assert len(attachments) == 1
+    assert image_usages == [
+        {
+            "model_id": "11111111-1111-1111-1111-111111111111",
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "thinking_tokens": 0,
+            "image_width": 1024,
+            "image_height": 1024,
+            "image_count": 1,
+            "image_format": "png",
+        }
+    ]
+    assert usage is not None
+    assert usage.total_tokens == 10
+
 
 
 @pytest.mark.asyncio

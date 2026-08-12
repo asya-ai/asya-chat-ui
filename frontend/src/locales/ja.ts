@@ -138,6 +138,7 @@ export const ja = {
   chat_sources_count: "{count} 件の出典",
   chat_sources_count_one: "{count} 件の出典",
   chat_sources_empty: "このメッセージに出典はありません。",
+  chat_tokens_count: "{count} トークン",
   chat_thinking: "思考中",
   chat_generating_image: "画像を生成中",
   chat_create_image: "画像を作成",

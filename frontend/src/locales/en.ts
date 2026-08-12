@@ -136,6 +136,7 @@ export const en = {
   chat_sources_count: "{count} Sources",
   chat_sources_count_one: "{count} Source",
   chat_sources_empty: "No sources for this message.",
+  chat_tokens_count: "{count} tokens",
   chat_thinking: "Thinking",
   chat_generating_image: "Generating image",
   chat_create_image: "Create an image",

@@ -708,15 +708,15 @@ const CopyTextButton = ({
         copied ? (
           <Check
             aria-hidden="true"
-            className="h-3.5 w-3.5 animate-in fade-in zoom-in-95 duration-200"
+            className="w-3.5 h-3.5 animate-in duration-200 fade-in zoom-in-95"
           />
         ) : (
-          <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+          <Copy aria-hidden="true" className="w-3.5 h-3.5" />
         )
       ) : (
         <span
           key={copied ? "copied" : "idle"}
-          className="inline-block animate-in fade-in zoom-in-95 duration-200"
+          className="inline-block animate-in duration-200 fade-in zoom-in-95"
         >
           {copied ? copiedLabel : label}
         </span>
@@ -812,7 +812,7 @@ const DeferredMarkdown = ({
 
   if (!ready) {
     return (
-      <div className="wrap-break-word whitespace-pre-wrap text-inherit">
+      <div className="text-inherit wrap-break-word whitespace-pre-wrap">
         {markdown}
       </div>
     )
@@ -897,7 +897,7 @@ const MermaidDiagram = ({
       />
       <div
         ref={containerRef}
-        className="max-w-full overflow-x-auto [&_svg]:h-auto [&_svg]:max-w-none"
+        className="max-w-full [&_svg]:max-w-none [&_svg]:h-auto overflow-x-auto"
       />
     </div>
   )
@@ -1076,7 +1076,7 @@ const MessageBubbleComponent = ({
         void node
         return (
           <div className="my-3 overflow-x-auto">
-            <table className="w-full border-collapse text-sm" {...rest}>
+            <table className="w-full text-sm border-collapse" {...rest}>
               {children}
             </table>
           </div>
@@ -1085,7 +1085,7 @@ const MessageBubbleComponent = ({
       thead({ children, node, ...rest }: any) {
         void node
         return (
-          <thead className="border-b border-border" {...rest}>
+          <thead className="border-border border-b" {...rest}>
             {children}
           </thead>
         )
@@ -1093,7 +1093,7 @@ const MessageBubbleComponent = ({
       th({ children, node, ...rest }: any) {
         void node
         return (
-          <th className="px-3 py-2 text-left font-medium" {...rest}>
+          <th className="px-3 py-2 font-medium text-left" {...rest}>
             {children}
           </th>
         )
@@ -1229,6 +1229,7 @@ const MessageBubbleComponent = ({
     (canCopyMessage ||
       uniqueSources.length > 0 ||
       Boolean(msg.model_name) ||
+      (actionInfoLevel === "detailed" && (msg.usage?.total_tokens ?? 0) > 0) ||
       (actionsEnabled && msg.generation_status === "failed"))
 
   return (
@@ -1239,13 +1240,13 @@ const MessageBubbleComponent = ({
     >
       <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
         {showUserSideActions ? (
-          <div className="absolute right-full top-1/2 z-10 mr-0.5 flex -translate-y-1/2 items-center opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+          <div className="top-1/2 right-full z-10 absolute flex items-center opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 mr-0.5 -translate-y-1/2">
             {actionsEnabled ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-7 opacity-70 hover:opacity-100"
+                className="opacity-70 hover:opacity-100 size-7"
                 onClick={() => onStartEdit(msg)}
                 aria-label={t("chat_edit_message")}
               >
@@ -1258,7 +1259,7 @@ const MessageBubbleComponent = ({
                 label={t("chat_copy_message")}
                 copiedLabel={t("common_copied")}
                 iconOnly
-                className="size-7 opacity-70 hover:opacity-100"
+                className="opacity-70 hover:opacity-100 size-7"
               />
             ) : null}
             {actionsEnabled ? (
@@ -1266,7 +1267,7 @@ const MessageBubbleComponent = ({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-7 opacity-70 hover:opacity-100"
+                className="opacity-70 hover:opacity-100 size-7"
                 onClick={() => onDeleteFromMessage(msg)}
                 aria-label={t("chat_delete_message")}
               >
@@ -1286,7 +1287,7 @@ const MessageBubbleComponent = ({
         >
           {hasEventHeader ? (
             <div className="flex justify-between items-center gap-2">
-              <p className="mb-1.5 text-xs font-medium opacity-70">
+              <p className="opacity-70 mb-1.5 font-medium text-xs">
                 {isCodeEvent
                   ? t("chat_executing_code")
                   : toolCallEvent
@@ -1554,8 +1555,8 @@ const MessageBubbleComponent = ({
                       if (!toolEvent) {
                         return (
                           <div key={`action-${index}`} className="space-y-2">
-                            <div className="flex items-start gap-1.5 text-xs text-muted-foreground leading-5">
-                              <span aria-hidden="true" className="select-none opacity-50">
+                            <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
+                              <span aria-hidden="true" className="opacity-50 select-none">
                                 ›
                               </span>
                               <span className="min-w-0 wrap-break-word">{part.label}</span>
@@ -1566,14 +1567,14 @@ const MessageBubbleComponent = ({
                       }
                       return (
                         <div key={`action-${index}`} className="space-y-2">
-                          <details className="group/action text-xs text-muted-foreground">
-                            <summary className="flex items-start gap-1.5 leading-5 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                              <span aria-hidden="true" className="select-none opacity-50">
+                          <details className="group/action text-muted-foreground text-xs">
+                            <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
+                              <span aria-hidden="true" className="opacity-50 select-none">
                                 ›
                               </span>
                               <span className="min-w-0 wrap-break-word">{part.label}</span>
                             </summary>
-                            <div className="mt-2 ml-3 space-y-2 text-foreground">
+                            <div className="space-y-2 mt-2 ml-3 text-foreground">
                               <ToolEventDetails toolEvent={toolEvent} t={t} />
                             </div>
                           </details>
@@ -1583,8 +1584,8 @@ const MessageBubbleComponent = ({
                     }
                     return (
                       <div key={`action-${index}`} className="space-y-2">
-                        <div className="flex items-start gap-1.5 text-xs text-muted-foreground leading-5">
-                          <span aria-hidden="true" className="select-none opacity-50">
+                        <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
+                          <span aria-hidden="true" className="opacity-50 select-none">
                             ›
                           </span>
                           <span className="min-w-0 wrap-break-word">{part.label}</span>
@@ -1657,13 +1658,13 @@ const MessageBubbleComponent = ({
                       </div>
                     ) : (
                       <div
-                        className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground"
+                        className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4"
                         role="status"
                         aria-live="polite"
                       >
                         <span
                           aria-hidden="true"
-                          className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                          className="opacity-[0.79] size-3.5 animate-spin figma-icon"
                           style={{ maskImage: "url('/icon-thinking.svg')" }}
                         />
                         <span>{t("chat_thinking")}</span>
@@ -1715,23 +1716,23 @@ const MessageBubbleComponent = ({
                     ) : actionInfoLevel === "short" ? (
                       <div className="space-y-2 py-2" role="status" aria-live="polite">
                         {isThinking ? (
-                          <div className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground">
+                          <div className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4">
                             <span
                               aria-hidden="true"
-                              className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                              className="opacity-[0.79] size-3.5 animate-spin figma-icon"
                               style={{ maskImage: "url('/icon-thinking.svg')" }}
                             />
                             <span>{t("chat_thinking")}</span>
                           </div>
                         ) : null}
                         {thinkingLabels.length > 0 ? (
-                          <div className="space-y-1 text-xs text-muted-foreground">
+                          <div className="space-y-1 text-muted-foreground text-xs">
                             {thinkingLabels.map((label, index) => (
                               <div
                                 key={`${label}-${index}`}
                                 className="flex items-start gap-1.5 leading-5"
                               >
-                                <span aria-hidden="true" className="select-none opacity-50">
+                                <span aria-hidden="true" className="opacity-50 select-none">
                                   ›
                                 </span>
                                 <span className="min-w-0 wrap-break-word">{label}</span>
@@ -1742,10 +1743,10 @@ const MessageBubbleComponent = ({
                       </div>
                     ) : isThinking ? (
                       <div className="space-y-2 py-2" role="status" aria-live="polite">
-                        <div className="inline-flex items-center justify-center gap-0.5 rounded-full bg-border px-1.5 py-0.5 text-xs leading-4 font-medium text-foreground">
+                        <div className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4">
                           <span
                             aria-hidden="true"
-                            className="figma-icon size-3.5 animate-spin opacity-[0.79]"
+                            className="opacity-[0.79] size-3.5 animate-spin figma-icon"
                             style={{ maskImage: "url('/icon-thinking.svg')" }}
                           />
                           <span>{t("chat_thinking")}</span>
@@ -1801,8 +1802,8 @@ const MessageBubbleComponent = ({
           )}
         </div>
         {showAssistantFooter ? (
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 transition">
-            <div className="flex items-center justify-start gap-1">
+          <div className="flex flex-wrap justify-between items-center gap-2 mt-2 transition">
+            <div className="flex justify-start items-center gap-1">
               <TooltipProvider delayDuration={300}>
                 <div className="flex items-center gap-1">
                   {canCopyMessage ? (
@@ -1814,7 +1815,7 @@ const MessageBubbleComponent = ({
                             label={t("chat_copy_message")}
                             copiedLabel={t("common_copied")}
                             iconOnly
-                            className="size-7 opacity-70 hover:opacity-100"
+                            className="opacity-70 hover:opacity-100 size-7"
                           />
                         </span>
                       </TooltipTrigger>
@@ -1830,7 +1831,7 @@ const MessageBubbleComponent = ({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="size-7 opacity-70 hover:opacity-100"
+                              className="opacity-70 hover:opacity-100 size-7"
                               aria-label={t("chat_download_answer")}
                             >
                               <Download aria-hidden="true" className="size-4" />
@@ -1870,7 +1871,7 @@ const MessageBubbleComponent = ({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-7 opacity-70 hover:opacity-100"
+                          className="opacity-70 hover:opacity-100 size-7"
                           onClick={() => onShareMessage(msg)}
                           aria-label={t("chat_share_answer")}
                         >
@@ -1887,7 +1888,7 @@ const MessageBubbleComponent = ({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-7 opacity-70 hover:opacity-100"
+                          className="opacity-70 hover:opacity-100 size-7"
                           onClick={() => onRetryMessage(msg)}
                           aria-label={t("chat_retry")}
                         >
@@ -1899,23 +1900,64 @@ const MessageBubbleComponent = ({
                   ) : null}
                 </div>
               </TooltipProvider>
-              {uniqueSources.length > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 rounded-full px-2.5 text-xs"
-                  onClick={() => onOpenSources?.(uniqueSources)}
-                >
-                  {uniqueSources.length === 1
-                    ? t("chat_sources_count_one", { count: uniqueSources.length })
-                    : t("chat_sources_count", { count: uniqueSources.length })}
-                </Button>
+              {uniqueSources.length > 0 ||
+              ((msg.usage?.total_tokens ?? 0) > 0) ? (
+                <div className="flex items-center gap-2">
+                  {uniqueSources.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="px-2.5 rounded-full h-7 text-xs"
+                      onClick={() => onOpenSources?.(uniqueSources)}
+                    >
+                      {uniqueSources.length === 1
+                        ? t("chat_sources_count_one", { count: uniqueSources.length })
+                        : t("chat_sources_count", { count: uniqueSources.length })}
+                    </Button>
+                  ) : null}
+                  {actionInfoLevel === "detailed" && (msg.usage?.total_tokens ?? 0) > 0 ? (
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className="inline-flex items-center bg-background px-2.5 border border-border rounded-full h-7 text-muted-foreground text-xs cursor-default"
+                            tabIndex={0}
+                          >
+                            {t("chat_tokens_count", {
+                              count: msg.usage!.total_tokens.toLocaleString(),
+                            })}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="px-3 py-2">
+                          <div className="gap-x-4 gap-y-1 grid grid-cols-[1fr_auto] min-w-[9rem] text-xs">
+                            <span>{t("usage_input")}</span>
+                            <span className="tabular-nums text-right">
+                              {msg.usage!.input_tokens.toLocaleString()}
+                            </span>
+                            <span>{t("usage_output")}</span>
+                            <span className="tabular-nums text-right">
+                              {msg.usage!.output_tokens.toLocaleString()}
+                            </span>
+                            <span>{t("usage_cached")}</span>
+                            <span className="tabular-nums text-right">
+                              {msg.usage!.cached_tokens.toLocaleString()}
+                            </span>
+                            <span>{t("usage_thinking")}</span>
+                            <span className="tabular-nums text-right">
+                              {msg.usage!.thinking_tokens.toLocaleString()}
+                            </span>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : null}
+                </div>
               ) : null}
             </div>
             {msg.model_name ? (
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="truncate text-xs leading-4 text-muted-foreground">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-muted-foreground text-xs truncate leading-4">
                   {msg.model_name}
                 </span>
               </div>

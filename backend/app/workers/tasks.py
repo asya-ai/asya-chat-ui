@@ -283,6 +283,26 @@ def _append_event(
     _persist_generation_event(session, task_id, sequence_ref, event_type, payload)
 
 
+def _aggregated_message_usage_payload(session: Session, message_id: UUID) -> dict[str, int]:
+    row = session.exec(
+        select(
+            func.coalesce(func.sum(UsageEvent.input_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.output_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.cached_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.thinking_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.total_tokens), 0),
+        ).where(UsageEvent.message_id == message_id)
+    ).one()
+    input_tokens, output_tokens, cached_tokens, thinking_tokens, total_tokens = row
+    return {
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "cached_tokens": int(cached_tokens or 0),
+        "thinking_tokens": int(thinking_tokens or 0),
+        "total_tokens": int(total_tokens or 0),
+    }
+
+
 def _to_int_scalar(value: Any, default: int = 0) -> int:
     if value is None:
         return default
@@ -936,6 +956,9 @@ async def _run_generation(task_id: UUID) -> None:
                         "model_name": model.display_name,
                         "model_id": str(model.id),
                         "attachments": image_result.attachments or [],
+                        "usage": _aggregated_message_usage_payload(
+                            session, assistant_message.id
+                        ),
                     },
                 )
                 assistant_message.status = "done"
@@ -1122,6 +1145,9 @@ async def _run_generation(task_id: UUID) -> None:
                     "model_id": str(model.id),
                     "attachments": tool_attachments or [],
                     "sources": assistant_message.sources or [],
+                    "usage": _aggregated_message_usage_payload(
+                        session, assistant_message.id
+                    ),
                 },
             )
             assistant_message.status = "done"

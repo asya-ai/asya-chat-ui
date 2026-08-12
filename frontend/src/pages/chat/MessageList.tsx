@@ -30,7 +30,7 @@ const MessageListComponent = ({
   return (
     <div
       ref={containerRef}
-      className="relative flex min-h-0 flex-1 flex-col gap-6 overflow-x-hidden overflow-y-auto px-4 py-6 md:px-8"
+      className="relative flex min-h-0 flex-1 flex-col gap-6 overflow-x-hidden overflow-y-auto px-4 pt-6 pb-0 md:px-8"
       onScroll={onScroll}
       aria-live="polite"
       aria-relevant="additions text"

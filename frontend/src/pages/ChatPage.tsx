@@ -591,6 +591,10 @@ export const ChatPage = () => {
         const content = typeof event.content === "string" ? event.content : null
         const modelName = typeof event.model_name === "string" ? event.model_name : null
         const modelId = typeof event.model_id === "string" ? event.model_id : null
+        const usage =
+          event.usage && typeof event.usage === "object"
+            ? (event.usage as ChatMessage["usage"])
+            : null
         updateChatMessagesFor(targetChatId, (prev) =>
           prev.map((msg) =>
             matchesAssistant(msg)
@@ -605,6 +609,7 @@ export const ChatPage = () => {
                     msg.attachments,
                   sources:
                     (event.sources as ChatMessage["sources"]) ?? msg.sources,
+                  usage: usage ?? msg.usage ?? null,
                   thinking_steps: msg.thinking_steps ?? [],
                   generation_status: "completed",
                 }

@@ -138,6 +138,7 @@ export const lv = {
   chat_sources_count: "{count} avoti",
   chat_sources_count_one: "{count} avots",
   chat_sources_empty: "Šai ziņai nav avotu.",
+  chat_tokens_count: "{count} tokeni",
   chat_thinking: "Domā",
   chat_generating_image: "Ģenerē attēlu",
   chat_create_image: "Izveidot attēlu",

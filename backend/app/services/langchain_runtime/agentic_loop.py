@@ -412,6 +412,25 @@ async def run_agentic_loop_langchain(
             usage = _merge_chat_usage(usage, answer_usage)
             if result.attachments:
                 attachments.extend(result.attachments)
+            if call.name in {"generate_image", "edit_image"}:
+                model_id = result.output.get("model_id") if isinstance(result.output, dict) else None
+                if model_id:
+                    image_usages.append(
+                        {
+                            "model_id": model_id,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cached_tokens": 0,
+                            "thinking_tokens": 0,
+                            "image_width": result.output.get("image_width"),
+                            "image_height": result.output.get("image_height"),
+                            "image_count": result.output.get("image_count"),
+                            "image_format": result.output.get("image_format"),
+                        }
+                    )
             if call.name in {"web_search", "web_scrape"}:
                 result_sources = result.output.get("queries") or result.output.get("results")
                 if isinstance(result_sources, list):

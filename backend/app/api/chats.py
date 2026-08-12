@@ -2536,6 +2536,14 @@ class ChatMessageCreateRequest(BaseModel):
         return self
 
 
+class MessageUsageRead(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    thinking_tokens: int = 0
+    total_tokens: int = 0
+
+
 class ChatMessageRead(BaseModel):
     id: str
     role: str
@@ -2551,6 +2559,7 @@ class ChatMessageRead(BaseModel):
     activity_event: dict | None = None
     task_id: str | None = None
     generation_status: str | None = None
+    usage: MessageUsageRead | None = None
 
 
 class ChatGenerationTaskRead(BaseModel):
@@ -3280,6 +3289,36 @@ def list_messages(
         .order_by(ChatViewEvent.created_at)
     ).all()
 
+    usage_by_message: dict[UUID, MessageUsageRead] = {}
+    if messages:
+        usage_rows = session.exec(
+            select(
+                UsageEvent.message_id,
+                func.sum(UsageEvent.input_tokens),
+                func.sum(UsageEvent.output_tokens),
+                func.sum(UsageEvent.cached_tokens),
+                func.sum(UsageEvent.thinking_tokens),
+                func.sum(UsageEvent.total_tokens),
+            )
+            .where(
+                UsageEvent.message_id.in_([message.id for message in messages])
+            )
+            .group_by(UsageEvent.message_id)
+        ).all()
+        for row in usage_rows:
+            message_id, input_tokens, output_tokens, cached_tokens, thinking_tokens, total_tokens = (
+                row
+            )
+            if message_id is None:
+                continue
+            usage_by_message[message_id] = MessageUsageRead(
+                input_tokens=int(input_tokens or 0),
+                output_tokens=int(output_tokens or 0),
+                cached_tokens=int(cached_tokens or 0),
+                thinking_tokens=int(thinking_tokens or 0),
+                total_tokens=int(total_tokens or 0),
+            )
+
     results: list[ChatMessageRead] = []
     for message in messages:
         message_attachments = attachments_by_message.get(message.id)
@@ -3309,6 +3348,7 @@ def list_messages(
                 generation_status=task_map[message.id].status.value
                 if message.id in task_map
                 else None,
+                usage=usage_by_message.get(message.id),
             )
         )
         if message.role != "assistant":

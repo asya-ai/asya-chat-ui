@@ -125,7 +125,7 @@ export const ChatComposer = ({
         "z-10",
         centered
           ? "absolute inset-x-0 top-15 bottom-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col items-center justify-center gap-8 px-4 max-md:justify-end max-md:gap-6"
-          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] pb-[calc(1rem+env(safe-area-inset-bottom))]"
       )}
     >
       {centered ? (
