@@ -2004,23 +2004,63 @@ export const ChatPage = () => {
       return true
     }
 
-    const keywordLineCount = lines.filter((line) =>
-      /^(def |class |import |from |function |const |let |var |if\b|for\b|while\b|return\b|#include\b|SELECT\b|INSERT\b|UPDATE\b|DELETE\b|WITH\b|CREATE\b|ALTER\b|DROP\b|--\s|\/\/)/i.test(
+    // Markdown structure — don't wrap docs/notes that merely share tokens with code.
+    const mdHeadingCount = lines.filter((line) =>
+      /^#{1,6}\s+\S/.test(line.trim())
+    ).length
+    const mdListCount = lines.filter((line) =>
+      /^([-*+]|\d+[.)])\s+\S/.test(line.trim())
+    ).length
+    const mdBlockquoteCount = lines.filter((line) =>
+      /^>\s?\S/.test(line.trim())
+    ).length
+    const mdLinkCount = (text.match(/!?\[[^\]]*]\([^)]+\)/g) || []).length
+    const mdTableCount = lines.filter((line) =>
+      /^\|.+\|\s*$/.test(line.trim())
+    ).length
+    let markdownSignals = 0
+    if (mdHeadingCount >= 1) markdownSignals += 1
+    if (mdHeadingCount >= 3) markdownSignals += 1
+    if (mdListCount >= 2) markdownSignals += 1
+    if (mdListCount >= 4) markdownSignals += 1
+    if (mdLinkCount >= 1) markdownSignals += 1
+    if (mdLinkCount >= 3) markdownSignals += 1
+    if (mdBlockquoteCount >= 2) markdownSignals += 1
+    if (mdTableCount >= 2) markdownSignals += 1
+    if (markdownSignals >= 2) return false
+
+    // Prefer code-shaped keywords over prose starters ("If …", "For …", "Create …").
+    const hardKeywordLineCount = lines.filter((line) =>
+      /^(def\s+\w+|import\s+\w+|from\s+\S+\s+import\b|function\s+\w+|const\s+\w+|let\s+\w+|var\s+\w+|#include\b|SELECT\s+\S|INSERT\s+INTO\b|UPDATE\s+\S|DELETE\s+FROM\b|WITH\s+\w+\s+AS\b|CREATE\s+(TABLE|INDEX|VIEW|DATABASE|SCHEMA|OR\s+REPLACE)\b|ALTER\s+TABLE\b|DROP\s+(TABLE|INDEX|VIEW|DATABASE|SCHEMA)\b|\/\/|\/\*)/i.test(
         line.trim()
       )
     ).length
+    const softKeywordLineCount = lines.filter((line) =>
+      /^(class\s+\w+(\s*[:{(]|\s+extends\b|\s+implements\b)|if\s*\(|for\s*\(|while\s*\(|return\s*([;([]|true\b|false\b|null\b|None\b|undefined\b)|--\s)/i.test(
+        line.trim()
+      )
+    ).length
+    const keywordLineCount = hardKeywordLineCount + softKeywordLineCount
     const indentedLineCount = lines.filter((line) => /^( {4,}|\t)/.test(line)).length
-    const symbolHeavy = /[{}();=<>[\]$\\]/.test(text)
-    const operatorHeavy = /(\+\+|--|=>|==|!=|<=|>=|:=|&&|\|\|)/.test(text)
+    // Ignore markdown links/autolinks so [text](url) does not count as "symbol heavy".
+    const strippedForSymbols = text
+      .replace(/!?\[[^\]]*]\([^)]+\)/g, " ")
+      .replace(/<https?:\/\/[^>\s]+>/gi, " ")
+    const symbolHeavy = /[{}();=$\\]/.test(strippedForSymbols)
+    // Omit bare `--` (common in markdown/CLI prose); keep `++` / `=>` / comparisons.
+    const operatorHeavy = /(\+\+|=>|==|!=|<=|>=|:=|&&|\|\|)/.test(text)
     const proseLikeLineCount = lines.filter((line) =>
       /^[A-Za-z0-9 ,.'"!?()-]+$/.test(line.trim())
     ).length
 
     let score = 0
-    if (keywordLineCount >= 1) score += 2
+    if (hardKeywordLineCount >= 1) score += 2
+    else if (softKeywordLineCount >= 2) score += 2
+    else if (softKeywordLineCount >= 1) score += 1
     if (indentedLineCount >= 2) score += 1
     if (symbolHeavy) score += 1
     if (operatorHeavy) score += 1
+    if (markdownSignals >= 1) score -= 1
 
     const proseRatio = proseLikeLineCount / lines.length
     if (score < 2) return false
@@ -2840,28 +2880,28 @@ export const ChatPage = () => {
   const sidebarFooter = (
     <Button
       variant="ghost"
-      className="h-14 w-full justify-start gap-1.5 p-1.5 text-left"
+      className="justify-start gap-1.5 p-1.5 w-full h-14 text-left"
       onClick={() => navigate("/settings/me")}
     >
       {currentUser?.avatar_url ? (
         <img
           src={currentUser.avatar_url}
           alt=""
-          className="size-11 shrink-0 rounded-lg object-cover"
+          className="rounded-lg size-11 object-cover shrink-0"
         />
       ) : (
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-secondary text-sm font-semibold">
+        <span className="flex justify-center items-center bg-secondary rounded-lg size-11 font-semibold text-sm shrink-0">
           {profileLabel ? profileLabel.slice(0, 1).toUpperCase() : null}
         </span>
       )}
       <span className="min-w-0">
         {profileLabel ? (
-          <span className="block truncate text-sm font-semibold leading-4">{profileLabel}</span>
+          <span className="block font-semibold text-sm truncate leading-4">{profileLabel}</span>
         ) : (
-          <span className="block h-4 w-24 animate-pulse rounded bg-secondary" />
+          <span className="block bg-secondary rounded w-24 h-4 animate-pulse" />
         )}
         {activeOrgName ? (
-          <span className="block truncate text-xs font-medium leading-4 text-muted-foreground">
+          <span className="block font-medium text-muted-foreground text-xs truncate leading-4">
             {activeOrgName}
           </span>
         ) : null}
@@ -2875,7 +2915,7 @@ export const ChatPage = () => {
           <Menu aria-hidden="true" />
         </Button>
       </SheetTrigger>
-      <SheetContent side="left" className="w-57.25 bg-sidebar p-2" showCloseButton={false}>
+      <SheetContent side="left" className="bg-sidebar p-2 w-57.25" showCloseButton={false}>
         <ChatSidebar
           title={t("chat_title")}
           labels={{
@@ -2917,7 +2957,7 @@ export const ChatPage = () => {
       {desktopSidebarOpen ? (
         <span
           aria-hidden="true"
-          className="figma-icon size-4"
+          className="size-4 figma-icon"
           style={{ maskImage: "url('/icon-panel.svg')" }}
         />
       ) : (
@@ -2927,7 +2967,7 @@ export const ChatPage = () => {
   )
 
   return (
-    <div className="flex h-svh overflow-hidden bg-background">
+    <div className="flex bg-background h-svh overflow-hidden">
       <aside
         className={`hidden min-h-0 w-57.25 shrink-0 flex-col bg-sidebar p-2 text-sidebar-foreground ${
           desktopSidebarOpen ? "md:flex" : ""
@@ -2993,11 +3033,11 @@ export const ChatPage = () => {
             onToggleShareChat={toggleShareChat}
           />
         ) : (
-          <div className="flex min-h-0 min-w-0 flex-1">
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex flex-1 min-w-0 min-h-0">
+            <div className="relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden">
               <h1 className="sr-only">{activeChatTitle}</h1>
-              <div className="relative -left-px -top-px flex h-15 w-[calc(100%+2px)] shrink-0 items-center justify-between bg-background px-3 py-2.5">
-                <div className="flex min-w-0 items-center gap-2">
+              <div className="-top-px -left-px relative flex justify-between items-center bg-background px-3 py-2.5 w-[calc(100%+2px)] h-15 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
                   {mobileSidebar}
                   {desktopSidebarToggle}
                   {isAgentMode ? (
@@ -3030,7 +3070,7 @@ export const ChatPage = () => {
                     </div>
                   ) : null}
                 </div>
-                <label className="hidden cursor-pointer items-center gap-2 md:inline-flex">
+                <label className="hidden md:inline-flex items-center gap-2 cursor-pointer">
                   <span className="text-sm leading-5">{t("chat_save_session")}</span>
                   <Switch
                     checked={!incognitoEnabled}
@@ -3069,7 +3109,7 @@ export const ChatPage = () => {
                 modelSelect={
                   <Select value={selectedModel} onValueChange={setSelectedModel}>
                     <SelectTrigger
-                      className="h-9 w-auto max-w-54 border-0 bg-transparent shadow-none"
+                      className="bg-transparent shadow-none border-0 w-auto max-w-54 h-9"
                       aria-label={t("chat_select_model")}
                     >
                       <SelectValue placeholder={t("chat_best_available_model")} />
@@ -3095,7 +3135,7 @@ export const ChatPage = () => {
                                   className="size-5"
                                 />
                               ) : isImageOutputModel(model) ? (
-                                <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                <ImageIcon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                               ) : null}
                               <span>{model.display_name}</span>
                             </span>
@@ -3252,7 +3292,7 @@ export const ChatPage = () => {
               onChange={(event) => setInsertPromptQuery(event.target.value)}
               placeholder={t("prompt_search_placeholder")}
             />
-            <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+            <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
               {insertPrompts
                 .filter((prompt) => {
                   const q = insertPromptQuery.trim().toLowerCase()
@@ -3267,15 +3307,15 @@ export const ChatPage = () => {
                     key={prompt.id}
                     type="button"
                     variant="ghost"
-                    className="h-auto min-h-10 w-full flex-col items-start gap-0.5 px-3 py-2 text-left"
+                    className="flex-col items-start gap-0.5 px-3 py-2 w-full h-auto min-h-10 text-left"
                     onClick={() => {
                       insertPromptIntoComposer(prompt.body)
                       setInsertPromptOpen(false)
                     }}
                   >
-                    <span className="w-full truncate text-sm font-medium">{prompt.name}</span>
+                    <span className="w-full font-medium text-sm truncate">{prompt.name}</span>
                     {prompt.description ? (
-                      <span className="w-full truncate text-xs text-muted-foreground">
+                      <span className="w-full text-muted-foreground text-xs truncate">
                         {prompt.description}
                       </span>
                     ) : null}
