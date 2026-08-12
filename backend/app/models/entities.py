@@ -132,6 +132,7 @@ class Invite(SQLModel, table=True):
     org_id: UUID = Field(foreign_key="orgs.id", index=True)
     email: str = Field(index=True)
     token: str = Field(index=True, sa_column_kwargs={"unique": True})
+    role: str = Field(default="member")
     expires_at: datetime
     accepted_at: Optional[datetime] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)

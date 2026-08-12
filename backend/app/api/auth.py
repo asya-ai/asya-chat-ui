@@ -110,9 +110,17 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+INVITE_ROLES = {"admin", "member"}
+
+
 class InviteCreateRequest(BaseModel):
     org_id: str
     email: EmailStr
+    role: str = "member"
+
+
+class InviteUpdateRequest(BaseModel):
+    role: str
 
 
 class InviteAcceptRequest(BaseModel):
@@ -161,6 +169,7 @@ class InviteRead(BaseModel):
     id: str
     org_id: str
     email: EmailStr
+    role: str
     token: str
     expires_at: datetime
     accepted_at: datetime | None
@@ -180,6 +189,28 @@ def _normalize_identifier(value: str) -> str:
 def _normalize_email(value: str) -> str:
     return value.strip().lower()
 
+
+def _normalize_invite_role(role: str | None) -> str:
+    normalized = (role or "member").strip().lower()
+    if normalized not in INVITE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role",
+        )
+    return normalized
+
+
+def _invite_to_read(invite: Invite) -> InviteRead:
+    return InviteRead(
+        id=str(invite.id),
+        org_id=str(invite.org_id),
+        email=invite.email,
+        role=invite.role or "member",
+        token=invite.token,
+        expires_at=invite.expires_at,
+        accepted_at=invite.accepted_at,
+        created_at=invite.created_at,
+    )
 
 def _is_admin_user(session: Session, user: User) -> bool:
     if user.is_super_admin:
@@ -1049,13 +1080,13 @@ def update_super_admin(
     return _me_response(session, user)
 
 
-@router.post("/invites")
+@router.post("/invites", response_model=InviteRead)
 def create_invite(
     payload: InviteCreateRequest,
     request: Request,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> Invite:
+) -> InviteRead:
     try:
         org_id = UUID(payload.org_id)
     except ValueError as exc:
@@ -1070,12 +1101,14 @@ def create_invite(
     if not current_user.is_super_admin:
         require_org_admin(session, org.id, current_user.id)
 
+    invite_role = _normalize_invite_role(payload.role)
     invite_email = _normalize_email(payload.email)
     token = secrets.token_urlsafe(32)
     invite = Invite(
         org_id=org.id,
         email=invite_email,
         token=token,
+        role=invite_role,
         expires_at=datetime.now(timezone.utc)
         + timedelta(hours=settings.invite_expire_hours),
         created_by_user_id=current_user.id,
@@ -1105,8 +1138,13 @@ def create_invite(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to send invite email",
         ) from exc
-    logger.info("Invite created email=%s org_id=%s", invite.email, invite.org_id)
-    return invite
+    logger.info(
+        "Invite created email=%s org_id=%s role=%s",
+        invite.email,
+        invite.org_id,
+        invite.role,
+    )
+    return _invite_to_read(invite)
 
 
 @router.get("/invites", response_model=list[InviteRead])
@@ -1131,19 +1169,7 @@ def list_invites(
     invites = session.exec(
         select(Invite).where(Invite.org_id == org_uuid, Invite.accepted_at == None)
     ).all()
-    return [
-        InviteRead(
-            id=str(invite.id),
-            org_id=str(invite.org_id),
-            email=invite.email,
-            token=invite.token,
-            expires_at=invite.expires_at,
-            accepted_at=invite.accepted_at,
-            created_at=invite.created_at,
-        )
-        for invite in invites
-    ]
-
+    return [_invite_to_read(invite) for invite in invites]
 
 @router.get("/invites/preview", response_model=InvitePreview)
 def preview_invite(token: str, session: Session = Depends(get_db)) -> InvitePreview:
@@ -1217,15 +1243,35 @@ def resend_invite(
             detail="Failed to send invite email",
         ) from exc
     logger.info("Invite resent email=%s org_id=%s", invite.email, invite.org_id)
-    return InviteRead(
-        id=str(invite.id),
-        org_id=str(invite.org_id),
-        email=invite.email,
-        token=invite.token,
-        expires_at=invite.expires_at,
-        accepted_at=invite.accepted_at,
-        created_at=invite.created_at,
-    )
+    return _invite_to_read(invite)
+
+
+@router.patch("/invites/{invite_id}", response_model=InviteRead)
+def update_invite(
+    invite_id: str,
+    payload: InviteUpdateRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> InviteRead:
+    try:
+        invite_uuid = UUID(invite_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid invite id"
+        ) from exc
+    invite = session.exec(select(Invite).where(Invite.id == invite_uuid)).first()
+    if not invite:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+    if invite.accepted_at is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite used")
+    if not current_user.is_super_admin:
+        require_org_admin(session, invite.org_id, current_user.id)
+
+    invite.role = _normalize_invite_role(payload.role)
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_to_read(invite)
 
 
 @router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1299,6 +1345,8 @@ def accept_invite(
         )
 
     admin_role, member_role = ensure_default_roles(session, invite.org_id)
+    invite_role_name = _normalize_invite_role(invite.role)
+    assigned_role = admin_role if invite_role_name == "admin" else member_role
 
     org_membership = session.exec(
         select(OrgMembership).where(
@@ -1307,7 +1355,7 @@ def accept_invite(
     ).first()
     if not org_membership:
         membership = OrgMembership(
-            org_id=invite.org_id, user_id=user.id, role_id=member_role.id
+            org_id=invite.org_id, user_id=user.id, role_id=assigned_role.id
         )
         session.add(membership)
 

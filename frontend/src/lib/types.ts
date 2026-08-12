@@ -470,6 +470,7 @@ export type Invite = {
   id: string
   org_id: string
   email: string
+  role: string
   token: string
   expires_at: string
   accepted_at?: string | null

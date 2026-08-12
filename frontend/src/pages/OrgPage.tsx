@@ -122,6 +122,7 @@ export const OrgPage = () => {
   >({})
   const [name, setName] = useState("")
   const [inviteEmail, setInviteEmail] = useState("")
+  const [inviteRole, setInviteRole] = useState("member")
   const [modelProvider, setModelProvider] = useState("openai")
   const [modelName, setModelName] = useState("")
   const [modelDisplayName, setModelDisplayName] = useState("")
@@ -464,7 +465,7 @@ export const OrgPage = () => {
     )
     if (emails.length === 0) return
     const results = await Promise.allSettled(
-      emails.map((email) => authApi.createInvite(usersOrgId, email))
+      emails.map((email) => authApi.createInvite(usersOrgId, email, inviteRole))
     )
     const failedEmails = results
       .map((result, index) => ({ result, email: emails[index] }))
@@ -520,6 +521,14 @@ export const OrgPage = () => {
     const updated = await orgApi.updateMemberRole(usersOrgId, member.user_id, nextRole)
     setMembers((prev) =>
       prev.map((item) => (item.user_id === updated.user_id ? updated : item))
+    )
+  }
+
+  const updateInviteRole = async (invite: Invite, nextRole: string) => {
+    if (!usersOrgId) return
+    const updated = await authApi.updateInviteRole(invite.id, nextRole)
+    setInvites((prev) =>
+      prev.map((item) => (item.id === updated.id ? updated : item))
     )
   }
 
@@ -1395,11 +1404,26 @@ export const OrgPage = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3">
-                <Input
-                  placeholder={t("org_users_invite_email")}
-                  value={inviteEmail}
-                  onChange={(event) => setInviteEmail(event.target.value)}
-                />
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Input
+                    placeholder={t("org_users_invite_email")}
+                    value={inviteEmail}
+                    onChange={(event) => setInviteEmail(event.target.value)}
+                    className="sm:flex-1"
+                  />
+                  <Select value={inviteRole} onValueChange={setInviteRole}>
+                    <SelectTrigger className="w-full sm:w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roleOptions.map((role) => (
+                        <SelectItem key={role} value={role}>
+                          {roleLabel(role)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <Button
                   disabled={!usersOrgId || inviteEmail.split(/[\s,]+/g).every((item) => !item.trim())}
                   onClick={sendInvite}
@@ -1509,8 +1533,35 @@ export const OrgPage = () => {
                   ))}
                   {invites.map((invite) => (
                     <TableRow key={invite.id}>
-                      <TableCell>{invite.email}</TableCell>
-                      <TableCell>{t("org_users_invited")}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col">
+                          <span>{invite.email}</span>
+                          <span className="text-muted-foreground text-xs">
+                            {t("org_users_invited")}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {canManageOrgSettings ? (
+                          <Select
+                            value={invite.role || "member"}
+                            onValueChange={(value) => updateInviteRole(invite, value)}
+                          >
+                            <SelectTrigger className="w-32">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {roleOptions.map((role) => (
+                                <SelectItem key={role} value={role}>
+                                  {roleLabel(role)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          roleLabel(invite.role || "member")
+                        )}
+                      </TableCell>
                       <TableCell />
                       {canManageOrgSettings ? <TableCell /> : null}
                       {isSuperAdmin ? <TableCell /> : null}

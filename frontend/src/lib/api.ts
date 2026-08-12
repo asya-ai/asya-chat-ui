@@ -287,10 +287,10 @@ export const authApi = {
       skipAuth: true,
       body: JSON.stringify({ token, new_password: newPassword }),
     }),
-  createInvite: (orgId: string, email: string) =>
-    apiFetch("/auth/invites", {
+  createInvite: (orgId: string, email: string, role: string = "member") =>
+    apiFetch<Invite>("/auth/invites", {
       method: "POST",
-      body: JSON.stringify({ org_id: orgId, email }),
+      body: JSON.stringify({ org_id: orgId, email, role }),
     }),
   me: () =>
     apiFetch<{
@@ -354,6 +354,11 @@ export const authApi = {
   registrationEnabled: () => apiFetch<{ enabled: boolean }>("/auth/registration-enabled", { skipAuth: true }),
   invites: (orgId: string) => apiFetch<Invite[]>(`/auth/invites?org_id=${orgId}`),
   resendInvite: (inviteId: string) => apiFetch<Invite>(`/auth/invites/${inviteId}/resend`, { method: "POST" }),
+  updateInviteRole: (inviteId: string, role: string) =>
+    apiFetch<Invite>(`/auth/invites/${inviteId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    }),
   cancelInvite: (inviteId: string) => apiFetch(`/auth/invites/${inviteId}`, { method: "DELETE" }),
 }
 
