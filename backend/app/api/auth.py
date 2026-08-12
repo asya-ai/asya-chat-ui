@@ -33,6 +33,7 @@ from app.services.org_service import (
     ensure_default_roles,
     get_org_by_login_domain,
     normalize_login_domain,
+    normalize_login_domains,
     require_org_admin,
 )
 
@@ -301,6 +302,18 @@ def _build_frontend_base(request: Request) -> str:
     if base.endswith("/api"):
         base = base[: -len("/api")]
     return base.rstrip("/")
+
+
+def _build_invite_frontend_base(request: Request, org: Org | None) -> str:
+    """Frontend base for invite emails; prefer org login domain when set."""
+    base = _build_frontend_base(request)
+    domains = normalize_login_domains(org.login_domains if org else None)
+    if not domains:
+        return base
+    scheme = "https"
+    if "://" in base:
+        scheme = base.split("://", 1)[0] or scheme
+    return f"{scheme}://{domains[0]}"
 
 
 def _suggest_username(session: Session, email: str) -> str | None:
@@ -1074,7 +1087,7 @@ def create_invite(
     params = {"token": invite.token}
     if org_hint:
         params["org"] = org_hint
-    invite_url = f"{request.base_url}invite?{urlencode(params)}"
+    invite_url = f"{_build_invite_frontend_base(request, org)}/invite?{urlencode(params)}"
     try:
         send_invite_email(
             to_email=invite.email,
@@ -1185,7 +1198,7 @@ def resend_invite(
     params = {"token": invite.token}
     if org_hint:
         params["org"] = org_hint
-    invite_url = f"{request.base_url}invite?{urlencode(params)}"
+    invite_url = f"{_build_invite_frontend_base(request, org)}/invite?{urlencode(params)}"
     try:
         send_invite_email(
             to_email=invite.email,
