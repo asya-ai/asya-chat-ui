@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(
         default=60 * 24 * 7, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES"
     )
-    invite_expire_hours: int = 72
+    invite_expire_hours: int = Field(
+        default=72, validation_alias="INVITE_EXPIRE_HOURS"
+    )
     files_base_dir: str = Field(default="/data/files", validation_alias="FILES_BASE_DIR")
     exec_host_files_dir: str = Field(
         default="", validation_alias="EXEC_HOST_FILES_DIR"

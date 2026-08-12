@@ -704,6 +704,13 @@ def _build_specs() -> list[_EnvSpec]:
             validate=_check_smtp_sender,
         ),
         _EnvSpec(
+            "INVITE_EXPIRE_HOURS",
+            "smtp",
+            "invite_expire_hours",
+            empty_means_missing=False,
+            validate=_check_positive_int("invite_expire_hours"),
+        ),
+        _EnvSpec(
             "PASSWORD_RESET_EXPIRE_HOURS",
             "smtp",
             "password_reset_expire_hours",

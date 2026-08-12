@@ -33,9 +33,10 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+    # wait_for_db polls; don't block on postgres healthcheck intervals.
     depends_on:
       postgres:
-        condition: service_healthy
+        condition: service_started
     command: ["sh", "-c", "uv run python app/db/wait_for_db.py && uv run alembic upgrade head"]
     restart: "no"
 
@@ -56,19 +57,13 @@ services:
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - ./data/files:/data/files
+    # Boot deps only. scraper / dind / executor-bootstrap are runtime; they
+    # start in parallel on `compose up` and must not gate API/workers.
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_started
-      scraper:
-        condition: service_started
-      dind:
-        condition: service_started
-      executor-bootstrap:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
       interval: 5s
@@ -124,11 +119,10 @@ services:
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - ./data/files:/data/files
+    # migrate already implies postgres; no scraper/dind/executor gate.
     depends_on:
       redis:
         condition: service_started
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "-Q", "generation,celery,embedding", "--concurrency=${WORKER_CONCURRENCY:-2}", "--prefetch-multiplier=1"]
@@ -148,8 +142,6 @@ services:
     depends_on:
       redis:
         condition: service_started
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "beat", "-l", "info"]
