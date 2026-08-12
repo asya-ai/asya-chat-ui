@@ -85,6 +85,18 @@ class ProviderSnapshot(BaseModel):
     detail: str | None = None
 
 
+class McpServerCheck(BaseModel):
+    id: str
+    name: str
+    transport: str | None = None
+    status: EnvStatus
+    latency_ms: float | None = None
+    tools: int | None = None
+    resources: int | None = None
+    prompts: int | None = None
+    detail: str | None = None
+
+
 class DataVolumeMetric(BaseModel):
     name: str
     value: str
@@ -129,6 +141,7 @@ class SystemDiagnosis(BaseModel):
     dependencies: list[DependencyCheck] = Field(default_factory=list)
     resources: list[ResourceMetric] = Field(default_factory=list)
     providers: list[ProviderSnapshot] = Field(default_factory=list)
+    mcp_servers: list[McpServerCheck] = Field(default_factory=list)
     data_volume: list[DataVolumeMetric] = Field(default_factory=list)
     workers: WorkersSnapshot = Field(default_factory=WorkersSnapshot)
     summary: dict[str, int] = Field(
@@ -1750,6 +1763,119 @@ def _collect_providers() -> list[ProviderSnapshot]:
     ]
 
 
+def _probe_mcp_server(server: Any) -> McpServerCheck:
+    import asyncio
+
+    from app.services.mcp.client import discover_server_capabilities
+
+    def _probe() -> dict[str, Any]:
+        return asyncio.run(discover_server_capabilities(server))
+
+    ms, discovered, error = _timed_ms(_probe)
+    if error:
+        return McpServerCheck(
+            id=server.id,
+            name=server.name,
+            transport=server.transport,
+            status="invalid",
+            latency_ms=round(ms, 1),
+            detail=_truncate(error),
+        )
+    assert isinstance(discovered, dict)
+    tools = discovered.get("tools") or []
+    resources = discovered.get("resources") or []
+    templates = discovered.get("resource_templates") or []
+    prompts = discovered.get("prompts") or []
+    tool_count = len(tools) if isinstance(tools, list) else 0
+    resource_count = (len(resources) if isinstance(resources, list) else 0) + (
+        len(templates) if isinstance(templates, list) else 0
+    )
+    prompt_count = len(prompts) if isinstance(prompts, list) else 0
+    return McpServerCheck(
+        id=server.id,
+        name=server.name,
+        transport=server.transport,
+        status="ok",
+        latency_ms=round(ms, 1),
+        tools=tool_count,
+        resources=resource_count,
+        prompts=prompt_count,
+        detail=(
+            f"{tool_count} tools, {resource_count} resources, {prompt_count} prompts"
+        ),
+    )
+
+
+def _collect_mcp_servers() -> list[McpServerCheck]:
+    from app.services.mcp.catalog import (
+        MCP_SERVERS_CONFIG_PATH,
+        CatalogLoadError,
+        load_mcp_catalog,
+    )
+
+    path = Path(MCP_SERVERS_CONFIG_PATH)
+    if not path.is_file():
+        return [
+            McpServerCheck(
+                id="catalog",
+                name="MCP catalog",
+                status="missing",
+                detail=f"Catalog not found: {path}",
+            )
+        ]
+
+    try:
+        servers = load_mcp_catalog(path)
+    except CatalogLoadError as exc:
+        return [
+            McpServerCheck(
+                id="catalog",
+                name="MCP catalog",
+                status="invalid",
+                detail=_truncate(str(exc)),
+            )
+        ]
+    except Exception as exc:
+        return [
+            McpServerCheck(
+                id="catalog",
+                name="MCP catalog",
+                status="invalid",
+                detail=_truncate(f"Failed to load catalog: {exc}"),
+            )
+        ]
+
+    if not servers:
+        return [
+            McpServerCheck(
+                id="catalog",
+                name="MCP catalog",
+                status="ok",
+                detail=f"No enabled servers in {path}",
+            )
+        ]
+
+    checks: list[McpServerCheck] = []
+    with ThreadPoolExecutor(max_workers=min(8, len(servers))) as executor:
+        futures = {executor.submit(_probe_mcp_server, server): server for server in servers}
+        for future in as_completed(futures):
+            server = futures[future]
+            try:
+                checks.append(future.result())
+            except Exception as exc:  # pragma: no cover - defensive
+                checks.append(
+                    McpServerCheck(
+                        id=server.id,
+                        name=server.name,
+                        transport=getattr(server, "transport", None),
+                        status="invalid",
+                        detail=_truncate(str(exc)),
+                    )
+                )
+    checks.sort(key=lambda item: item.id)
+    return checks
+
+
 def _dir_size_bytes(path: Path, *, max_entries: int = 50_000) -> tuple[int | None, str | None]:
     if not path.exists():
         return None, "Path does not exist"
@@ -1846,6 +1972,7 @@ def diagnose_system() -> SystemDiagnosis:
     dependencies: list[DependencyCheck] = []
     resources: list[ResourceMetric] = []
     providers: list[ProviderSnapshot] = []
+    mcp_servers: list[McpServerCheck] = []
     data_volume: list[DataVolumeMetric] = []
     workers = WorkersSnapshot()
 
@@ -1859,6 +1986,7 @@ def diagnose_system() -> SystemDiagnosis:
         futures[executor.submit(_collect_dependencies)] = ("dependencies", None)
         futures[executor.submit(_collect_resources)] = ("resources", None)
         futures[executor.submit(_collect_providers)] = ("providers", None)
+        futures[executor.submit(_collect_mcp_servers)] = ("mcp_servers", None)
         futures[executor.submit(_collect_data_volume)] = ("data_volume", None)
         futures[executor.submit(_collect_workers)] = ("workers", None)
 
@@ -1887,6 +2015,8 @@ def diagnose_system() -> SystemDiagnosis:
                 resources = value
             elif kind == "providers":
                 providers = value
+            elif kind == "mcp_servers":
+                mcp_servers = value
             elif kind == "data_volume":
                 data_volume = value
             elif kind == "workers":
@@ -1902,6 +2032,7 @@ def diagnose_system() -> SystemDiagnosis:
         dependencies=dependencies,
         resources=resources,
         providers=providers,
+        mcp_servers=mcp_servers,
         data_volume=data_volume,
         workers=workers,
         summary=summary,

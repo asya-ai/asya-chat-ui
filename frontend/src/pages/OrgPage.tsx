@@ -307,9 +307,9 @@ export const OrgPage = () => {
   useEffect(() => {
     if (!selectedOrg) return
     if (isSuperAdmin) {
-      modelApi.list().then(setModels).catch(() => null)
+      modelApi.list(undefined, { scope: "org" }).then(setModels).catch(() => null)
     } else {
-      modelApi.list(selectedOrg).then(setModels).catch(() => null)
+      modelApi.list(selectedOrg, { scope: "org" }).then(setModels).catch(() => null)
     }
   }, [selectedOrg, isSuperAdmin])
 
@@ -334,7 +334,7 @@ export const OrgPage = () => {
       const entries = await Promise.all(
         orgs.map(async (org) => {
           try {
-            const orgModels = await modelApi.list(org.id)
+            const orgModels = await modelApi.list(org.id, { scope: "org" })
             return [org.id, orgModels.map((model) => model.id)] as const
           } catch {
             return [org.id, []] as const

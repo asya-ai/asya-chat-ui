@@ -359,6 +359,18 @@ export type ProviderSnapshot = {
   detail?: string | null
 }
 
+export type McpServerCheck = {
+  id: string
+  name: string
+  transport?: string | null
+  status: "ok" | "invalid" | "missing"
+  latency_ms?: number | null
+  tools?: number | null
+  resources?: number | null
+  prompts?: number | null
+  detail?: string | null
+}
+
 export type DataVolumeMetric = {
   name: string
   value: string
@@ -403,6 +415,7 @@ export type SystemDiagnosis = {
   dependencies: DependencyCheck[]
   resources: ResourceMetric[]
   providers: ProviderSnapshot[]
+  mcp_servers: McpServerCheck[]
   data_volume: DataVolumeMetric[]
   workers: WorkersSnapshot
   summary: {

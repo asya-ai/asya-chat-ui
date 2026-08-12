@@ -48,6 +48,10 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
   - `AGENT_EMBEDDING_BATCH_SIZE` (default: 16)
   - `AGENT_EMBEDDING_DEVICE` (default: `cpu`)
   - Compose-injected runtime vars (shown in System diagnosis): `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `DOCKER_HOST`, `EXEC_HOST_FILES_DIR`, `HF_HOME`
+- MCP data sources (host-mounted catalog at `/config/mcp_servers.yaml`):
+  - `MCP_CACHE_TTL_SECONDS` (default: 300)
+  - `MCP_CALL_TIMEOUT_SECONDS` (default: 60)
+  - `MCP_MAX_RESULT_CHARS` (default: 50000)
 - Public URL:
   - `PUBLIC_API_BASE_URL` (used for links/externally visible API references)
 
@@ -101,6 +105,63 @@ Model IDs are configured in the Models settings UI, not via env vars.
 - `SCRAPER_PORT` (default: `3001`)
 - `SCRAPE_TEXT_LIMIT` (default: `20000`)
 - `PUPPETEER_EXECUTABLE_PATH` (optional custom browser binary path)
+
+## MCP Servers (model data sources)
+
+Catalog path is fixed: `/config/mcp_servers.yaml` (compose mounts `./config` → `/config:ro` on **backend** and **worker**). Edit [`config/mcp_servers.yaml`](../config/mcp_servers.yaml) on the host; processes rediscover tools on cache TTL (or restart).
+
+Defaults ship Latvia open data (no auth):
+
+- `data-lv` → `https://gateway.pipeworx.io/data-lv/mcp`
+- `stat-lv` → `https://gateway.pipeworx.io/stat-lv/mcp`
+
+### Catalog schema
+
+```yaml
+servers:
+  - id: my-server                 # required; no '__' in id
+    name: Display Name
+    enabled: true
+    transport: http               # http | sse | stdio
+    url: https://example.com/mcp  # required for http/sse
+    # command: npx                # required for stdio
+    # args: ["-y", "some-mcp"]
+    # env:                        # stdio child env; supports ${VAR}
+    #   FOO: bar
+    description: Optional blurb shown to the model.
+    headers:                      # optional auth for http/sse
+      Authorization: "Bearer ${SOME_API_TOKEN}"
+    include:
+      tools: true
+      resources: true
+      prompts: true
+    tool_allowlist: null          # or ["tool_a", "tool_b"]
+    tool_blocklist: null
+```
+
+- `${VAR}` in `headers` / stdio `env` expands from the process environment. If a var is missing, that server entry is skipped (logged).
+- Missing catalog file → no MCP tools (safe default).
+
+### How capabilities map to model tools
+
+| MCP feature | Tool names |
+|---|---|
+| Tools | `{server_id}__{tool_name}` |
+| Resources | `{server_id}__list_resources`, `{server_id}__read_resource` |
+| Prompts | `{server_id}__list_prompts`, `{server_id}__get_prompt` |
+
+Resource/prompt meta-tools are registered only when the server advertises or returns those capabilities.
+
+### System diagnosis
+
+Super-admin **System diagnosis** includes an **MCP servers** panel that:
+
+- marks the catalog **invalid** if `/config/mcp_servers.yaml` is unreadable or has broken YAML / structure
+- probes each enabled server (connect + list tools/resources/prompts) with latency and capability counts
+
+### Auth notes
+
+Static headers / bearer tokens via env expansion are supported. Do not commit secrets into the YAML; put tokens in `.env` and reference `${TOKEN_NAME}`. OAuth browser flows are not implemented.
 
 ## Network and Port Configuration
 

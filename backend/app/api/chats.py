@@ -86,6 +86,7 @@ from app.services.tools.web_tools import (
     web_scrape,
     web_search,
 )
+from app.services.mcp import register_mcp_tools
 from app.services.generation_event_bus import iter_generation_notifications
 from app.services.model_pricing import estimate_token_cost_usd
 from app.services.usage_limits import enforce_chat_usage_limits
@@ -853,6 +854,8 @@ def _build_tool_registry(
             ),
             _read_project_source_handler,
         )
+
+    register_mcp_tools(registry)
 
     logger.info("Registered tools: %s", [tool.name for tool in registry.list_specs()])
     return registry
@@ -2402,6 +2405,12 @@ async def _run_agentic_loop(
                                         item.get("chat_title"),
                                     )
                                 )
+                from app.services.mcp import mcp_source_items_from_tool_result
+
+                for source in mcp_source_items_from_tool_result(
+                    call.name, result.output
+                ):
+                    sources.append(source)
                 messages.append(
                     {
                         "role": "tool",

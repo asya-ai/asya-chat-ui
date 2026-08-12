@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
+from app.services.mcp import mcp_guidance_for_tools
+
 MAIN_SYSTEM_PROMPT = (
     "Follow the user's instructions carefully. "
     "Use tools when needed, but never invent tool outputs. "
@@ -176,6 +178,9 @@ def build_system_prompt_messages(
             prompt = TOOL_SYSTEM_PROMPTS.get(name)
             if prompt:
                 messages.append({"role": "system", "content": prompt})
+    mcp_guidance = mcp_guidance_for_tools(tool_names)
+    if mcp_guidance:
+        messages.append({"role": "system", "content": mcp_guidance})
     locale_instruction = _locale_prompt(locale)
     if locale_instruction:
         messages.append({"role": "system", "content": locale_instruction})

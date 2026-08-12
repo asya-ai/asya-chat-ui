@@ -1,11 +1,13 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -31,7 +33,19 @@ for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     if logger_name == "uvicorn.access":
         logger.addFilter(_HealthzFilter())
 
-app = FastAPI(title="ChatUI API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from app.services.mcp import refresh_mcp_cache
+
+    try:
+        await refresh_mcp_cache(force=True)
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to warm MCP tool cache")
+    yield
+
+
+app = FastAPI(title="ChatUI API", lifespan=lifespan)
 app.include_router(api_router)
 
 

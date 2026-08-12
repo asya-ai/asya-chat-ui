@@ -496,8 +496,13 @@ export const systemDiagnosisApi = {
 }
 
 export const modelApi = {
-  list: (orgId?: string) =>
-    apiFetch<ChatModel[]>(orgId ? `/models?org_id=${orgId}` : "/models"),
+  list: (orgId?: string, options?: { scope?: "allowed" | "org" }) => {
+    const params = new URLSearchParams()
+    if (orgId) params.set("org_id", orgId)
+    if (options?.scope) params.set("scope", options.scope)
+    const query = params.toString()
+    return apiFetch<ChatModel[]>(query ? `/models?${query}` : "/models")
+  },
   create: (payload: {
     org_id: string
     provider: string

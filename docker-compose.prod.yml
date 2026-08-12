@@ -56,6 +56,7 @@ services:
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - files-data:/data/files
+      - ./config:/config:ro
     networks:
       - app
       - executor
@@ -94,6 +95,7 @@ services:
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - files-data:/data/files
+      - ./config:/config:ro
     networks:
       - app
       - executor

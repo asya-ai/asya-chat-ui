@@ -1040,7 +1040,9 @@ export const ChatPage = () => {
   const replaceChatMessagesFor = useCallback(
     (targetChatId: string, messages: ChatMessage[]) => {
       queryClient.setQueryData<ChatMessage[]>(["chatMessages", targetChatId], (prev) => {
-        if (!messages.length) return messages
+        // Never clobber local/optimistic turns with an empty server snapshot
+        // (common right after create/send races or failed pre-persist WS errors).
+        if (!messages.length) return prev?.length ? prev : messages
         if (!prev?.length) return messages
         const preservedSteps = new Map<string, string[]>()
         const preservedParts = new Map<string, NonNullable<ChatMessage["stream_parts"]>>()

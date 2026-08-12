@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from app.services.mcp import mcp_action_summary
+
 
 def _ensure_list(value: Any) -> list[Any]:
     if value is None:
@@ -40,6 +42,9 @@ def _display_url(url: str) -> str:
 def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None) -> str:
     """Human-readable one-liner for non-debug thinking activity."""
     args = arguments if isinstance(arguments, dict) else {}
+    mcp_summary = mcp_action_summary(name, args)
+    if mcp_summary:
+        return mcp_summary
     if name == "web_search":
         queries = _ensure_list(args.get("queries")) or _ensure_list(args.get("query"))
         query = next(

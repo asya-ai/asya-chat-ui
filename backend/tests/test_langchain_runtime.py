@@ -146,6 +146,59 @@ async def test_langchain_tool_executor_executes_registry_tool():
 
 
 @pytest.mark.asyncio
+async def test_langchain_executor_accepts_leading_underscore_schema_fields():
+    registry = ToolRegistry()
+    seen: dict = {}
+
+    async def _capture(args: dict) -> ToolResult:
+        seen.update(args)
+        return ToolResult(name="data-lv__ask_pipeworx", output={"ok": True})
+
+    registry.register(
+        ToolSpec(
+            name="data-lv__ask_pipeworx",
+            description="Ask",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "_apiKey": {"type": "string", "description": "secret"},
+                    "question": {"type": "string"},
+                },
+                "required": ["question"],
+            },
+        ),
+        _capture,
+    )
+    executor = LangChainToolExecutor(registry)
+    result = await executor.execute(
+        "data-lv__ask_pipeworx",
+        {"_apiKey": "tok", "question": "population?"},
+    )
+    assert result.output == {"ok": True}
+    assert seen == {"_apiKey": "tok", "question": "population?"}
+
+
+def test_json_schema_to_model_sanitizes_leading_underscores():
+    from app.services.langchain_runtime.tool_adapters import _json_schema_to_model
+
+    model, field_map = _json_schema_to_model(
+        "data-lv__tool",
+        {
+            "type": "object",
+            "properties": {
+                "_apiKey": {"type": "string"},
+                "query": {"type": "string"},
+            },
+            "required": ["query"],
+        },
+    )
+    assert "field_apiKey" in model.model_fields
+    assert "query" in model.model_fields
+    assert field_map["field_apiKey"] == "_apiKey"
+    assert field_map["query"] == "query"
+
+
+@pytest.mark.asyncio
 async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
     registry = ToolRegistry()
 

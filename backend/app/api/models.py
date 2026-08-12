@@ -276,10 +276,42 @@ def create_model(
 @router.get("", response_model=list[ModelRead])
 def list_models(
     org_id: str | None = None,
+    scope: str | None = None,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ModelRead]:
+    # scope=org → org-enabled catalog for settings admins.
+    # default/allowed → models the current user can actually send with (team ∩ org).
+    requested_scope = (scope or "allowed").strip().lower()
+    if requested_scope not in {"allowed", "org"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid scope (expected allowed or org)",
+        )
     use_org_scope = False
+    if current_user.is_super_admin and not org_id and requested_scope == "org":
+        models = session.exec(
+            select(ChatModel)
+            .where(ChatModel.is_active.is_(True))
+            .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
+        ).all()
+        ensure_models_capabilities(session, models)
+        return [
+            ModelRead(
+                id=str(model.id),
+                provider=model.provider,
+                model_name=model.model_name,
+                display_name=model.display_name,
+                is_active=model.is_active,
+                display_order=model.display_order,
+                context_length=model.context_length,
+                supports_image_input=model.supports_image_input,
+                supports_image_output=model.supports_image_output,
+                uses_responses_api=model.uses_responses_api,
+                reasoning_effort=model.reasoning_effort,
+            )
+            for model in models
+        ]
     if current_user.is_super_admin and org_id:
         try:
             org_uuid = UUID(org_id)
@@ -287,8 +319,9 @@ def list_models(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
             ) from exc
-        use_org_scope = True
+        use_org_scope = requested_scope == "org"
     elif current_user.is_super_admin and not org_id:
+        # Super-admin chat picker without org context: global active catalog.
         models = session.exec(
             select(ChatModel)
             .where(ChatModel.is_active.is_(True))
@@ -318,7 +351,6 @@ def list_models(
         if not membership:
             return []
         org_uuid = membership.org_id
-        # Org admins may request full org catalog when managing settings.
         if org_id:
             try:
                 requested = UUID(org_id)
@@ -326,12 +358,16 @@ def list_models(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
                 ) from exc
-            if requested == org_uuid:
-                try:
-                    require_org_admin(session, org_uuid, current_user.id)
-                    use_org_scope = True
-                except HTTPException:
-                    use_org_scope = False
+            if requested != org_uuid:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="Org mismatch"
+                )
+        if requested_scope == "org":
+            try:
+                require_org_admin(session, org_uuid, current_user.id)
+                use_org_scope = True
+            except HTTPException:
+                use_org_scope = False
 
     if use_org_scope:
         enabled_model_ids = session.exec(

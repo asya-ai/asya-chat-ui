@@ -8,6 +8,7 @@ import type {
   DependencyCheck,
   DiskUsageInfo,
   EnvKeyDiagnosis,
+  McpServerCheck,
   ProviderSnapshot,
   ResourceMetric,
   SystemDiagnosis,
@@ -589,6 +590,59 @@ export const DiagnosisPage = () => {
                         <Badge variant={statusVariant(item.status)}>{healthLabel(item.status)}</Badge>
                       </TableCell>
                       <TableCell className="tabular-nums">{formatLatency(item.latency_ms)}</TableCell>
+                      <TableCell className="max-w-xl text-sm text-muted-foreground">
+                        {item.detail || "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {(diagnosis?.mcp_servers?.length ?? 0) > 0 ? (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg font-medium">{t("diagnosis_mcp_title")}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("diagnosis_mcp_server")}</TableHead>
+                    <TableHead>{t("diagnosis_mcp_transport")}</TableHead>
+                    <TableHead>{t("diagnosis_status")}</TableHead>
+                    <TableHead>{t("diagnosis_latency")}</TableHead>
+                    <TableHead>{t("diagnosis_mcp_tools")}</TableHead>
+                    <TableHead>{t("diagnosis_detail")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(diagnosis?.mcp_servers ?? []).map((item: McpServerCheck) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-medium">
+                        <div>{item.name}</div>
+                        <div className="text-xs text-muted-foreground">{item.id}</div>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {item.transport || "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant(item.status)}>{healthLabel(item.status)}</Badge>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{formatLatency(item.latency_ms)}</TableCell>
+                      <TableCell className="tabular-nums text-sm">
+                        {item.tools == null && item.resources == null && item.prompts == null
+                          ? "—"
+                          : [
+                              item.tools != null ? `${item.tools} tools` : null,
+                              item.resources != null ? `${item.resources} res` : null,
+                              item.prompts != null ? `${item.prompts} prompts` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(", ")}
+                      </TableCell>
                       <TableCell className="max-w-xl text-sm text-muted-foreground">
                         {item.detail || "—"}
                       </TableCell>

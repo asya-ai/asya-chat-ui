@@ -10,6 +10,7 @@ from app.services.providers.base import ChatUsage
 from app.services.tools.previews import tool_call_action_summary
 from app.services.tools.registry import ToolResult, ToolRegistry
 from app.services.langchain_runtime.tool_adapters import LangChainToolExecutor
+from app.services.mcp import mcp_source_items_from_tool_result
 
 WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
 WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
@@ -469,6 +470,9 @@ async def run_agentic_loop_langchain(
                             other_sources.append(
                                 _source_item(f"/chat/{cid}", item.get("chat_title"))
                             )
+            else:
+                for source in mcp_source_items_from_tool_result(call.name, result.output):
+                    other_sources.append(source)
             messages.append(
                 {
                     "role": "tool",

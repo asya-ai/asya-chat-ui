@@ -57,6 +57,7 @@ services:
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - ./data/files:/data/files
+      - ./config:/config:ro
     # Boot deps only. scraper / dind / executor-bootstrap are runtime; they
     # start in parallel on `compose up` and must not gate API/workers.
     depends_on:
@@ -119,6 +120,7 @@ services:
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - ./data/files:/data/files
+      - ./config:/config:ro
     # migrate already implies postgres; no scraper/dind/executor gate.
     depends_on:
       redis:

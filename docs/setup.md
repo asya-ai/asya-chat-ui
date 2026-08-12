@@ -28,6 +28,12 @@ Database variable note:
 - `docker-compose.yml` currently maps `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME` into Postgres.
 - To avoid startup issues in local compose, set both sets in `.env`.
 
+MCP data sources (optional):
+
+- Compose mounts `./config` into backend/worker as `/config`.
+- Default catalog: `config/mcp_servers.yaml` (Latvia open data + statistics MCP servers).
+- See `docs/configuration.md` → **MCP Servers** to add more (including authenticated) endpoints.
+
 ## 2) Start Local Development
 
 ```bash
