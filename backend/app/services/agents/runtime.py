@@ -292,6 +292,9 @@ def search_agent_chunks(
                 AgentEmbedding.model_name == settings.agent_embedding_model,
             )
         ).one()
+        # Joined count queries can return a Row instead of a bare int.
+        if not isinstance(embedding_count, (int, float)):
+            embedding_count = embedding_count[0]
         embedding_count = int(embedding_count or 0)
 
         dense_query = (
