@@ -86,6 +86,8 @@ from app.services.tools.web_tools import (
     web_search,
 )
 from app.services.generation_event_bus import iter_generation_notifications
+from app.services.model_pricing import estimate_token_cost_usd
+from app.services.usage_limits import enforce_chat_usage_limits
 from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -2544,6 +2546,116 @@ class MessageUsageRead(BaseModel):
     cached_tokens: int = 0
     thinking_tokens: int = 0
     total_tokens: int = 0
+    cost_usd: float | None = None
+
+
+def _estimate_message_usage_cost(
+    *,
+    provider: str | None,
+    model_name: str | None,
+    display_name: str | None,
+    input_tokens: int,
+    output_tokens: int,
+    cached_tokens: int,
+    thinking_tokens: int,
+) -> float | None:
+    cost = estimate_token_cost_usd(
+        provider,
+        model_name,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        thinking_tokens,
+    )
+    if cost is not None or not display_name:
+        return cost
+    return estimate_token_cost_usd(
+        provider,
+        display_name,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        thinking_tokens,
+    )
+
+
+def build_message_usage_map(
+    session: Session, message_ids: list[UUID]
+) -> dict[UUID, MessageUsageRead]:
+    if not message_ids:
+        return {}
+    usage_rows = session.exec(
+        select(
+            UsageEvent.message_id,
+            UsageEvent.model_id,
+            func.sum(UsageEvent.input_tokens),
+            func.sum(UsageEvent.output_tokens),
+            func.sum(UsageEvent.cached_tokens),
+            func.sum(UsageEvent.thinking_tokens),
+            func.sum(UsageEvent.total_tokens),
+        )
+        .where(UsageEvent.message_id.in_(message_ids))
+        .group_by(UsageEvent.message_id, UsageEvent.model_id)
+    ).all()
+    model_ids = {row[1] for row in usage_rows if row[1] is not None}
+    models = (
+        session.exec(select(ChatModel).where(ChatModel.id.in_(model_ids))).all()
+        if model_ids
+        else []
+    )
+    model_map = {model.id: model for model in models}
+
+    usage_by_message: dict[UUID, MessageUsageRead] = {}
+    missing_cost: set[UUID] = set()
+    for row in usage_rows:
+        (
+            message_id,
+            model_id,
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            thinking_tokens,
+            total_tokens,
+        ) = row
+        if message_id is None:
+            continue
+        input_tokens = int(input_tokens or 0)
+        output_tokens = int(output_tokens or 0)
+        cached_tokens = int(cached_tokens or 0)
+        thinking_tokens = int(thinking_tokens or 0)
+        total_tokens = int(total_tokens or 0)
+        usage = usage_by_message.get(message_id)
+        if usage is None:
+            usage = MessageUsageRead()
+            usage_by_message[message_id] = usage
+        usage.input_tokens += input_tokens
+        usage.output_tokens += output_tokens
+        usage.cached_tokens += cached_tokens
+        usage.thinking_tokens += thinking_tokens
+        usage.total_tokens += total_tokens
+
+        token_total = input_tokens + output_tokens + cached_tokens + thinking_tokens
+        if token_total <= 0:
+            continue
+        model = model_map.get(model_id) if model_id is not None else None
+        cost = _estimate_message_usage_cost(
+            provider=model.provider if model else None,
+            model_name=model.model_name if model else None,
+            display_name=model.display_name if model else None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            thinking_tokens=thinking_tokens,
+        )
+        if cost is None:
+            missing_cost.add(message_id)
+            continue
+        usage.cost_usd = (usage.cost_usd or 0.0) + cost
+
+    for message_id in missing_cost:
+        if message_id in usage_by_message:
+            usage_by_message[message_id].cost_usd = None
+    return usage_by_message
 
 
 class ChatMessageRead(BaseModel):
@@ -2705,6 +2817,13 @@ async def _stream_message_ws(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    try:
+        enforce_chat_usage_limits(
+            session, org_id=chat.org_id, user_id=current_user.id
+        )
+    except HTTPException as exc:
+        await _ws_send_event(websocket, {"error": str(exc.detail)})
+        return
 
     model_id = chat.model_id
     if payload.model_id:
@@ -2840,6 +2959,13 @@ async def _stream_edit_ws(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    try:
+        enforce_chat_usage_limits(
+            session, org_id=chat.org_id, user_id=current_user.id
+        )
+    except HTTPException as exc:
+        await _ws_send_event(websocket, {"error": str(exc.detail)})
+        return
 
     message = session.exec(
         select(ChatMessage).where(
@@ -3293,33 +3419,9 @@ def list_messages(
 
     usage_by_message: dict[UUID, MessageUsageRead] = {}
     if messages:
-        usage_rows = session.exec(
-            select(
-                UsageEvent.message_id,
-                func.sum(UsageEvent.input_tokens),
-                func.sum(UsageEvent.output_tokens),
-                func.sum(UsageEvent.cached_tokens),
-                func.sum(UsageEvent.thinking_tokens),
-                func.sum(UsageEvent.total_tokens),
-            )
-            .where(
-                UsageEvent.message_id.in_([message.id for message in messages])
-            )
-            .group_by(UsageEvent.message_id)
-        ).all()
-        for row in usage_rows:
-            message_id, input_tokens, output_tokens, cached_tokens, thinking_tokens, total_tokens = (
-                row
-            )
-            if message_id is None:
-                continue
-            usage_by_message[message_id] = MessageUsageRead(
-                input_tokens=int(input_tokens or 0),
-                output_tokens=int(output_tokens or 0),
-                cached_tokens=int(cached_tokens or 0),
-                thinking_tokens=int(thinking_tokens or 0),
-                total_tokens=int(total_tokens or 0),
-            )
+        usage_by_message = build_message_usage_map(
+            session, [message.id for message in messages]
+        )
 
     results: list[ChatMessageRead] = []
     for message in messages:
@@ -3850,6 +3952,7 @@ async def create_message(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    enforce_chat_usage_limits(session, org_id=chat.org_id, user_id=current_user.id)
 
     model_id = chat.model_id
     if payload.model_id:
@@ -4724,6 +4827,7 @@ async def edit_message(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    enforce_chat_usage_limits(session, org_id=chat.org_id, user_id=current_user.id)
 
     message = session.exec(
         select(ChatMessage).where(

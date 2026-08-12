@@ -619,7 +619,11 @@ export const ChatPage = () => {
         return
       }
       if ("error" in event && typeof event.error === "string") {
-        const errorText = event.error.trim() || t("chat_generation_failed")
+        const raw = event.error.trim()
+        const errorText =
+          raw === "Chat usage limit exceeded"
+            ? t("chat_usage_limit_exceeded")
+            : raw || t("chat_generation_failed")
         updateChatMessagesFor(targetChatId, (prev) =>
           prev.map((msg) =>
             matchesAssistant(msg)
@@ -893,7 +897,11 @@ export const ChatPage = () => {
         prev.map((msg) => {
           if (!(msg.id === assistantId || msg.task_id === taskId)) return msg
           if (status === "failed") {
-            const fallback = (errorMessage || "").trim() || t("chat_generation_failed")
+            const raw = (errorMessage || "").trim()
+            const fallback =
+              raw === "Chat usage limit exceeded"
+                ? t("chat_usage_limit_exceeded")
+                : raw || t("chat_generation_failed")
             return {
               ...msg,
               content: msg.content?.trim().length ? msg.content : fallback,

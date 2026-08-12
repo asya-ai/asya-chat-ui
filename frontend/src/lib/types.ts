@@ -6,6 +6,7 @@ export type Org = {
   is_frozen: boolean
   file_retention_days: number | null
   chat_retention_days: number | null
+  cost_ceiling_usd?: number | null
 }
 
 export type OrgUpdate = {
@@ -14,6 +15,7 @@ export type OrgUpdate = {
   is_frozen?: boolean
   file_retention_days?: number | null
   chat_retention_days?: number | null
+  cost_ceiling_usd?: number | null
 }
 
 export type OrgWebSettings = {
@@ -117,6 +119,7 @@ export type MessageUsage = {
   cached_tokens: number
   thinking_tokens: number
   total_tokens: number
+  cost_usd?: number | null
 }
 
 export type ChatMessage = {
@@ -322,6 +325,7 @@ export type OrgMember = {
   role: string
   is_super_admin: boolean
   teams?: { id: string; name: string }[]
+  cost_ceiling_usd?: number | null
 }
 
 export type Team = {

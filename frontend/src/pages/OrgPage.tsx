@@ -141,8 +141,13 @@ export const OrgPage = () => {
   const [renameOrgId, setRenameOrgId] = useState<string | null>(null)
   const [renameOrgName, setRenameOrgName] = useState("")
   const [retentionOrgId, setRetentionOrgId] = useState<string | null>(null)
+  const [costCeilingOrgId, setCostCeilingOrgId] = useState<string | null>(null)
+  const [costCeilingDraftsByOrgId, setCostCeilingDraftsByOrgId] = useState<
+    Record<string, string | null>
+  >({})
   const [deleteOrgId, setDeleteOrgId] = useState<string | null>(null)
   const retentionOrg = orgs.find((org) => org.id === retentionOrgId) ?? null
+  const costCeilingOrg = orgs.find((org) => org.id === costCeilingOrgId) ?? null
 
   const isImageModel = (model: ChatModel) => {
     if (model.supports_image_output === true) return true
@@ -229,6 +234,16 @@ export const OrgPage = () => {
             chatRetentionDays:
               org.chat_retention_days === null ? null : String(org.chat_retention_days ?? 90),
           },
+        ])
+      )
+    )
+    setCostCeilingDraftsByOrgId(
+      Object.fromEntries(
+        data.map((org) => [
+          org.id,
+          org.cost_ceiling_usd === null || org.cost_ceiling_usd === undefined
+            ? null
+            : String(org.cost_ceiling_usd),
         ])
       )
     )
@@ -763,6 +778,63 @@ export const OrgPage = () => {
     }))
   }
 
+  const openCostCeilingDialog = (org: Org) => {
+    setCostCeilingDraftsByOrgId((prev) => ({
+      ...prev,
+      [org.id]:
+        org.cost_ceiling_usd === null || org.cost_ceiling_usd === undefined
+          ? null
+          : String(org.cost_ceiling_usd),
+    }))
+    setCostCeilingOrgId(org.id)
+  }
+
+  const saveOrgCostCeiling = async (org: Org) => {
+    const draft = costCeilingDraftsByOrgId[org.id]
+    const costCeilingUsd =
+      draft === null || draft === undefined || draft.trim() === "" ? null : Number(draft)
+    if (
+      costCeilingUsd !== null &&
+      (!Number.isFinite(costCeilingUsd) || costCeilingUsd < 0)
+    ) {
+      setError(t("org_usage_limit_invalid"))
+      return
+    }
+    const updated = await orgApi.update(org.id, {
+      cost_ceiling_usd: costCeilingUsd,
+    })
+    setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    setCostCeilingDraftsByOrgId((prev) => ({
+      ...prev,
+      [updated.id]:
+        updated.cost_ceiling_usd === null || updated.cost_ceiling_usd === undefined
+          ? null
+          : String(updated.cost_ceiling_usd),
+    }))
+    setError(null)
+    setCostCeilingOrgId(null)
+  }
+
+  const updateMemberCostCeiling = async (member: OrgMember, rawValue: string) => {
+    if (!usersOrgId) return
+    const trimmed = rawValue.trim()
+    const costCeilingUsd = trimmed === "" ? null : Number(trimmed)
+    if (
+      costCeilingUsd !== null &&
+      (!Number.isFinite(costCeilingUsd) || costCeilingUsd < 0)
+    ) {
+      setError(t("org_usage_limit_invalid"))
+      return
+    }
+    const updated = await orgApi.updateMember(usersOrgId, member.user_id, {
+      cost_ceiling_usd: costCeilingUsd,
+    })
+    setMembers((prev) =>
+      prev.map((item) => (item.user_id === updated.user_id ? updated : item))
+    )
+    setError(null)
+  }
+
   const toggleOrgFrozen = async (org: Org) => {
     const updated = await orgApi.update(org.id, { is_frozen: !org.is_frozen })
     setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
@@ -1012,6 +1084,13 @@ export const OrgPage = () => {
                             onClick={() => setRetentionOrgId(org.id)}
                           >
                             Retention
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openCostCeilingDialog(org)}
+                          >
+                            {t("org_usage_limit")}
                           </Button>
                           <Button variant="outline" size="sm" onClick={() => openRenameDialog(org)}>
                             {t("org_rename")}
@@ -1270,6 +1349,33 @@ export const OrgPage = () => {
                       </div>
                     </div>
                   ) : null}
+                  {orgSettingsId
+                    ? (() => {
+                        const org = orgs.find((item) => item.id === orgSettingsId)
+                        if (!org) return null
+                        return (
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-4">
+                            <div>
+                              <p className="font-medium text-sm">{t("org_usage_limit_title")}</p>
+                              <p className="text-muted-foreground text-xs">
+                                {org.cost_ceiling_usd === null ||
+                                org.cost_ceiling_usd === undefined
+                                  ? t("org_usage_limit_unlimited")
+                                  : `$${org.cost_ceiling_usd}`}
+                              </p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openCostCeilingDialog(org)}
+                              disabled={!org.is_active}
+                            >
+                              {t("org_usage_limit")}
+                            </Button>
+                          </div>
+                        )
+                      })()
+                    : null}
                 </CardContent>
               </Card>
             ) : null}
@@ -1301,6 +1407,9 @@ export const OrgPage = () => {
                     <TableHead>{t("org_users_email")}</TableHead>
                     <TableHead>{t("org_users_role")}</TableHead>
                     <TableHead>{t("org_users_teams")}</TableHead>
+                    {canManageOrgSettings ? (
+                      <TableHead>{t("org_users_cost_ceiling")}</TableHead>
+                    ) : null}
                     {isSuperAdmin ? <TableHead>{t("org_users_superadmin")}</TableHead> : null}
                     <TableHead>{t("org_users_actions")}</TableHead>
                   </TableRow>
@@ -1338,6 +1447,35 @@ export const OrgPage = () => {
                           ? member.teams.map((team) => team.name).join(", ")
                           : t("org_users_no_teams")}
                       </TableCell>
+                      {canManageOrgSettings ? (
+                        <TableCell>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="w-28"
+                            defaultValue={
+                              member.cost_ceiling_usd === null ||
+                              member.cost_ceiling_usd === undefined
+                                ? ""
+                                : String(member.cost_ceiling_usd)
+                            }
+                            key={`${member.user_id}-${member.cost_ceiling_usd ?? "none"}`}
+                            placeholder={t("org_usage_limit_unlimited")}
+                            aria-label={t("org_users_cost_ceiling")}
+                            onBlur={(event) => {
+                              const next = event.target.value.trim()
+                              const current =
+                                member.cost_ceiling_usd === null ||
+                                member.cost_ceiling_usd === undefined
+                                  ? ""
+                                  : String(member.cost_ceiling_usd)
+                              if (next === current) return
+                              void updateMemberCostCeiling(member, event.target.value)
+                            }}
+                          />
+                        </TableCell>
+                      ) : null}
                       {isSuperAdmin ? (
                         <TableCell>
                           <Switch
@@ -1367,6 +1505,8 @@ export const OrgPage = () => {
                     <TableRow key={invite.id}>
                       <TableCell>{invite.email}</TableCell>
                       <TableCell>{t("org_users_invited")}</TableCell>
+                      <TableCell />
+                      {canManageOrgSettings ? <TableCell /> : null}
                       {isSuperAdmin ? <TableCell /> : null}
                       <TableCell>
                         <div className="flex flex-wrap gap-2">
@@ -1958,6 +2098,74 @@ export const OrgPage = () => {
             <Button
               onClick={() => retentionOrg && saveOrgRetention(retentionOrg)}
               disabled={!retentionOrg?.is_active}
+            >
+              {t("common_save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(costCeilingOrg)}
+        onOpenChange={(open) => (!open ? setCostCeilingOrgId(null) : null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("org_usage_limit_title")}</DialogTitle>
+            <DialogDescription>
+              {t("org_usage_limit_desc")}
+              {costCeilingOrg ? ` (${costCeilingOrg.name})` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {costCeilingOrg ? (
+            <div className="flex flex-col gap-3">
+              <label className="font-medium text-sm" htmlFor="org-cost-ceiling">
+                {t("org_usage_limit_usd")}
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  id="org-cost-ceiling"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="w-40"
+                  placeholder={t("org_usage_limit_unlimited")}
+                  value={costCeilingDraftsByOrgId[costCeilingOrg.id] ?? ""}
+                  onChange={(event) =>
+                    setCostCeilingDraftsByOrgId((prev) => ({
+                      ...prev,
+                      [costCeilingOrg.id]: event.target.value,
+                    }))
+                  }
+                  disabled={!costCeilingOrg.is_active}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setCostCeilingDraftsByOrgId((prev) => ({
+                      ...prev,
+                      [costCeilingOrg.id]: null,
+                    }))
+                  }
+                  disabled={!costCeilingOrg.is_active}
+                >
+                  {t("org_usage_limit_clear")}
+                </Button>
+              </div>
+              {costCeilingDraftsByOrgId[costCeilingOrg.id] === null ||
+              costCeilingDraftsByOrgId[costCeilingOrg.id] === "" ? (
+                <p className="text-muted-foreground text-sm">{t("org_usage_limit_unlimited")}</p>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCostCeilingOrgId(null)}>
+              {t("common_cancel")}
+            </Button>
+            <Button
+              onClick={() => costCeilingOrg && saveOrgCostCeiling(costCeilingOrg)}
+              disabled={!costCeilingOrg?.is_active}
             >
               {t("common_save")}
             </Button>

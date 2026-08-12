@@ -390,6 +390,15 @@ export const orgApi = {
       method: "PATCH",
       body: JSON.stringify({ role }),
     }),
+  updateMember: (
+    orgId: string,
+    userId: string,
+    payload: { role?: string; cost_ceiling_usd?: number | null }
+  ) =>
+    apiFetch<OrgMember>(`/orgs/${orgId}/members/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   removeMember: (orgId: string, userId: string) =>
     apiFetch(`/orgs/${orgId}/members/${userId}`, {
       method: "DELETE",

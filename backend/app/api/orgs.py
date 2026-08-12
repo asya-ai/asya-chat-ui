@@ -42,6 +42,7 @@ class OrgRead(BaseModel):
     is_frozen: bool
     file_retention_days: int | None
     chat_retention_days: int | None
+    cost_ceiling_usd: float | None = None
 
 
 class OrgMemberTeamRead(BaseModel):
@@ -55,10 +56,12 @@ class OrgMemberRead(BaseModel):
     role: str
     is_super_admin: bool
     teams: list[OrgMemberTeamRead] = []
+    cost_ceiling_usd: float | None = None
 
 
 class OrgMemberUpdateRequest(BaseModel):
-    role: str
+    role: str | None = None
+    cost_ceiling_usd: float | None = Field(default=None, ge=0)
 
 
 class OrgUpdateRequest(BaseModel):
@@ -68,6 +71,7 @@ class OrgUpdateRequest(BaseModel):
     is_frozen: bool | None = None
     file_retention_days: int | None = Field(default=None, ge=0)
     chat_retention_days: int | None = Field(default=None, ge=0)
+    cost_ceiling_usd: float | None = Field(default=None, ge=0)
 
 
 class OrgWebSettingsRead(BaseModel):
@@ -195,6 +199,32 @@ def _ensure_unique_slug(session: Session, base: str, org_id: UUID | None = None)
         suffix += 1
 
 
+def _to_org_read(org: Org) -> OrgRead:
+    return OrgRead(
+        id=str(org.id),
+        name=org.name,
+        slug=org.slug,
+        is_active=org.is_active,
+        is_frozen=org.is_frozen,
+        file_retention_days=org.file_retention_days,
+        chat_retention_days=org.chat_retention_days,
+        cost_ceiling_usd=org.cost_ceiling_usd,
+    )
+
+
+def _to_member_read(
+    session: Session, *, org_id: UUID, user: User, role_name: str
+) -> OrgMemberRead:
+    return OrgMemberRead(
+        user_id=str(user.id),
+        email=user.email,
+        role=role_name,
+        is_super_admin=user.is_super_admin,
+        teams=_member_teams(session, org_id, user.id),
+        cost_ceiling_usd=user.cost_ceiling_usd,
+    )
+
+
 @router.post("", response_model=OrgRead)
 def create_org(
     payload: OrgCreateRequest,
@@ -247,15 +277,7 @@ def create_org(
             session.add(membership)
             session.commit()
 
-    return OrgRead(
-        id=str(org.id),
-        name=org.name,
-        slug=org.slug,
-        is_active=org.is_active,
-        is_frozen=org.is_frozen,
-        file_retention_days=org.file_retention_days,
-        chat_retention_days=org.chat_retention_days,
-    )
+    return _to_org_read(org)
 
 
 @router.get("", response_model=list[OrgRead])
@@ -266,15 +288,7 @@ def list_orgs(
     if current_user.is_super_admin:
         orgs = session.exec(select(Org)).all()
         return [
-            OrgRead(
-                id=str(org.id),
-                name=org.name,
-                slug=org.slug,
-                is_active=org.is_active,
-                is_frozen=org.is_frozen,
-                file_retention_days=org.file_retention_days,
-                chat_retention_days=org.chat_retention_days,
-            )
+            _to_org_read(org)
             for org in orgs
         ]
 
@@ -289,15 +303,7 @@ def list_orgs(
     if not org:
         return []
     return [
-        OrgRead(
-            id=str(org.id),
-            name=org.name,
-            slug=org.slug,
-            is_active=org.is_active,
-            is_frozen=org.is_frozen,
-            file_retention_days=org.file_retention_days,
-            chat_retention_days=org.chat_retention_days,
-        )
+        _to_org_read(org)
     ]
 
 
@@ -312,15 +318,7 @@ def list_my_orgs(
         .where(OrgMembership.user_id == current_user.id, Org.is_active == True)
     ).all()
     return [
-        OrgRead(
-            id=str(org.id),
-            name=org.name,
-            slug=org.slug,
-            is_active=org.is_active,
-            is_frozen=org.is_frozen,
-            file_retention_days=org.file_retention_days,
-            chat_retention_days=org.chat_retention_days,
-        )
+        _to_org_read(org)
         for org in orgs
     ]
 
@@ -487,12 +485,8 @@ def list_members(
         if not user or not role:
             continue
         members.append(
-            OrgMemberRead(
-                user_id=str(user.id),
-                email=user.email,
-                role=role.name,
-                is_super_admin=user.is_super_admin,
-                teams=_member_teams(session, org_uuid, user.id),
+            _to_member_read(
+                session, org_id=org_uuid, user=user, role_name=role.name
             )
         )
     return members
@@ -516,7 +510,11 @@ def update_member(
 
     if not current_user.is_super_admin:
         require_org_admin(session, org_uuid, current_user.id)
-        if current_user.id == user_uuid and payload.role == "member":
+        if (
+            current_user.id == user_uuid
+            and payload.role is not None
+            and payload.role == "member"
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot demote yourself to member",
@@ -532,23 +530,43 @@ def update_member(
             status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
         )
 
-    ensure_default_roles(session, org_uuid)
-    role = session.exec(
-        select(Role).where(Role.org_id == org_uuid, Role.name == payload.role)
-    ).first()
-    if not role:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
-
-    membership.role_id = role.id
-    session.add(membership)
-    session.commit()
     user = session.exec(select(User).where(User.id == membership.user_id)).first()
-    return OrgMemberRead(
-        user_id=str(membership.user_id),
-        email=user.email if user else "",
-        role=role.name,
-        is_super_admin=user.is_super_admin if user else False,
-        teams=_member_teams(session, org_uuid, membership.user_id),
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
+        )
+
+    role = session.exec(select(Role).where(Role.id == membership.role_id)).first()
+    if payload.role is not None:
+        ensure_default_roles(session, org_uuid)
+        role = session.exec(
+            select(Role).where(Role.org_id == org_uuid, Role.name == payload.role)
+        ).first()
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
+            )
+        membership.role_id = role.id
+        session.add(membership)
+
+    if "cost_ceiling_usd" in payload.model_fields_set:
+        user.cost_ceiling_usd = payload.cost_ceiling_usd
+        session.add(user)
+
+    if payload.role is None and "cost_ceiling_usd" not in payload.model_fields_set:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No member updates provided",
+        )
+
+    session.commit()
+    session.refresh(user)
+    role = session.exec(select(Role).where(Role.id == membership.role_id)).first()
+    return _to_member_read(
+        session,
+        org_id=org_uuid,
+        user=user,
+        role_name=role.name if role else "",
     )
 
 
@@ -662,19 +680,13 @@ def update_org(
         org.file_retention_days = payload.file_retention_days
     if "chat_retention_days" in payload.model_fields_set:
         org.chat_retention_days = payload.chat_retention_days
+    if "cost_ceiling_usd" in payload.model_fields_set:
+        org.cost_ceiling_usd = payload.cost_ceiling_usd
 
     session.add(org)
     session.commit()
     session.refresh(org)
-    return OrgRead(
-        id=str(org.id),
-        name=org.name,
-        slug=org.slug,
-        is_active=org.is_active,
-        is_frozen=org.is_frozen,
-        file_retention_days=org.file_retention_days,
-        chat_retention_days=org.chat_retention_days,
-    )
+    return _to_org_read(org)
 
 
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)

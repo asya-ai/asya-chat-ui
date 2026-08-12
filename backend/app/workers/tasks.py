@@ -28,6 +28,7 @@ from app.api.chats import (
     _resolve_exec_policy,
     _run_agentic_loop,
     _truncate_messages,
+    build_message_usage_map,
 )
 from app.services.model_capabilities import (
     ensure_model_capabilities,
@@ -283,23 +284,26 @@ def _append_event(
     _persist_generation_event(session, task_id, sequence_ref, event_type, payload)
 
 
-def _aggregated_message_usage_payload(session: Session, message_id: UUID) -> dict[str, int]:
-    row = session.exec(
-        select(
-            func.coalesce(func.sum(UsageEvent.input_tokens), 0),
-            func.coalesce(func.sum(UsageEvent.output_tokens), 0),
-            func.coalesce(func.sum(UsageEvent.cached_tokens), 0),
-            func.coalesce(func.sum(UsageEvent.thinking_tokens), 0),
-            func.coalesce(func.sum(UsageEvent.total_tokens), 0),
-        ).where(UsageEvent.message_id == message_id)
-    ).one()
-    input_tokens, output_tokens, cached_tokens, thinking_tokens, total_tokens = row
+def _aggregated_message_usage_payload(
+    session: Session, message_id: UUID
+) -> dict[str, int | float | None]:
+    usage = build_message_usage_map(session, [message_id]).get(message_id)
+    if usage is None:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "thinking_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": None,
+        }
     return {
-        "input_tokens": int(input_tokens or 0),
-        "output_tokens": int(output_tokens or 0),
-        "cached_tokens": int(cached_tokens or 0),
-        "thinking_tokens": int(thinking_tokens or 0),
-        "total_tokens": int(total_tokens or 0),
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cached_tokens": usage.cached_tokens,
+        "thinking_tokens": usage.thinking_tokens,
+        "total_tokens": usage.total_tokens,
+        "cost_usd": usage.cost_usd,
     }
 
 

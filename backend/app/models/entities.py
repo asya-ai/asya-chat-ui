@@ -21,6 +21,7 @@ class User(SQLModel, table=True):
     is_super_admin: bool = Field(default=False)
     memory_enabled: bool = Field(default=False)
     locale: Optional[str] = Field(default=None)
+    cost_ceiling_usd: Optional[float] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     memberships: List["OrgMembership"] = Relationship(back_populates="user")
@@ -46,6 +47,7 @@ class Org(SQLModel, table=True):
     exec_policy: str = Field(default="always")
     file_retention_days: Optional[int] = Field(default=30, nullable=True)
     chat_retention_days: Optional[int] = Field(default=90, nullable=True)
+    cost_ceiling_usd: Optional[float] = Field(default=None, nullable=True)
     oidc_enabled: bool = Field(default=False)
     oidc_issuer: Optional[str] = Field(default=None)
     oidc_client_id: Optional[str] = Field(default=None)

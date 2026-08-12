@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
-import { useNavigate, useParams } from "react-router"
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react"
+import { Link, useNavigate, useParams } from "react-router"
 import { ChevronDown, ChevronRight, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
 import { agentApi } from "@/lib/api"
@@ -196,13 +196,20 @@ export const ChatSidebar = ({
     })
   }
 
-  const selectChat = (chat: Chat) => {
+  const chatHref = (chat: Chat) =>
+    chat.agent_id
+      ? `/chat/${chat.id}?agent=${encodeURIComponent(chat.agent_id)}`
+      : `/chat/${chat.id}`
+
+  const openChatInNewTab = (chat: Chat) => {
+    window.open(chatHref(chat), "_blank", "noopener,noreferrer")
+  }
+
+  const onChatLinkClick = (event: MouseEvent) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+      return
+    }
     onRequestClose?.()
-    navigate(
-      chat.agent_id
-        ? `/chat/${chat.id}?agent=${encodeURIComponent(chat.agent_id)}`
-        : `/chat/${chat.id}`
-    )
   }
 
   const selectAgent = (agent: Agent) => {
@@ -351,14 +358,15 @@ export const ChatSidebar = ({
                             )}
                           >
                             <Button
-                              type="button"
+                              asChild
                               variant="ghost"
                               className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal"
-                              onClick={() => selectChat(chat)}
                             >
-                              <span className="min-w-0 flex-1 truncate">
-                                {chat.title || t("chat_untitled")}
-                              </span>
+                              <Link to={chatHref(chat)} onClick={onChatLinkClick}>
+                                <span className="min-w-0 flex-1 truncate">
+                                  {chat.title || t("chat_untitled")}
+                                </span>
+                              </Link>
                             </Button>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
@@ -372,6 +380,9 @@ export const ChatSidebar = ({
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start" side="right">
+                                <DropdownMenuItem onClick={() => openChatInNewTab(chat)}>
+                                  {t("chat_open_in_new_tab")}
+                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => togglePin(chat)}>
                                   {t("chat_unpin")}
                                 </DropdownMenuItem>
@@ -397,6 +408,9 @@ export const ChatSidebar = ({
                           </div>
                         </ContextMenuTrigger>
                         <ContextMenuContent>
+                          <ContextMenuItem onClick={() => openChatInNewTab(chat)}>
+                            {t("chat_open_in_new_tab")}
+                          </ContextMenuItem>
                           <ContextMenuItem onClick={() => togglePin(chat)}>
                             {t("chat_unpin")}
                           </ContextMenuItem>
@@ -584,14 +598,15 @@ export const ChatSidebar = ({
                                 )}
                               >
                                 <Button
-                                  type="button"
+                                  asChild
                                   variant="ghost"
                                   className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal"
-                                  onClick={() => selectChat(chat)}
                                 >
-                                  <span className="min-w-0 flex-1 truncate">
-                                    {chat.title || t("chat_untitled")}
-                                  </span>
+                                  <Link to={chatHref(chat)} onClick={onChatLinkClick}>
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {chat.title || t("chat_untitled")}
+                                    </span>
+                                  </Link>
                                 </Button>
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
@@ -605,6 +620,9 @@ export const ChatSidebar = ({
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start" side="right">
+                                <DropdownMenuItem onClick={() => openChatInNewTab(chat)}>
+                                  {t("chat_open_in_new_tab")}
+                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => togglePin(chat)}>
                                   {t("chat_pin")}
                                 </DropdownMenuItem>
@@ -630,6 +648,9 @@ export const ChatSidebar = ({
                               </div>
                             </ContextMenuTrigger>
                             <ContextMenuContent>
+                              <ContextMenuItem onClick={() => openChatInNewTab(chat)}>
+                                {t("chat_open_in_new_tab")}
+                              </ContextMenuItem>
                               <ContextMenuItem onClick={() => togglePin(chat)}>
                                 {t("chat_pin")}
                               </ContextMenuItem>

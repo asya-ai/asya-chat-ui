@@ -1978,6 +1978,23 @@ const MessageBubbleComponent = ({
                             <span className="tabular-nums text-right">
                               {msg.usage!.thinking_tokens.toLocaleString()}
                             </span>
+                            <span>{t("usage_cost")}</span>
+                            <span className="tabular-nums text-right">
+                              {msg.usage!.cost_usd == null
+                                ? "—"
+                                : msg.usage!.cost_usd.toLocaleString(undefined, {
+                                    style: "currency",
+                                    currency: "USD",
+                                    minimumFractionDigits:
+                                      msg.usage!.cost_usd > 0 && msg.usage!.cost_usd < 0.01
+                                        ? 4
+                                        : 2,
+                                    maximumFractionDigits:
+                                      msg.usage!.cost_usd > 0 && msg.usage!.cost_usd < 0.01
+                                        ? 4
+                                        : 2,
+                                  })}
+                            </span>
                           </div>
                         </TooltipContent>
                       </Tooltip>
