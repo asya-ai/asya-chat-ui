@@ -708,3 +708,129 @@ async def test_agentic_loop_streams_final_answer_deltas():
         "final ",
         "answer",
     ]
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_tracks_search_result_and_scrape_urls():
+    registry = ToolRegistry()
+
+    async def _web_search(args: dict) -> ToolResult:
+        return ToolResult(
+            name="web_search",
+            output={
+                "queries": [
+                    {
+                        "query": "NOT GREEN matcha Latvia",
+                        "answer": "summary",
+                        "results": [
+                            {"url": "https://search-hit.example/a", "title": "Hit A"},
+                            {"url": "https://search-hit.example/b", "title": "Hit B"},
+                            {"url": "https://search-hit.example/c", "title": "Hit C"},
+                            {"url": "https://search-hit.example/d", "title": "Hit D"},
+                            {"url": "https://search-hit.example/e", "title": "Hit E"},
+                        ],
+                    }
+                ]
+            },
+        )
+
+    async def _web_scrape(args: dict) -> ToolResult:
+        return ToolResult(
+            name="web_scrape",
+            output={
+                "results": [
+                    {"url": "https://scraped.example/page", "title": "Scraped Page"},
+                    {"url": "https://scraped.example/other", "title": "Other Page"},
+                ]
+            },
+        )
+
+    registry.register(
+        ToolSpec(
+            name="web_search",
+            description="Search the web",
+            parameters={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        ),
+        _web_search,
+    )
+    registry.register(
+        ToolSpec(
+            name="web_scrape",
+            description="Scrape a page",
+            parameters={
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+        ),
+        _web_scrape,
+    )
+
+    @dataclass
+    class _SearchThenScrapeProvider:
+        calls: int = 0
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(total_tokens=1, input_tokens=1, output_tokens=0, prompt_tokens=1),
+                    tool_calls=[
+                        ChatToolCall(
+                            id="search-1",
+                            name="web_search",
+                            arguments={"query": "NOT GREEN matcha Latvia"},
+                        ),
+                        ChatToolCall(
+                            id="scrape-1",
+                            name="web_scrape",
+                            arguments={"url": "https://scraped.example/page"},
+                        ),
+                    ],
+                )
+            return ChatResponse(
+                content="final answer",
+                usage=_usage(
+                    total_tokens=2,
+                    input_tokens=1,
+                    output_tokens=1,
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                ),
+            )
+
+    content, _attachments, sources, _image_usages, usage = await run_agentic_loop_langchain(
+        provider=_SearchThenScrapeProvider(),
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "research this"}],
+        tool_registry=registry,
+        max_steps=3,
+    )
+
+    assert content == "final answer"
+    assert usage is not None
+    urls = [item.get("url") for item in sources]
+    titles = [item.get("title") for item in sources]
+    assert "NOT GREEN matcha Latvia" not in titles
+    assert "https://scraped.example/page" in urls
+    assert "https://scraped.example/other" in urls
+    # Scrapes stay first; search hits are kept (no truncation).
+    assert urls[:2] == [
+        "https://scraped.example/page",
+        "https://scraped.example/other",
+    ]
+    assert len(sources) == 7
+    assert set(urls) == {
+        "https://scraped.example/page",
+        "https://scraped.example/other",
+        "https://search-hit.example/a",
+        "https://search-hit.example/b",
+        "https://search-hit.example/c",
+        "https://search-hit.example/d",
+        "https://search-hit.example/e",
+    }

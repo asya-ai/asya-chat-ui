@@ -207,14 +207,17 @@ async def run_agentic_loop_langchain(
     executor = LangChainToolExecutor(tool_registry)
     tool_specs = executor.list_specs()
     attachments: list[dict] = []
-    sources: list[dict] = []
     image_usages: list[dict] = []
     usage: ChatUsage | None = None
 
-    from app.api.chats import _dedupe_sources, _limit_sources
+    from app.api.chats import _dedupe_sources, _limit_sources, _source_item
+
+    # Scraped pages first when truncating — they were deliberately visited.
+    scrape_sources: list[dict] = []
+    other_sources: list[dict] = []
 
     def _finalize_sources() -> list[dict]:
-        return _limit_sources(_dedupe_sources(sources))
+        return _limit_sources(_dedupe_sources(scrape_sources + other_sources))
 
     async def _emit_activity(label: str, state: str) -> None:
         if activity_sender:
@@ -431,17 +434,37 @@ async def run_agentic_loop_langchain(
                             "image_format": result.output.get("image_format"),
                         }
                     )
-            if call.name in {"web_search", "web_scrape"}:
-                result_sources = result.output.get("queries") or result.output.get("results")
-                if isinstance(result_sources, list):
-                    for source_item in result_sources:
-                        if isinstance(source_item, dict):
-                            sources.append(
-                                {
-                                    "title": source_item.get("title") or source_item.get("query"),
-                                    "url": source_item.get("url"),
-                                    "snippet": source_item.get("snippet") or source_item.get("answer"),
-                                }
+            if call.name == "web_search":
+                queries = result.output.get("queries", []) or []
+                if isinstance(queries, list):
+                    for query_result in queries:
+                        if not isinstance(query_result, dict):
+                            continue
+                        for item in query_result.get("results", []) or []:
+                            if not isinstance(item, dict):
+                                continue
+                            url = item.get("url")
+                            if isinstance(url, str) and url.strip():
+                                other_sources.append(_source_item(url, item.get("title")))
+            elif call.name == "web_scrape":
+                scrape_results = result.output.get("results", []) or []
+                if isinstance(scrape_results, list):
+                    for item in scrape_results:
+                        if not isinstance(item, dict):
+                            continue
+                        url = item.get("url")
+                        if isinstance(url, str) and url.strip():
+                            scrape_sources.append(_source_item(url, item.get("title")))
+            elif call.name == "search_past_chats":
+                chat_results = result.output.get("results", []) or []
+                if isinstance(chat_results, list):
+                    for item in chat_results:
+                        if not isinstance(item, dict):
+                            continue
+                        cid = item.get("chat_id")
+                        if cid:
+                            other_sources.append(
+                                _source_item(f"/chat/{cid}", item.get("chat_title"))
                             )
             messages.append(
                 {

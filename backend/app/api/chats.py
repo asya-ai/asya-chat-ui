@@ -960,10 +960,12 @@ def _dedupe_sources(items: list[dict] | None) -> list[dict]:
     return unique
 
 
-def _limit_sources(items: list[dict] | None, max_items: int = 5) -> list[dict]:
+def _limit_sources(items: list[dict] | None, max_items: int | None = None) -> list[dict]:
+    """Dedupe sources. max_items is accepted for callers but not applied."""
+    del max_items
     if not items:
         return []
-    return _dedupe_sources(items)[:max_items]
+    return _dedupe_sources(items)
 
 
 def _sanitize_tool_output_for_context(value: object) -> object:

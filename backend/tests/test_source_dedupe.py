@@ -41,7 +41,7 @@ def test_dedupe_sources_by_url_and_title():
     ]
 
 
-def test_limit_sources_dedupes_before_truncating():
+def test_limit_sources_dedupes_without_truncating():
     items = [
         {"url": "https://example.com/a"},
         {"url": "https://example.com/a"},
@@ -51,12 +51,12 @@ def test_limit_sources_dedupes_before_truncating():
         {"url": "https://example.com/e"},
         {"url": "https://example.com/f"},
     ]
-    limited = _limit_sources(items, max_items=5)
-    assert len(limited) == 5
+    limited = _limit_sources(items)
     assert [item["url"] for item in limited] == [
         "https://example.com/a",
         "https://example.com/b",
         "https://example.com/c",
         "https://example.com/d",
         "https://example.com/e",
+        "https://example.com/f",
     ]
