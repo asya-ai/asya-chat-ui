@@ -18,6 +18,9 @@ class MemoryToolContext:
     session: Session
     user_id: UUID
     current_chat_id: UUID | None = None
+    # When set, past-chat search is limited to this space. When None, only
+    # non-space (personal) chats are searched so space context does not leak.
+    agent_id: UUID | None = None
 
 
 async def store_memory(context: MemoryToolContext, *, content: str) -> ToolResult:
@@ -63,7 +66,12 @@ async def search_past_chats(
     base_chat_filters = [
         Chat.user_id == context.user_id,
         Chat.is_deleted.is_(False),
+        Chat.is_incognito.is_(False),
     ]
+    if context.agent_id is not None:
+        base_chat_filters.append(Chat.agent_id == context.agent_id)
+    else:
+        base_chat_filters.append(Chat.agent_id.is_(None))
     if context.current_chat_id:
         base_chat_filters.append(Chat.id != context.current_chat_id)
     eligible_chats_subq = select(Chat.id).where(*base_chat_filters).subquery()
@@ -139,9 +147,20 @@ async def search_past_chats(
         })
 
     if not results:
+        scope = "this space" if context.agent_id is not None else "your personal chats"
         return ToolResult(
             name="search_past_chats",
-            output={"results": [], "message": "No matching chats found."},
+            output={
+                "results": [],
+                "message": f"No matching chats found in {scope}.",
+                "scope": "space" if context.agent_id is not None else "personal",
+            },
         )
 
-    return ToolResult(name="search_past_chats", output={"results": results})
+    return ToolResult(
+        name="search_past_chats",
+        output={
+            "results": results,
+            "scope": "space" if context.agent_id is not None else "personal",
+        },
+    )

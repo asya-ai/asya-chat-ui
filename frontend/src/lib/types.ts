@@ -529,7 +529,13 @@ export type AgentShareSuggestion = {
   display_name?: string | null
 }
 
-export type PromptVisibility = "private" | "team" | "space" | "org"
+export type PromptVisibility = "private" | "team" | "users" | "space" | "org"
+
+export type PromptSharedUser = {
+  user_id: string
+  email: string
+  display_name?: string | null
+}
 
 export type Prompt = {
   id: string
@@ -538,6 +544,8 @@ export type Prompt = {
   body: string
   visibility: PromptVisibility
   team_ids: string[]
+  user_ids: string[]
+  users: PromptSharedUser[]
   agent_id?: string | null
   is_owner: boolean
   created_at: string

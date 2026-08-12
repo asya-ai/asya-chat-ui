@@ -29,6 +29,7 @@ import type {
   AgentSource,
   MyTeam,
   Prompt,
+  PromptSharedUser,
   PromptVisibility,
   Team,
   TeamMember,
@@ -777,7 +778,7 @@ export const agentApi = {
       `/agents/${agentId}/share-suggestions?${params.toString()}`
     )
   },
-  share: (agentId: string, payload: { email: string; role: "owner" | "editor" | "viewer" }) =>
+  share: (agentId: string, payload: { user_id: string; role: "owner" | "editor" | "viewer" }) =>
     apiFetch<AgentShare>(`/agents/${agentId}/shares`, {
       method: "POST",
       body: JSON.stringify(payload),
@@ -796,12 +797,18 @@ export const promptApi = {
     const query = search.toString()
     return apiFetch<Prompt[]>(`/prompts${query ? `?${query}` : ""}`)
   },
+  shareSuggestions: (query: string, limit = 10) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (query.trim()) params.set("q", query.trim())
+    return apiFetch<PromptSharedUser[]>(`/prompts/share-suggestions?${params.toString()}`)
+  },
   create: (payload: {
     name: string
     description?: string | null
     body: string
     visibility?: PromptVisibility
     team_ids?: string[]
+    user_ids?: string[]
     agent_id?: string | null
   }) =>
     apiFetch<Prompt>("/prompts", {
@@ -816,6 +823,7 @@ export const promptApi = {
       body?: string
       visibility?: PromptVisibility
       team_ids?: string[]
+      user_ids?: string[]
       agent_id?: string | null
       clear_agent?: boolean
     }

@@ -136,6 +136,13 @@ class Settings(BaseSettings):
     agent_embedding_device: str = Field(
         default="cpu", validation_alias="AGENT_EMBEDDING_DEVICE"
     )
+    # Full dense scan is fine for small corpora; above this, use FTS candidates.
+    agent_embedding_full_scan_max: int = Field(
+        default=400, validation_alias="AGENT_EMBEDDING_FULL_SCAN_MAX"
+    )
+    agent_embedding_candidate_limit: int = Field(
+        default=96, validation_alias="AGENT_EMBEDDING_CANDIDATE_LIMIT"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

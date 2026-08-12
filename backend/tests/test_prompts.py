@@ -24,6 +24,7 @@ from app.models import (
     OrgMembership,
     Prompt,
     PromptTeamShare,
+    PromptUserShare,
     PromptVisibility,
     Role,
     Team,
@@ -51,6 +52,7 @@ def _session() -> Session:
             AgentAccess.__table__,
             Prompt.__table__,
             PromptTeamShare.__table__,
+            PromptUserShare.__table__,
         ],
     )
     return Session(engine)
@@ -162,6 +164,52 @@ def test_team_prompt_multi_team_share():
         assert outsider is not None
         outsider_list = list_prompts(session=session, auth=_auth(outsider, org))
         assert all(item.id != created.id for item in outsider_list)
+
+
+def test_users_prompt_shared_with_specific_people():
+    with _session() as session:
+        org, owner, member, _, _ = _seed(session)
+        created = create_prompt(
+            PromptCreateRequest(
+                name="People prompt",
+                body="shared",
+                visibility=PromptVisibility.users,
+                user_ids=[str(member.id)],
+            ),
+            session=session,
+            auth=_auth(owner, org),
+        )
+        assert created.user_ids == [str(member.id)]
+        assert len(created.users) == 1
+        assert created.users[0].email.startswith("member-")
+
+        member_list = list_prompts(session=session, auth=_auth(member, org))
+        assert any(item.id == created.id for item in member_list)
+
+        outsider = session.exec(
+            select(User).where(User.email.startswith("out-"))
+        ).first()
+        assert outsider is not None
+        outsider_list = list_prompts(session=session, auth=_auth(outsider, org))
+        assert all(item.id != created.id for item in outsider_list)
+
+
+def test_users_visibility_requires_user_ids():
+    with _session() as session:
+        org, owner, _, _, _ = _seed(session)
+        try:
+            create_prompt(
+                PromptCreateRequest(
+                    name="Bad",
+                    body="x",
+                    visibility=PromptVisibility.users,
+                ),
+                session=session,
+                auth=_auth(owner, org),
+            )
+            assert False, "expected bad request"
+        except HTTPException as exc:
+            assert exc.status_code == 400
 
 
 def test_move_prompt_profile_to_space_and_back():

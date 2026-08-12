@@ -111,7 +111,8 @@ export const ProjectPage = () => {
   const [renameValue, setRenameValue] = useState("")
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
-  const [shareEmail, setShareEmail] = useState("")
+  const [shareQuery, setShareQuery] = useState("")
+  const [shareSelected, setShareSelected] = useState<AgentShareSuggestion | null>(null)
   const [shareRole, setShareRole] = useState<"owner" | "editor" | "viewer">("viewer")
   const [shareSuggestions, setShareSuggestions] = useState<AgentShareSuggestion[]>([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
@@ -194,7 +195,7 @@ export const ProjectPage = () => {
     let cancelled = false
     const handle = window.setTimeout(() => {
       void agentApi
-        .shareSuggestions(project.id, shareEmail)
+        .shareSuggestions(project.id, shareQuery)
         .then((items) => {
           if (!cancelled) setShareSuggestions(items)
         })
@@ -206,7 +207,7 @@ export const ProjectPage = () => {
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [shareOpen, shareEmail, project, shares])
+  }, [shareOpen, shareQuery, project, shares])
 
   const startChat = () => {
     if (!projectId) return
@@ -329,6 +330,9 @@ export const ProjectPage = () => {
 
   const openShare = () => {
     setShareOpen(true)
+    setShareQuery("")
+    setShareSelected(null)
+    setSuggestionsOpen(false)
     if (project) {
       void agentApi
         .listShares(project.id)
@@ -340,13 +344,13 @@ export const ProjectPage = () => {
   const handleAddShare = () =>
     withBusy(async () => {
       if (!project) return
-      const email = shareEmail.trim()
-      if (!email) {
-        setError(t("project_email_required"))
+      if (!shareSelected) {
+        setError(t("project_member_required"))
         return
       }
-      await agentApi.share(project.id, { email, role: shareRole })
-      setShareEmail("")
+      await agentApi.share(project.id, { user_id: shareSelected.user_id, role: shareRole })
+      setShareQuery("")
+      setShareSelected(null)
       setSuggestionsOpen(false)
       setShares(await agentApi.listShares(project.id))
       notify(t("project_access_granted"))
@@ -772,9 +776,10 @@ export const ProjectPage = () => {
               <div className="relative flex-1">
                 <Input
                   placeholder={t("project_share_search_placeholder")}
-                  value={shareEmail}
+                  value={shareQuery}
                   onChange={(event) => {
-                    setShareEmail(event.target.value)
+                    setShareQuery(event.target.value)
+                    setShareSelected(null)
                     setSuggestionsOpen(true)
                   }}
                   onFocus={() => setSuggestionsOpen(true)}
@@ -789,7 +794,12 @@ export const ProjectPage = () => {
                         className="hover:bg-accent flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm"
                         onMouseDown={(event) => {
                           event.preventDefault()
-                          setShareEmail(suggestion.email)
+                          setShareSelected(suggestion)
+                          setShareQuery(
+                            suggestion.display_name
+                              ? `${suggestion.display_name} (${suggestion.email})`
+                              : suggestion.email
+                          )
                           setSuggestionsOpen(false)
                         }}
                       >
@@ -821,10 +831,11 @@ export const ProjectPage = () => {
                   <SelectItem value="owner">{t("project_role_owner")}</SelectItem>
                 </SelectContent>
               </Select>
-              <Button onClick={handleAddShare} disabled={busy || !shareEmail.trim()}>
+              <Button onClick={handleAddShare} disabled={busy || !shareSelected}>
                 {t("project_share_add")}
               </Button>
             </div>
+            <p className="text-muted-foreground text-xs">{t("project_share_org_only_hint")}</p>
             <div className="space-y-2">
               {shares.length === 0 ? (
                 <p className="text-muted-foreground text-sm">{t("project_share_empty")}</p>

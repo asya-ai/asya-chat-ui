@@ -78,6 +78,7 @@ from app.services.tools.agent_tools import (
     list_project_sources,
     read_project_source,
     search_project_sources,
+    _coerce_bool as _coerce_include_chats,
 )
 from app.services.tools.web_tools import (
     WebToolContext,
@@ -633,6 +634,7 @@ def _build_tool_registry(
             session=session,
             user_id=user_id,
             current_chat_id=chat_id,
+            agent_id=agent_id,
         )
 
         async def _store_memory_handler(args: dict) -> object:
@@ -690,17 +692,23 @@ def _build_tool_registry(
                 mem_ctx, query=args.get("query", ""), limit=args.get("limit", 10)
             )
 
+        space_scope = (
+            "Scoped to chats in the current space only. "
+            if agent_id
+            else "Scoped to personal chats outside spaces. "
+        )
         registry.register(
             ToolSpec(
                 name="search_past_chats",
                 description=(
                     "Search the user's past chat conversations by keyword. "
+                    f"{space_scope}"
+                    "Call this when prior context may matter instead of guessing. "
                     "Returns matching chat titles, chat IDs, created_at, last_activity_at "
                     "(last message / last modified), and message previews. "
                     "Results are ordered by most recently active chat first. "
                     "Results are shown as references the user can click to navigate to. "
-                    "You can link to a found chat using /chat/{chat_id} in your response. "
-                    "Use when the user references a previous conversation or you need context from earlier chats."
+                    "You can link to a found chat using /chat/{chat_id} in your response."
                 ),
                 parameters={
                     "type": "object",
@@ -721,39 +729,68 @@ def _build_tool_registry(
         )
 
     if agent_id:
-        agent_ctx = AgentToolContext(session=session, agent_id=agent_id)
+        agent_ctx = AgentToolContext(
+            session=session, agent_id=agent_id, user_id=user_id
+        )
+
+        try:
+            from app.services.agents.chat_index import enqueue_missing_space_chat_indexes
+
+            if user_id:
+                enqueue_missing_space_chat_indexes(
+                    session, agent_id=agent_id, user_id=user_id, limit=15
+                )
+        except Exception:
+            logger.debug("Space chat backfill enqueue failed", exc_info=True)
 
         async def _list_project_sources_handler(args: dict) -> object:
-            return await list_project_sources(agent_ctx)
+            return await list_project_sources(
+                agent_ctx,
+                include_chats=_coerce_include_chats(args.get("include_chats")),
+            )
 
         registry.register(
             ToolSpec(
                 name="list_project_sources",
                 description=(
-                    "List every document/source attached to this project, with its numeric "
-                    "id, title, a short summary, length, and exec_path under /inputs/project/ "
-                    "for use with code_execution. Call this first to see what material is "
-                    "available. Refer to sources by their small numeric id."
+                    "List sources in this space with numeric id, title, kind, summary, and "
+                    "length. Includes indexed prior chats (kind=chat) by default. Set "
+                    "include_chats=false to list only uploaded files/URLs/text when the user "
+                    "wants answers grounded only in documents. Refer to sources by numeric id."
                 ),
-                parameters={"type": "object", "properties": {}},
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "include_chats": {
+                            "type": "boolean",
+                            "description": (
+                                "Include indexed prior chats (default true). Set false for "
+                                "documents only."
+                            ),
+                        },
+                    },
+                },
             ),
             _list_project_sources_handler,
         )
 
         async def _search_project_sources_handler(args: dict) -> object:
             return await search_project_sources(
-                agent_ctx, query=args.get("query", ""), limit=args.get("limit", 8)
+                agent_ctx,
+                query=args.get("query", ""),
+                limit=args.get("limit", 8),
+                include_chats=_coerce_include_chats(args.get("include_chats")),
             )
 
         registry.register(
             ToolSpec(
                 name="search_project_sources",
                 description=(
-                    "Semantic search across this project's documents. Returns the most "
-                    "relevant passages with their numeric source id, title, and a snippet. "
-                    "Use this to locate where a topic is discussed, then call "
-                    "read_project_source with that numeric id to read the document in full. "
-                    "Run several searches with different wording to be thorough."
+                    "Semantic search across this space's documents and, by default, indexed "
+                    "prior chats. Returns passages with numeric source id, title, kind, and "
+                    "snippet. Set include_chats=false when the user wants answers based only "
+                    "on uploaded sources/files (ignore prior chat memory). Then call "
+                    "read_project_source with that numeric id when you need more."
                 ),
                 parameters={
                     "type": "object",
@@ -762,6 +799,13 @@ def _build_tool_registry(
                         "limit": {
                             "type": "integer",
                             "description": "Max passages to return (default 8, max 20)",
+                        },
+                        "include_chats": {
+                            "type": "boolean",
+                            "description": (
+                                "Include indexed prior chats (default true). Set false to "
+                                "search uploaded documents only."
+                            ),
                         },
                     },
                     "required": ["query"],
@@ -3791,6 +3835,12 @@ def delete_chat(
     )
     chat.is_deleted = True
     session.add(chat)
+    try:
+        from app.services.agents.chat_index import delete_space_chat_source
+
+        delete_space_chat_source(session, chat.id)
+    except Exception:
+        logger.exception("Failed to delete space chat index for chat_id=%s", chat.id)
     session.commit()
 
 

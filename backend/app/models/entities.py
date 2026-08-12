@@ -435,6 +435,7 @@ class AgentSourceKind(str, Enum):
     text = "text"
     file = "file"
     url = "url"
+    chat = "chat"
 
 
 class AgentSourceStatus(str, Enum):
@@ -531,6 +532,7 @@ class AgentEmbedding(SQLModel, table=True):
 class PromptVisibility(str, Enum):
     private = "private"
     team = "team"
+    users = "users"
     space = "space"
     org = "org"
 
@@ -553,6 +555,7 @@ class Prompt(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     team_shares: List["PromptTeamShare"] = Relationship(back_populates="prompt")
+    user_shares: List["PromptUserShare"] = Relationship(back_populates="prompt")
 
 
 class PromptTeamShare(SQLModel, table=True):
@@ -568,6 +571,21 @@ class PromptTeamShare(SQLModel, table=True):
 
     prompt: Prompt = Relationship(back_populates="team_shares")
     team: Team = Relationship()
+
+
+class PromptUserShare(SQLModel, table=True):
+    __tablename__ = "prompt_user_shares"
+    __table_args__ = (
+        UniqueConstraint("prompt_id", "user_id", name="uq_prompt_user_shares_prompt_user"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    prompt_id: UUID = Field(foreign_key="prompts.id", index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    prompt: Prompt = Relationship(back_populates="user_shares")
+    user: User = Relationship()
 
 
 @event.listens_for(Session, "before_flush")

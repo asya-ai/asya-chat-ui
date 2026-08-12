@@ -1043,6 +1043,8 @@ export const ChatSidebar = ({
                 body: editingPrompt.body,
                 visibility: editingPrompt.visibility,
                 team_ids: editingPrompt.team_ids,
+                user_ids: editingPrompt.user_ids,
+                users: editingPrompt.users,
                 agent_id: editingPrompt.agent_id ?? null,
               }
             : {

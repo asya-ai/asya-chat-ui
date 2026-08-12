@@ -150,7 +150,7 @@ class AgentSourceRead(BaseModel):
 
 
 class AgentShareRequest(BaseModel):
-    email: str
+    user_id: str
     role: AgentAccessRole = AgentAccessRole.viewer
 
 
@@ -495,7 +495,10 @@ def list_sources(
     _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.viewer)
     items = session.exec(
         select(AgentSource)
-        .where(AgentSource.agent_id == agent_id)
+        .where(
+            AgentSource.agent_id == agent_id,
+            AgentSource.kind != AgentSourceKind.chat,
+        )
         .order_by(AgentSource.updated_at.desc())
     ).all()
     return [_to_source_read(item) for item in items]
@@ -509,6 +512,11 @@ def create_source(
     auth: AuthContext = Depends(get_auth_context),
 ) -> AgentSourceRead:
     _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.editor)
+    if payload.kind == AgentSourceKind.chat:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Chat sources are managed automatically",
+        )
     now = datetime.utcnow()
     source = AgentSource(
         agent_id=agent_id,
@@ -745,7 +753,8 @@ def share_agent(
     auth: AuthContext = Depends(get_auth_context),
 ) -> AgentShareRead:
     _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
-    target_user = session.exec(select(User).where(User.email == payload.email.strip().lower())).first()
+    target_user_id = _parse_uuid(payload.user_id, "Invalid user id")
+    target_user = session.exec(select(User).where(User.id == target_user_id)).first()
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     membership = session.exec(

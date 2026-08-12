@@ -59,6 +59,10 @@ from app.services.org_service import require_provider_enabled
 from app.services.team_service import allowed_model_ids
 from app.services.file_storage import delete_file
 from app.services.agents.runtime import reindex_source
+from app.services.agents.chat_index import (
+    enqueue_space_chat_index,
+    upsert_space_chat_source,
+)
 from app.services.tools.code_execution import project_source_exec_path
 from app.services.langchain_runtime import (
     chat_stream_with_langchain,
@@ -79,6 +83,23 @@ SUMMARY_MAX_TRANSCRIPT_CHARS = 24000
 
 class GenerationCancelledError(Exception):
     pass
+
+
+def _queue_space_chat_index(session: Session, chat: Chat) -> None:
+    """Refresh semantic index for a space chat after a successful turn."""
+    if not chat.agent_id or chat.is_incognito or chat.is_deleted:
+        return
+    try:
+        source = upsert_space_chat_source(session, chat)
+        session.commit()
+        if source is not None:
+            enqueue_space_chat_index(chat.id)
+    except Exception:
+        logger.exception("Failed to queue space chat index for chat_id=%s", chat.id)
+        try:
+            session.rollback()
+        except Exception:
+            pass
 
 
 def _persist_generation_event(
@@ -971,6 +992,7 @@ async def _run_generation(task_id: UUID) -> None:
                 task.status = GenerationStatus.completed
                 task.completed_at = datetime.utcnow()
                 session.commit()
+                _queue_space_chat_index(session, chat)
                 return
 
             grounding_enabled = _grounding_enabled(org, model.provider)
@@ -1160,6 +1182,7 @@ async def _run_generation(task_id: UUID) -> None:
             task.status = GenerationStatus.completed
             task.completed_at = datetime.utcnow()
             session.commit()
+            _queue_space_chat_index(session, chat)
         except GenerationCancelledError:
             logger.info("Generation cancelled for task=%s", task_id)
             return
@@ -1249,6 +1272,39 @@ def reindex_agent_source(source_id: str) -> None:
         logger.info(
             "Agent source reindex complete source_id=%s chunks=%s",
             source_id,
+            chunks_count,
+        )
+
+
+@celery_app.task(
+    name="chatui.index_space_chat",
+    queue="embedding",
+    soft_time_limit=60 * 30,
+    time_limit=60 * 35,
+)
+def index_space_chat(chat_id: str) -> None:
+    with Session(engine) as session:
+        chat = session.get(Chat, UUID(chat_id))
+        if not chat or chat.is_deleted or chat.is_incognito or not chat.agent_id:
+            return
+        source = upsert_space_chat_source(session, chat)
+        if source is None:
+            session.commit()
+            return
+        chunks_count, error = reindex_source(session, source)
+        session.commit()
+        if error:
+            logger.error(
+                "Space chat index failed chat_id=%s source_id=%s error=%s",
+                chat_id,
+                source.id,
+                error,
+            )
+            raise RuntimeError(f"Space chat index failed: {error}")
+        logger.info(
+            "Space chat index complete chat_id=%s source_id=%s chunks=%s",
+            chat_id,
+            source.id,
             chunks_count,
         )
 

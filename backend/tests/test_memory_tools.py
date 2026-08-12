@@ -37,6 +37,7 @@ async def test_search_past_chats_excludes_the_active_conversation():
     )
 
     assert result.output["results"] == []
+    assert result.output.get("scope") == "personal"
     assert session.statement is not None
     compiled = session.statement.compile(dialect=postgresql.dialect())
     sql = str(compiled)
@@ -49,3 +50,28 @@ async def test_search_past_chats_excludes_the_active_conversation():
     order_clause = sql[order_idx:].upper()
     assert "LAST_ACTIVITY_AT" in order_clause
     assert order_clause.index("LAST_ACTIVITY_AT") < order_clause.index("DESC")
+    assert "agent_id IS NULL" in sql
+    assert "is_incognito" in sql or "IS_INCOGNITO" in sql.upper()
+
+
+@pytest.mark.asyncio
+async def test_search_past_chats_scopes_to_space_when_agent_set():
+    session = _RecordingSession()
+    agent_id = uuid4()
+
+    result = await search_past_chats(
+        MemoryToolContext(
+            session=session,  # type: ignore[arg-type]
+            user_id=uuid4(),
+            agent_id=agent_id,
+        ),
+        query="roadmap",
+    )
+
+    assert result.output["results"] == []
+    assert result.output.get("scope") == "space"
+    assert session.statement is not None
+    compiled = session.statement.compile(dialect=postgresql.dialect())
+    assert agent_id in compiled.params.values()
+    sql = str(compiled)
+    assert "agent_id IS NULL" not in sql

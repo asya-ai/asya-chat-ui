@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
+import { Trash2 } from "lucide-react"
 
 import { orgApi, promptApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
-import type { Agent, MyTeam, Prompt, PromptVisibility } from "@/lib/types"
+import type { Agent, MyTeam, Prompt, PromptSharedUser, PromptVisibility } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -30,6 +31,8 @@ export type PromptFormValues = {
   body: string
   visibility: PromptVisibility
   team_ids: string[]
+  user_ids: string[]
+  users: PromptSharedUser[]
   agent_id: string | null
 }
 
@@ -52,6 +55,9 @@ const defaultVisibility = (
   return agentId ? "space" : "private"
 }
 
+const userLabel = (user: PromptSharedUser) =>
+  user.display_name ? `${user.display_name} (${user.email})` : user.email
+
 export const PromptFormDialog = ({
   open,
   onOpenChange,
@@ -68,6 +74,10 @@ export const PromptFormDialog = ({
   const [body, setBody] = useState("")
   const [visibility, setVisibility] = useState<PromptVisibility>("private")
   const [teamIds, setTeamIds] = useState<string[]>([])
+  const [selectedUsers, setSelectedUsers] = useState<PromptSharedUser[]>([])
+  const [userQuery, setUserQuery] = useState("")
+  const [userSuggestions, setUserSuggestions] = useState<PromptSharedUser[]>([])
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [location, setLocation] = useState(PROFILE_LOCATION)
   const [myTeams, setMyTeams] = useState<MyTeam[]>([])
   const [saving, setSaving] = useState(false)
@@ -81,6 +91,10 @@ export const PromptFormDialog = ({
     setBody(initial?.body ?? "")
     setVisibility(defaultVisibility(agentId, initial?.visibility))
     setTeamIds(initial?.team_ids ?? [])
+    setSelectedUsers(initial?.users ?? [])
+    setUserQuery("")
+    setUserSuggestions([])
+    setSuggestionsOpen(false)
     setLocation(agentId ?? PROFILE_LOCATION)
     setError(null)
   }, [open, initial])
@@ -103,6 +117,30 @@ export const PromptFormDialog = ({
       cancelled = true
     }
   }, [open, orgId])
+
+  useEffect(() => {
+    if (!open || visibility !== "users") {
+      setUserSuggestions([])
+      return
+    }
+    let cancelled = false
+    const handle = window.setTimeout(() => {
+      void promptApi
+        .shareSuggestions(userQuery)
+        .then((items) => {
+          if (cancelled) return
+          const selected = new Set(selectedUsers.map((user) => user.user_id))
+          setUserSuggestions(items.filter((item) => !selected.has(item.user_id)))
+        })
+        .catch(() => {
+          if (!cancelled) setUserSuggestions([])
+        })
+    }, 200)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
+  }, [open, visibility, userQuery, selectedUsers])
 
   const editableSpaces = spaces.filter(
     (space) => space.role === "owner" || space.role === "editor"
@@ -129,6 +167,18 @@ export const PromptFormDialog = ({
     )
   }
 
+  const addUser = (user: PromptSharedUser) => {
+    setSelectedUsers((prev) =>
+      prev.some((item) => item.user_id === user.user_id) ? prev : [...prev, user]
+    )
+    setUserQuery("")
+    setSuggestionsOpen(false)
+  }
+
+  const removeUser = (userId: string) => {
+    setSelectedUsers((prev) => prev.filter((user) => user.user_id !== userId))
+  }
+
   const handleSave = async () => {
     const trimmedName = name.trim()
     const trimmedBody = body.trim()
@@ -142,6 +192,10 @@ export const PromptFormDialog = ({
     }
     if (visibility === "team" && teamIds.length === 0) {
       setError(t("prompt_teams_required"))
+      return
+    }
+    if (visibility === "users" && selectedUsers.length === 0) {
+      setError(t("prompt_users_required"))
       return
     }
     if (visibility === "space" && location === PROFILE_LOCATION) {
@@ -158,6 +212,7 @@ export const PromptFormDialog = ({
         body: trimmedBody,
         visibility,
         team_ids: visibility === "team" ? teamIds : [],
+        user_ids: visibility === "users" ? selectedUsers.map((user) => user.user_id) : [],
         agent_id: agentId,
       }
       const saved = initial?.id
@@ -250,6 +305,7 @@ export const PromptFormDialog = ({
                     {t("prompt_visibility_space", { name: selectedSpace.name })}
                   </SelectItem>
                 ) : null}
+                <SelectItem value="users">{t("prompt_visibility_users")}</SelectItem>
                 {myTeams.length > 0 ? (
                   <SelectItem value="team">{t("prompt_visibility_team")}</SelectItem>
                 ) : null}
@@ -275,6 +331,71 @@ export const PromptFormDialog = ({
                   </label>
                 ))}
               </div>
+            </div>
+          ) : null}
+          {visibility === "users" ? (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium">{t("prompt_users")}</span>
+              <div className="relative">
+                <Input
+                  placeholder={t("prompt_users_search_placeholder")}
+                  value={userQuery}
+                  onChange={(event) => {
+                    setUserQuery(event.target.value)
+                    setSuggestionsOpen(true)
+                  }}
+                  onFocus={() => setSuggestionsOpen(true)}
+                  onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 150)}
+                />
+                {suggestionsOpen && userSuggestions.length > 0 ? (
+                  <div className="bg-popover absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-md border p-1 shadow-md">
+                    {userSuggestions.map((suggestion) => (
+                      <button
+                        key={suggestion.user_id}
+                        type="button"
+                        className="hover:bg-accent flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm"
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          addUser(suggestion)
+                        }}
+                      >
+                        {suggestion.display_name ? (
+                          <>
+                            <span className="truncate">{suggestion.display_name}</span>
+                            <span className="text-muted-foreground truncate text-xs">
+                              {suggestion.email}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="truncate">{suggestion.email}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {selectedUsers.length > 0 ? (
+                <div className="flex flex-col gap-1 rounded-md border p-2">
+                  {selectedUsers.map((user) => (
+                    <div
+                      key={user.user_id}
+                      className="flex items-center justify-between gap-2 text-sm"
+                    >
+                      <span className="truncate">{userLabel(user)}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive h-8 w-8 shrink-0"
+                        aria-label={t("prompt_user_remove_aria")}
+                        onClick={() => removeUser(user.user_id)}
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
           {error ? <p className="text-sm text-destructive">{error}</p> : null}

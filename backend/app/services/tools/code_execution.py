@@ -17,7 +17,7 @@ from docker.types import Ulimit
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import AgentSource, AgentSourceStatus, ChatMessage, ChatMessageAttachment
+from app.models import AgentSource, AgentSourceKind, AgentSourceStatus, ChatMessage, ChatMessageAttachment
 from app.services.file_storage import maybe_read_file_bytes
 from app.services.tools.registry import ToolResult
 
@@ -709,14 +709,18 @@ async def run_code_execution(
         except ValueError:
             agent_uuid = None
         if agent_uuid is not None:
-            sources = context.session.exec(
-                select(AgentSource)
-                .where(
-                    AgentSource.agent_id == agent_uuid,
-                    AgentSource.status == AgentSourceStatus.ready,
-                )
-                .order_by(AgentSource.created_at)
-            ).all()
+            sources = [
+                source
+                for source in context.session.exec(
+                    select(AgentSource)
+                    .where(
+                        AgentSource.agent_id == agent_uuid,
+                        AgentSource.status == AgentSourceStatus.ready,
+                        AgentSource.kind != AgentSourceKind.chat,
+                    )
+                    .order_by(AgentSource.created_at)
+                ).all()
+            ]
             used_bytes = sum(
                 path.stat().st_size
                 for path in inputs_dir.iterdir()

@@ -12,7 +12,8 @@ from sqlalchemy import delete, func, select
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.models import AgentChunk, AgentEmbedding, AgentSource, AgentSourceStatus
+from app.models import AgentChunk, AgentEmbedding, AgentSource, AgentSourceKind, AgentSourceStatus
+from app.services.agents.chat_index import chat_source_visible_to_user
 
 _embedding_model: Any | None = None
 _embedding_model_lock = threading.Lock()
@@ -167,47 +168,63 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
         return 0, str(exc)
 
 
-def search_agent_chunks(
+def _score_dense_rows(
+    rows: Iterable[tuple[AgentChunk, AgentSource, list[float] | None]],
+    query_vector: np.ndarray,
+) -> list[tuple[AgentChunk, AgentSource, float]]:
+    scored: list[tuple[AgentChunk, AgentSource, float]] = []
+    for chunk, source, embedding in rows:
+        if not isinstance(embedding, list) or not embedding:
+            continue
+        chunk_vec = np.asarray(embedding, dtype=np.float32)
+        if chunk_vec.shape != query_vector.shape:
+            continue
+        scored.append((chunk, source, float(np.dot(query_vector, chunk_vec))))
+    scored.sort(key=lambda item: item[2], reverse=True)
+    return scored
+
+
+def _lexical_candidate_ids(
     session: Session,
     *,
     agent_id: UUID,
     query: str,
-    limit: int = 6,
-) -> list[tuple[AgentChunk, AgentSource, float]]:
-    cleaned = query.strip()
-    if not cleaned:
-        return []
-
-    query_vector = _encode_query(cleaned)
-    if query_vector is not None:
-        rows = session.exec(
-            select(AgentChunk, AgentSource, AgentEmbedding.embedding)
-            .join(AgentSource, AgentSource.id == AgentChunk.source_id)
-            .join(AgentEmbedding, AgentEmbedding.chunk_id == AgentChunk.id)
-            .where(
-                AgentChunk.agent_id == agent_id,
-                AgentSource.status == AgentSourceStatus.ready,
-                AgentEmbedding.model_name == settings.agent_embedding_model,
-            )
-        ).all()
-        if rows:
-            scored_dense: list[tuple[AgentChunk, AgentSource, float]] = []
-            for chunk, source, embedding in rows:
-                if not isinstance(embedding, list) or not embedding:
-                    continue
-                chunk_vec = np.asarray(embedding, dtype=np.float32)
-                if chunk_vec.shape != query_vector.shape:
-                    continue
-                score = float(np.dot(query_vector, chunk_vec))
-                scored_dense.append((chunk, source, score))
-            scored_dense.sort(key=lambda item: item[2], reverse=True)
-            if scored_dense:
-                return scored_dense[:limit]
-
+    limit: int,
+) -> list[UUID]:
     try:
         rank = func.ts_rank_cd(
             func.to_tsvector("simple", AgentChunk.content),
-            func.websearch_to_tsquery("simple", cleaned),
+            func.websearch_to_tsquery("simple", query),
+        )
+        rows = session.exec(
+            select(AgentChunk.id, rank)
+            .join(AgentSource, AgentSource.id == AgentChunk.source_id)
+            .where(
+                AgentChunk.agent_id == agent_id,
+                AgentSource.status == AgentSourceStatus.ready,
+                func.to_tsvector("simple", AgentChunk.content).op("@@")(
+                    func.websearch_to_tsquery("simple", query)
+                ),
+            )
+            .order_by(rank.desc(), AgentChunk.chunk_index.asc())
+            .limit(limit)
+        ).all()
+        return [row[0] if not isinstance(row, UUID) else row for row in rows]
+    except Exception:
+        return []
+
+
+def _lexical_search(
+    session: Session,
+    *,
+    agent_id: UUID,
+    query: str,
+    limit: int,
+) -> list[tuple[AgentChunk, AgentSource, float]]:
+    try:
+        rank = func.ts_rank_cd(
+            func.to_tsvector("simple", AgentChunk.content),
+            func.websearch_to_tsquery("simple", query),
         )
         rows: Iterable[tuple[AgentChunk, AgentSource, float]] = session.exec(
             select(AgentChunk, AgentSource, rank)
@@ -216,26 +233,133 @@ def search_agent_chunks(
             .order_by(rank.desc(), AgentChunk.chunk_index.asc())
             .limit(limit)
         ).all()
-        materialized = list(rows)
-        if materialized:
-            return materialized
+        return list(rows)
     except Exception:
-        # Fallback for non-Postgres environments.
-        pass
+        return []
+
+
+def _filter_visible_matches(
+    matches: list[tuple[AgentChunk, AgentSource, float]],
+    viewer_user_id: UUID | None,
+    *,
+    include_chats: bool = True,
+) -> list[tuple[AgentChunk, AgentSource, float]]:
+    filtered: list[tuple[AgentChunk, AgentSource, float]] = []
+    for chunk, source, score in matches:
+        if not include_chats and source.kind == AgentSourceKind.chat:
+            continue
+        if not chat_source_visible_to_user(source, viewer_user_id):
+            continue
+        filtered.append((chunk, source, score))
+    return filtered
+
+
+def search_agent_chunks(
+    session: Session,
+    *,
+    agent_id: UUID,
+    query: str,
+    limit: int = 6,
+    viewer_user_id: UUID | None = None,
+    include_chats: bool = True,
+) -> list[tuple[AgentChunk, AgentSource, float]]:
+    cleaned = query.strip()
+    if not cleaned:
+        return []
+
+    capped_limit = max(1, min(int(limit or 6), 20))
+    # Over-fetch slightly so chat-privacy filtering still fills the limit.
+    fetch_limit = min(40, capped_limit * 3)
+    full_scan_max = max(1, int(settings.agent_embedding_full_scan_max or 400))
+    candidate_limit = max(fetch_limit, int(settings.agent_embedding_candidate_limit or 96))
+
+    source_filters = [
+        AgentChunk.agent_id == agent_id,
+        AgentSource.status == AgentSourceStatus.ready,
+    ]
+    if not include_chats:
+        source_filters.append(AgentSource.kind != AgentSourceKind.chat)
+
+    query_vector = _encode_query(cleaned)
+    if query_vector is not None:
+        embedding_count = session.exec(
+            select(func.count())
+            .select_from(AgentEmbedding)
+            .join(AgentChunk, AgentChunk.id == AgentEmbedding.chunk_id)
+            .join(AgentSource, AgentSource.id == AgentChunk.source_id)
+            .where(
+                *source_filters,
+                AgentEmbedding.model_name == settings.agent_embedding_model,
+            )
+        ).one()
+        embedding_count = int(embedding_count or 0)
+
+        dense_query = (
+            select(AgentChunk, AgentSource, AgentEmbedding.embedding)
+            .join(AgentSource, AgentSource.id == AgentChunk.source_id)
+            .join(AgentEmbedding, AgentEmbedding.chunk_id == AgentChunk.id)
+            .where(
+                *source_filters,
+                AgentEmbedding.model_name == settings.agent_embedding_model,
+            )
+        )
+
+        if embedding_count > full_scan_max:
+            candidate_ids = _lexical_candidate_ids(
+                session, agent_id=agent_id, query=cleaned, limit=candidate_limit
+            )
+            if candidate_ids:
+                dense_query = dense_query.where(AgentChunk.id.in_(candidate_ids))
+            else:
+                # No lexical hits: score a recent capped window instead of the full corpus.
+                recent_ids = session.exec(
+                    select(AgentChunk.id)
+                    .join(AgentSource, AgentSource.id == AgentChunk.source_id)
+                    .where(*source_filters)
+                    .order_by(AgentChunk.created_at.desc())
+                    .limit(candidate_limit)
+                ).all()
+                recent_ids = [
+                    item if isinstance(item, UUID) else item[0] for item in recent_ids
+                ]
+                if not recent_ids:
+                    return []
+                dense_query = dense_query.where(AgentChunk.id.in_(recent_ids))
+
+        rows = session.exec(dense_query).all()
+        scored_dense = _filter_visible_matches(
+            _score_dense_rows(rows, query_vector),
+            viewer_user_id,
+            include_chats=include_chats,
+        )
+        if scored_dense:
+            return scored_dense[:capped_limit]
+
+    lexical = _filter_visible_matches(
+        _lexical_search(session, agent_id=agent_id, query=cleaned, limit=fetch_limit),
+        viewer_user_id,
+        include_chats=include_chats,
+    )
+    if lexical:
+        return lexical[:capped_limit]
 
     chunks = session.exec(
         select(AgentChunk, AgentSource)
         .join(AgentSource, AgentSource.id == AgentChunk.source_id)
-        .where(AgentChunk.agent_id == agent_id, AgentSource.status == AgentSourceStatus.ready)
+        .where(*source_filters)
         .order_by(AgentChunk.created_at.desc())
-        .limit(max(limit * 8, 20))
+        .limit(max(capped_limit * 8, 20))
     ).all()
     terms = {token for token in re.split(r"\W+", cleaned.lower()) if token}
     scored: list[tuple[AgentChunk, AgentSource, float]] = []
     for chunk, source in chunks:
+        if not include_chats and source.kind == AgentSourceKind.chat:
+            continue
+        if not chat_source_visible_to_user(source, viewer_user_id):
+            continue
         body = chunk.content.lower()
         score = float(sum(body.count(term) for term in terms))
         if score > 0:
             scored.append((chunk, source, score))
     scored.sort(key=lambda item: item[2], reverse=True)
-    return scored[:limit]
+    return scored[:capped_limit]

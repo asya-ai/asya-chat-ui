@@ -6,7 +6,8 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from app.models.entities import AgentSource, AgentSourceStatus
+from app.models.entities import AgentSource, AgentSourceKind, AgentSourceStatus
+from app.services.agents.chat_index import chat_source_visible_to_user
 from app.services.agents.runtime import search_agent_chunks
 from app.services.tools.code_execution import project_source_exec_path
 from app.services.tools.registry import ToolResult
@@ -20,33 +21,42 @@ READ_MAX_CHARS = 8000
 class AgentToolContext:
     session: Session
     agent_id: UUID
+    user_id: UUID | None = None
 
-    def _all_sources(self) -> list[AgentSource]:
-        """All sources for the project ordered by creation.
+    def _all_sources(self, *, include_chats: bool = True) -> list[AgentSource]:
+        """Visible sources for the project ordered by creation.
 
-        Numbering is based on this stable order (any status), so a source that
-        finishes indexing between a list and a read never shifts another
-        source's number. Deleting a source can create a gap, which is fine.
+        Includes uploaded/url/text sources for everyone with access, plus this
+        user's indexed space chats (unless include_chats is False). Numbering is
+        based on this stable filtered order.
         """
-        return list(
+        sources = list(
             self.session.exec(
                 select(AgentSource)
                 .where(AgentSource.agent_id == self.agent_id)
                 .order_by(AgentSource.created_at)
             ).all()
         )
+        visible = [
+            source
+            for source in sources
+            if chat_source_visible_to_user(source, self.user_id)
+        ]
+        if include_chats:
+            return visible
+        return [source for source in visible if source.kind != AgentSourceKind.chat]
 
-    def number_for(self, source_id: UUID) -> int | None:
-        for idx, source in enumerate(self._all_sources(), start=1):
+    def number_for(self, source_id: UUID, *, include_chats: bool = True) -> int | None:
+        for idx, source in enumerate(self._all_sources(include_chats=include_chats), start=1):
             if source.id == source_id:
                 return idx
         return None
 
-    def resolve(self, ref: str | int) -> AgentSource | None:
+    def resolve(self, ref: str | int, *, include_chats: bool = True) -> AgentSource | None:
         """Resolve a source by its numeric id (1-based) or UUID string."""
         ref_str = str(ref).strip()
         if ref_str.isdigit():
-            sources = self._all_sources()
+            sources = self._all_sources(include_chats=include_chats)
             index = int(ref_str)
             if 1 <= index <= len(sources):
                 return sources[index - 1]
@@ -56,7 +66,12 @@ class AgentToolContext:
         except (ValueError, TypeError):
             return None
         source = self.session.get(AgentSource, sid)
-        if source and source.agent_id == self.agent_id:
+        if (
+            source
+            and source.agent_id == self.agent_id
+            and chat_source_visible_to_user(source, self.user_id)
+            and (include_chats or source.kind != AgentSourceKind.chat)
+        ):
             return source
         return None
 
@@ -72,14 +87,38 @@ def _status_str(source: AgentSource) -> str:
     return status.value if hasattr(status, "value") else str(status)
 
 
-async def list_project_sources(context: AgentToolContext) -> ToolResult:
-    sources = context._all_sources()
+def _coerce_bool(value: object, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
+async def list_project_sources(
+    context: AgentToolContext, *, include_chats: bool = True
+) -> ToolResult:
+    sources = context._all_sources(include_chats=include_chats)
     results = [
         {
             "id": idx,
             "title": source.title,
             "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
-            "url": source.url,
+            "url": source.url if source.kind != AgentSourceKind.chat else None,
+            "chat_id": (
+                (source.metadata_json or {}).get("chat_id")
+                if source.kind == AgentSourceKind.chat
+                and isinstance(source.metadata_json, dict)
+                else None
+            ),
             "status": _status_str(source),
             "readable": source.status == AgentSourceStatus.ready,
             "summary": _source_summary(source),
@@ -87,21 +126,38 @@ async def list_project_sources(context: AgentToolContext) -> ToolResult:
             "exec_path": (
                 project_source_exec_path(source)
                 if source.status == AgentSourceStatus.ready
+                and source.kind != AgentSourceKind.chat
                 else None
             ),
         }
         for idx, source in enumerate(sources, start=1)
     ]
     if not results:
+        scope = (
+            "uploaded files/URLs"
+            if not include_chats
+            else "files, URLs, or prior chats"
+        )
         return ToolResult(
             name="list_project_sources",
-            output={"sources": [], "message": "This project has no indexed sources yet."},
+            output={
+                "sources": [],
+                "include_chats": include_chats,
+                "message": f"This space has no indexed sources yet ({scope}).",
+            },
         )
-    return ToolResult(name="list_project_sources", output={"sources": results})
+    return ToolResult(
+        name="list_project_sources",
+        output={"sources": results, "include_chats": include_chats},
+    )
 
 
 async def search_project_sources(
-    context: AgentToolContext, *, query: str, limit: int = 8
+    context: AgentToolContext,
+    *,
+    query: str,
+    limit: int = 8,
+    include_chats: bool = True,
 ) -> ToolResult:
     query = (query or "").strip()
     if not query:
@@ -110,31 +166,48 @@ async def search_project_sources(
         )
     capped_limit = max(1, min(int(limit or 8), 20))
     matches = search_agent_chunks(
-        context.session, agent_id=context.agent_id, query=query, limit=capped_limit
+        context.session,
+        agent_id=context.agent_id,
+        query=query,
+        limit=capped_limit,
+        viewer_user_id=context.user_id,
+        include_chats=include_chats,
     )
     results = [
         {
-            "id": context.number_for(source.id),
+            "id": context.number_for(source.id, include_chats=include_chats),
             "title": source.title,
+            "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
             "chunk_index": chunk.chunk_index,
             "score": round(float(score), 4),
             "snippet": chunk.content[:600],
+            "chat_id": (
+                (source.metadata_json or {}).get("chat_id")
+                if source.kind == AgentSourceKind.chat
+                and isinstance(source.metadata_json, dict)
+                else None
+            ),
         }
         for chunk, source, score in matches
     ]
     if not results:
+        scope = "space files" if not include_chats else "space files or indexed chats"
         return ToolResult(
             name="search_project_sources",
             output={
                 "results": [],
+                "include_chats": include_chats,
                 "message": (
-                    "No matching passages found. Try a different query or use "
-                    "read_project_source to review a document in full."
+                    f"No matching passages found in {scope}. "
+                    "Try a different query, use search_past_chats for chat titles, "
+                    "or read_project_source for a specific document."
                 ),
             },
         )
-    return ToolResult(name="search_project_sources", output={"results": results})
-
+    return ToolResult(
+        name="search_project_sources",
+        output={"results": results, "include_chats": include_chats},
+    )
 
 async def read_project_source(
     context: AgentToolContext,
@@ -148,56 +221,43 @@ async def read_project_source(
             name="read_project_source",
             output={"error": "A source id is required (use the numeric id from the source list)."},
         )
-
     source = context.resolve(source_id)
     if not source:
         return ToolResult(
             name="read_project_source",
-            output={
-                "error": (
-                    f"No source with id {source_id} in this project. Call list_project_sources "
-                    "to see the available numeric ids."
-                )
-            },
+            output={"error": f"Source {source_id!r} was not found in this space."},
         )
     if source.status != AgentSourceStatus.ready:
         return ToolResult(
             name="read_project_source",
             output={
-                "id": context.number_for(source.id),
-                "title": source.title,
-                "status": _status_str(source),
                 "error": (
-                    f"Source {source_id} (\"{source.title}\") is not ready to read yet "
-                    f"(status: {_status_str(source)}). Try again shortly or use another source."
-                ),
+                    f"Source {context.number_for(source.id)} is not ready yet "
+                    f"(status={_status_str(source)})."
+                )
             },
         )
-
     text = source.content_text or ""
-    total = len(text)
-    try:
-        start = max(0, int(offset or 0))
-    except (ValueError, TypeError):
-        start = 0
-    try:
-        window = max(1, min(int(max_chars or READ_MAX_CHARS), READ_MAX_CHARS))
-    except (ValueError, TypeError):
-        window = READ_MAX_CHARS
-    end = min(total, start + window)
-    excerpt = text[start:end]
-    next_offset = end if end < total else None
-
+    start = max(0, int(offset or 0))
+    cap = max(1, min(int(max_chars or READ_MAX_CHARS), READ_MAX_CHARS))
+    slice_ = text[start : start + cap]
+    next_offset = start + len(slice_)
     return ToolResult(
         name="read_project_source",
         output={
             "id": context.number_for(source.id),
             "title": source.title,
-            "total_length_chars": total,
+            "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
+            "chat_id": (
+                (source.metadata_json or {}).get("chat_id")
+                if source.kind == AgentSourceKind.chat
+                and isinstance(source.metadata_json, dict)
+                else None
+            ),
             "offset": start,
-            "returned_chars": len(excerpt),
-            "has_more": next_offset is not None,
-            "next_offset": next_offset,
-            "content": excerpt,
+            "next_offset": next_offset if next_offset < len(text) else None,
+            "has_more": next_offset < len(text),
+            "total_length_chars": len(text),
+            "content": slice_,
         },
     )

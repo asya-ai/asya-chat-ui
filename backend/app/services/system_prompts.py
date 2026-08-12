@@ -15,12 +15,17 @@ MAIN_SYSTEM_PROMPT = (
 )
 
 MEMORY_SYSTEM_PROMPT = (
-    "You have access to a persistent memory system. Stored memories are listed below "
-    "and represent important facts, preferences, or instructions from the user. "
-    "Use them to personalize your responses. You can store new memories for truly "
-    "important or global information (user preferences, key facts about them, explicit "
-    "requests to remember something). Do NOT store transient or chat-specific details. "
-    "You can also search the user's past chats when they reference previous conversations."
+    "You have access to a persistent memory system. Prefer using it proactively: "
+    "when the user refers to prior work, preferences, decisions, names, or anything "
+    "you may have discussed before, search before answering from guesswork. "
+    "In a space, prefer search_project_sources (semantic search over indexed prior "
+    "chats and uploaded files) and use search_past_chats for chat titles/previews. "
+    "If the user asks to rely only on uploaded sources/files/documents, call "
+    "search_project_sources with include_chats=false. "
+    "Stored memories (when listed) are durable facts/preferences—apply them. "
+    "Use store_memory for lasting preferences or explicit 'remember this' "
+    "requests; do NOT store transient chat-only details. "
+    "Outside spaces, past-chat search covers personal chats only."
 )
 
 TOOL_SYSTEM_PROMPTS: dict[str, str] = {
@@ -74,9 +79,22 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "something or when a fact becomes outdated. Use the memory_id from the memories list."
     ),
     "search_past_chats": (
-        "Use search_past_chats to find information from the user's previous conversations. "
-        "Useful when they reference something discussed before. "
-        "Results include created_at and last_activity_at, ordered by most recent activity."
+        "Call search_past_chats to find earlier chats by keyword (titles and previews). "
+        "In a space, also use search_project_sources for semantic recall over indexed chat "
+        "transcripts and uploaded files. Prefer tools over guessing. Results include "
+        "created_at and last_activity_at, ordered by most recent activity."
+    ),
+    "list_project_sources": (
+        "Use list_project_sources to see files and indexed chats in this space. "
+        "Pass include_chats=false to list uploaded documents only."
+    ),
+    "search_project_sources": (
+        "Use search_project_sources for semantic retrieval over this space's uploaded "
+        "files/URLs and indexed prior chats. When the user wants answers based only on "
+        "uploaded sources/documents (not prior chats), set include_chats=false."
+    ),
+    "read_project_source": (
+        "Use read_project_source to read a space file or indexed chat transcript by numeric id."
     ),
 }
 
@@ -91,6 +109,9 @@ TOOL_PROMPT_ORDER = (
     "store_memory",
     "remove_memory",
     "search_past_chats",
+    "list_project_sources",
+    "search_project_sources",
+    "read_project_source",
 )
 
 
@@ -127,10 +148,12 @@ def _time_prompt(user_timezone: str | None) -> str:
     return " ".join(parts)
 
 
-def _memories_prompt(memories: list[dict[str, str]]) -> str:
-    lines = [MEMORY_SYSTEM_PROMPT, "", "## Stored memories"]
-    for mem in memories:
-        lines.append(f"- [{mem['id']}] {mem['content']}")
+def _memories_prompt(memories: list[dict[str, str]] | None) -> str:
+    lines = [MEMORY_SYSTEM_PROMPT]
+    if memories:
+        lines.extend(["", "## Stored memories"])
+        for mem in memories:
+            lines.append(f"- [{mem['id']}] {mem['content']}")
     return "\n".join(lines)
 
 
@@ -143,7 +166,10 @@ def build_system_prompt_messages(
 ) -> list[dict[str, str]]:
     tool_names = set(enabled_tool_names or [])
     messages: list[dict[str, str]] = [{"role": "system", "content": MAIN_SYSTEM_PROMPT}]
-    if memories:
+    memory_tools_enabled = bool(
+        tool_names.intersection({"store_memory", "remove_memory", "search_past_chats"})
+    )
+    if memories or memory_tools_enabled:
         messages.append({"role": "system", "content": _memories_prompt(memories)})
     for name in TOOL_PROMPT_ORDER:
         if name in tool_names:
