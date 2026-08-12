@@ -27,6 +27,9 @@ import type {
   AgentShare,
   AgentShareSuggestion,
   AgentSource,
+  MyTeam,
+  Prompt,
+  PromptVisibility,
   Team,
   TeamMember,
   TeamModel,
@@ -433,6 +436,7 @@ export const orgApi = {
     }),
   oidcGroups: (orgId: string) => apiFetch<string[]>(`/orgs/${orgId}/oidc-groups`),
   teams: (orgId: string) => apiFetch<Team[]>(`/orgs/${orgId}/teams`),
+  myTeams: (orgId: string) => apiFetch<MyTeam[]>(`/orgs/${orgId}/teams/mine`),
   createTeam: (orgId: string, payload: { name: string; oidc_group?: string | null }) =>
     apiFetch<Team>(`/orgs/${orgId}/teams`, {
       method: "POST",
@@ -780,5 +784,47 @@ export const agentApi = {
     }),
   unshare: (agentId: string, userId: string) =>
     apiFetch(`/agents/${agentId}/shares/${userId}`, { method: "DELETE" }),
+}
+
+export const promptApi = {
+  list: (params?: { agent_id?: string | null; context_agent_id?: string | null }) => {
+    const search = new URLSearchParams()
+    if (params?.agent_id === null) search.set("agent_id", "null")
+    else if (params?.agent_id) search.set("agent_id", params.agent_id)
+    if (params?.context_agent_id === null) search.set("context_agent_id", "null")
+    else if (params?.context_agent_id) search.set("context_agent_id", params.context_agent_id)
+    const query = search.toString()
+    return apiFetch<Prompt[]>(`/prompts${query ? `?${query}` : ""}`)
+  },
+  create: (payload: {
+    name: string
+    description?: string | null
+    body: string
+    visibility?: PromptVisibility
+    team_ids?: string[]
+    agent_id?: string | null
+  }) =>
+    apiFetch<Prompt>("/prompts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  update: (
+    promptId: string,
+    payload: {
+      name?: string
+      description?: string | null
+      body?: string
+      visibility?: PromptVisibility
+      team_ids?: string[]
+      agent_id?: string | null
+      clear_agent?: boolean
+    }
+  ) =>
+    apiFetch<Prompt>(`/prompts/${promptId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  remove: (promptId: string) =>
+    apiFetch(`/prompts/${promptId}`, { method: "DELETE" }),
 }
 

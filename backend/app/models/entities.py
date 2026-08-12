@@ -528,6 +528,48 @@ class AgentEmbedding(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class PromptVisibility(str, Enum):
+    private = "private"
+    team = "team"
+    space = "space"
+    org = "org"
+
+
+class Prompt(SQLModel, table=True):
+    __tablename__ = "prompts"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    owner_user_id: UUID = Field(foreign_key="users.id", index=True)
+    agent_id: Optional[UUID] = Field(default=None, foreign_key="agents.id", index=True)
+    name: str = Field(index=True)
+    description: Optional[str] = Field(default=None)
+    body: str
+    visibility: PromptVisibility = Field(
+        default=PromptVisibility.private,
+        sa_column=Column(String(32), nullable=False),
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    team_shares: List["PromptTeamShare"] = Relationship(back_populates="prompt")
+
+
+class PromptTeamShare(SQLModel, table=True):
+    __tablename__ = "prompt_team_shares"
+    __table_args__ = (
+        UniqueConstraint("prompt_id", "team_id", name="uq_prompt_team_shares_prompt_team"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    prompt_id: UUID = Field(foreign_key="prompts.id", index=True)
+    team_id: UUID = Field(foreign_key="teams.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    prompt: Prompt = Relationship(back_populates="team_shares")
+    team: Team = Relationship()
+
+
 @event.listens_for(Session, "before_flush")
 def refresh_chat_activity(session: Session, _flush_context: Any, _instances: Any) -> None:
     chat_ids: set[UUID] = set()

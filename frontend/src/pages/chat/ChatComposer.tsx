@@ -30,6 +30,7 @@ type ChatComposerProps = {
   inputRef?: React.RefObject<HTMLTextAreaElement | null>
   modelSelect?: ReactNode
   showModelSelect?: boolean
+  hasPrompts?: boolean
   onMessageChange: (value: string) => void
   onSend: () => void
   onStop: () => void
@@ -43,6 +44,7 @@ type ChatComposerProps = {
   onDrop: (event: React.DragEvent<HTMLDivElement>) => void
   onWebSearchEnabledChange: (enabled: boolean) => void
   onCodeExecutionEnabledChange: (enabled: boolean) => void
+  onInsertPromptRequest?: () => void
   sendLabel: string
   stopLabel: string
   welcomeTitle: string
@@ -62,6 +64,7 @@ export const ChatComposer = ({
   inputRef,
   modelSelect,
   showModelSelect = false,
+  hasPrompts = false,
   onMessageChange,
   onSend,
   onStop,
@@ -75,6 +78,7 @@ export const ChatComposer = ({
   onDrop,
   onWebSearchEnabledChange,
   onCodeExecutionEnabledChange,
+  onInsertPromptRequest,
   sendLabel,
   stopLabel,
   welcomeTitle,
@@ -232,16 +236,46 @@ export const ChatComposer = ({
               onChange={handleFilesSelected}
               disabled={loading || readOnly}
             />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-9 shrink-0 text-muted-foreground"
-              onClick={handlePickFiles}
-              disabled={loading || readOnly}
-              aria-label={t("chat_add_files")}
-            >
-              <Plus aria-hidden="true" className="size-4" />
-            </Button>
+            {hasPrompts && onInsertPromptRequest ? (
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-9 shrink-0 text-muted-foreground"
+                    disabled={loading || readOnly}
+                    aria-label={t("chat_add_files")}
+                  >
+                    <Plus aria-hidden="true" className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-52">
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    onClick={handlePickFiles}
+                  >
+                    {t("chat_add_files")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    onClick={onInsertPromptRequest}
+                  >
+                    {t("prompt_insert")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0 text-muted-foreground"
+                onClick={handlePickFiles}
+                disabled={loading || readOnly}
+                aria-label={t("chat_add_files")}
+              >
+                <Plus aria-hidden="true" className="size-4" />
+              </Button>
+            )}
 
             <div className="hidden min-w-0 items-center gap-2 md:flex">
               {toolToggle(

@@ -21,6 +21,7 @@ import {
   Copy,
   Check,
   Download,
+  Bookmark,
   Pencil,
   RotateCcw,
   Share,
@@ -99,6 +100,7 @@ type MessageBubbleProps = {
   onDeleteFromMessage: (msg: ChatMessage) => void
   onRetryMessage: (msg: ChatMessage) => void
   onShareMessage?: (msg: ChatMessage) => void
+  onSaveAsPrompt?: (msg: ChatMessage) => void
   onSaveEditedMessage: (msg: ChatMessage) => void
   onCancelEdit: () => void
   onEditContentChange: (value: string) => void
@@ -249,7 +251,7 @@ const answerFileStem = (msg: ChatMessage) => {
 }
 
 /** Final answer only — drops preamble / thoughts before the first tool call. */
-const getFinalAnswerText = (msg: ChatMessage): string => {
+export const getFinalAnswerText = (msg: ChatMessage): string => {
   const parts = msg.stream_parts ?? []
   const firstActionIndex = parts.findIndex((part) => part.type === "action")
   if (firstActionIndex >= 0) {
@@ -972,6 +974,7 @@ const MessageBubbleComponent = ({
   onDeleteFromMessage,
   onRetryMessage,
   onShareMessage,
+  onSaveAsPrompt,
   onSaveEditedMessage,
   onCancelEdit,
   onEditContentChange,
@@ -1276,7 +1279,8 @@ const MessageBubbleComponent = ({
       uniqueSources.length > 0 ||
       Boolean(msg.model_name) ||
       (actionInfoLevel === "detailed" && (msg.usage?.total_tokens ?? 0) > 0) ||
-      (actionsEnabled && msg.generation_status === "failed"))
+      (actionsEnabled && msg.generation_status === "failed") ||
+      (actionsEnabled && Boolean(onSaveAsPrompt) && canCopyMessage))
 
   return (
     <div
@@ -1307,6 +1311,18 @@ const MessageBubbleComponent = ({
                 iconOnly
                 className="opacity-70 hover:opacity-100 size-7"
               />
+            ) : null}
+            {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="opacity-70 hover:opacity-100 size-7"
+                onClick={() => onSaveAsPrompt(msg)}
+                aria-label={t("prompt_save_message")}
+              >
+                <Bookmark aria-hidden="true" className="size-4" />
+              </Button>
             ) : null}
             {actionsEnabled ? (
               <Button
@@ -1925,6 +1941,23 @@ const MessageBubbleComponent = ({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>{t("chat_share_answer")}</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="opacity-70 hover:opacity-100 size-7"
+                          onClick={() => onSaveAsPrompt(msg)}
+                          aria-label={t("prompt_save_message")}
+                        >
+                          <Bookmark aria-hidden="true" className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("prompt_save_message")}</TooltipContent>
                     </Tooltip>
                   ) : null}
                   {actionsEnabled ? (

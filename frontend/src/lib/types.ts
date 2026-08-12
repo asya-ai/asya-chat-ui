@@ -528,3 +528,23 @@ export type AgentShareSuggestion = {
   email: string
   display_name?: string | null
 }
+
+export type PromptVisibility = "private" | "team" | "space" | "org"
+
+export type Prompt = {
+  id: string
+  name: string
+  description?: string | null
+  body: string
+  visibility: PromptVisibility
+  team_ids: string[]
+  agent_id?: string | null
+  is_owner: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type MyTeam = {
+  id: string
+  name: string
+}

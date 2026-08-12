@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router"
-import { ChevronDown, ChevronRight, Loader2, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, FileText, Loader2, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
-import { agentApi } from "@/lib/api"
+import { agentApi, promptApi } from "@/lib/api"
 import { useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import { useI18n } from "@/lib/i18n-context"
 import { orgStore, sidebarSectionsStore } from "@/lib/storage"
-import type { Agent, Chat } from "@/lib/types"
+import type { Agent, Chat, Prompt } from "@/lib/types"
+import { PromptFormDialog } from "@/components/PromptFormDialog"
 import {
   useChats,
   useChatSearch,
@@ -49,6 +50,7 @@ type ChatSidebarProps = {
     newChat: string
     history: string
     projects: string
+    prompts?: string
     close?: string
   }
   activeSection?: "history" | "projects" | null
@@ -58,6 +60,8 @@ type ChatSidebarProps = {
   onOpenHistory: () => void
   onOpenProjects: () => void
   onToggleShareChat?: (chat: Chat) => void
+  onInsertPrompt?: (body: string) => void
+  onPromptCountChange?: (count: number) => void
   footer?: ReactNode
   onRequestClose?: () => void
 }
@@ -77,6 +81,8 @@ export const ChatSidebar = ({
   onOpenHistory,
   onOpenProjects,
   onToggleShareChat,
+  onInsertPrompt,
+  onPromptCountChange,
   footer,
   onRequestClose,
 }: ChatSidebarProps) => {
@@ -90,6 +96,7 @@ export const ChatSidebar = ({
   const renameChatMutation = useRenameChat(orgId)
   const pinChatMutation = usePinChat(orgId)
   const [agents, setAgents] = useState<Agent[]>([])
+  const [prompts, setPrompts] = useState<Prompt[]>([])
   const [sectionsOpen, setSectionsOpen] = useState(() => sidebarSectionsStore.get())
   const [sessionQuery, setSessionQuery] = useState("")
   const [sessionQueryDebounced, setSessionQueryDebounced] = useState("")
@@ -98,6 +105,10 @@ export const ChatSidebar = ({
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [promptFormOpen, setPromptFormOpen] = useState(false)
+  const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null)
+  const [deletePromptTarget, setDeletePromptTarget] = useState<Prompt | null>(null)
+  const [deletingPrompt, setDeletingPrompt] = useState(false)
   const [newName, setNewName] = useState("")
   const [newInstructions, setNewInstructions] = useState("")
   const [createError, setCreateError] = useState<string | null>(null)
@@ -160,6 +171,70 @@ export const ChatSidebar = ({
       cancelled = true
     }
   }, [orgId])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!orgId) {
+      setPrompts([])
+      onPromptCountChange?.(0)
+      return
+    }
+    promptApi
+      .list({
+        context_agent_id: activeAgentId ?? null,
+      })
+      .then((items) => {
+        if (cancelled) return
+        setPrompts(items)
+        onPromptCountChange?.(items.length)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPrompts([])
+        onPromptCountChange?.(0)
+      })
+    return () => {
+      cancelled = true
+    }
+    // Intentionally omit onPromptCountChange to avoid re-fetch loops from unstable parents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, activeAgentId])
+
+  const openCreatePrompt = () => {
+    setEditingPrompt(null)
+    setPromptFormOpen(true)
+    if (!sectionsOpen.prompts) setSectionOpen("prompts", true)
+  }
+
+  const handlePromptSaved = (prompt: Prompt) => {
+    setPrompts((prev) => {
+      const matchesContext =
+        !prompt.agent_id ||
+        (activeAgentId != null && prompt.agent_id === activeAgentId)
+      const without = prev.filter((item) => item.id !== prompt.id)
+      const next = matchesContext ? [prompt, ...without] : without
+      onPromptCountChange?.(next.length)
+      return next
+    })
+  }
+
+  const handleDeletePrompt = async () => {
+    if (!deletePromptTarget) return
+    try {
+      setDeletingPrompt(true)
+      await promptApi.remove(deletePromptTarget.id)
+      setPrompts((prev) => {
+        const next = prev.filter((item) => item.id !== deletePromptTarget.id)
+        onPromptCountChange?.(next.length)
+        return next
+      })
+      setDeletePromptTarget(null)
+    } catch {
+      // keep dialog open
+    } finally {
+      setDeletingPrompt(false)
+    }
+  }
 
   const setSectionOpen = (key: keyof typeof sectionsOpen, open: boolean) => {
     setSectionsOpen((prev) => {
@@ -532,20 +607,129 @@ export const ChatSidebar = ({
               </div>
               {sectionsOpen.spaces ? (
                 <div className="mt-0.5 flex flex-col gap-0.5">
-                  {agents.map((agent) => (
-                    <Button
-                      key={agent.id}
-                      type="button"
-                      variant="ghost"
-                      className={cn(
-                        "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
-                        activeAgentId === agent.id && "bg-sidebar-accent"
-                      )}
-                      onClick={() => selectAgent(agent)}
-                    >
-                      <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                    </Button>
-                  ))}
+                  {agents.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      {t("sidebar_section_empty")}
+                    </p>
+                  ) : (
+                    agents.map((agent) => (
+                      <Button
+                        key={agent.id}
+                        type="button"
+                        variant="ghost"
+                        className={cn(
+                          "h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal",
+                          activeAgentId === agent.id && "bg-sidebar-accent"
+                        )}
+                        onClick={() => selectAgent(agent)}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                      </Button>
+                    ))
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            <div>
+              <div className="flex h-9 w-full min-w-0 items-center">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 min-w-0 flex-1 justify-start gap-0.5 p-0"
+                  aria-expanded={sectionsOpen.prompts}
+                  onClick={() => setSectionOpen("prompts", !sectionsOpen.prompts)}
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center">
+                    <FileText aria-hidden="true" className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
+                    {labels.prompts ?? t("prompt_library")}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0 text-muted-foreground"
+                  aria-label={t("prompt_new")}
+                  onClick={openCreatePrompt}
+                >
+                  <Plus aria-hidden="true" className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="mr-2 shrink-0 text-muted-foreground"
+                  aria-label={
+                    sectionsOpen.prompts
+                      ? t("chat_collapse_prompts")
+                      : t("chat_expand_prompts")
+                  }
+                  onClick={() => setSectionOpen("prompts", !sectionsOpen.prompts)}
+                >
+                  {sectionsOpen.prompts ? (
+                    <ChevronDown aria-hidden="true" className="size-4" />
+                  ) : (
+                    <ChevronRight aria-hidden="true" className="size-4" />
+                  )}
+                </Button>
+              </div>
+              {sectionsOpen.prompts ? (
+                <div className="mt-0.5 flex flex-col gap-0.5">
+                  {prompts.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      {t("sidebar_section_empty")}
+                    </p>
+                  ) : (
+                    prompts.map((prompt) => (
+                      <div key={prompt.id} className="group/prompt-item relative">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal hover:bg-transparent"
+                          onClick={() => {
+                            onInsertPrompt?.(prompt.body)
+                            onRequestClose?.()
+                          }}
+                        >
+                          <span className="min-w-0 flex-1 truncate">{prompt.name}</span>
+                        </Button>
+                        {prompt.is_owner ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="absolute right-1 hidden size-6 rounded-md bg-sidebar p-0 hover:bg-sidebar group-hover/prompt-item:flex data-[state=open]:flex"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MoreVertical className="size-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" side="right">
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setEditingPrompt(prompt)
+                                  setPromptFormOpen(true)
+                                }}
+                              >
+                                {t("prompt_edit")}
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={() => setDeletePromptTarget(prompt)}
+                              >
+                                {t("common_delete")}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : null}
+                      </div>
+                    ))
+                  )}
                 </div>
               ) : null}
             </div>
@@ -615,7 +799,7 @@ export const ChatSidebar = ({
                     <p className="px-3 py-2 text-xs text-muted-foreground">
                       {sessionQueryDebounced
                         ? t("chat_search_no_results")
-                        : t("chat_history_empty")}
+                        : t("sidebar_section_empty")}
                     </p>
                   ) : (
                     sessionGroups.map((group) => (
@@ -837,6 +1021,72 @@ export const ChatSidebar = ({
               disabled={deleteChatMutation.isPending}
             >
               {t("chat_delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <PromptFormDialog
+        open={promptFormOpen}
+        onOpenChange={(open) => {
+          setPromptFormOpen(open)
+          if (!open) setEditingPrompt(null)
+        }}
+        orgId={orgId}
+        spaces={agents}
+        initial={
+          editingPrompt
+            ? {
+                id: editingPrompt.id,
+                name: editingPrompt.name,
+                description: editingPrompt.description ?? "",
+                body: editingPrompt.body,
+                visibility: editingPrompt.visibility,
+                team_ids: editingPrompt.team_ids,
+                agent_id: editingPrompt.agent_id ?? null,
+              }
+            : {
+                agent_id:
+                  activeAgentId &&
+                  agents.some(
+                    (agent) =>
+                      agent.id === activeAgentId &&
+                      (agent.role === "owner" || agent.role === "editor")
+                  )
+                    ? activeAgentId
+                    : null,
+              }
+        }
+        title={editingPrompt ? t("prompt_edit") : t("prompt_create_title")}
+        description={t("prompt_form_description")}
+        onSaved={handlePromptSaved}
+      />
+
+      <Dialog
+        open={Boolean(deletePromptTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeletePromptTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("prompt_delete_confirm_title")}</DialogTitle>
+            <DialogDescription>
+              {t("prompt_delete_confirm_desc", {
+                name: deletePromptTarget?.name ?? "",
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletePromptTarget(null)}>
+              {t("common_cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void handleDeletePrompt()}
+              disabled={deletingPrompt}
+            >
+              {t("common_delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

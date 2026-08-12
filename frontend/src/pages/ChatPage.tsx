@@ -3,7 +3,7 @@ import type { CSSProperties } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, agentApi, chatApi, configApi } from "@/lib/api"
+import { ApiError, agentApi, chatApi, configApi, promptApi } from "@/lib/api"
 import { chatGenerationIndicatorsStore } from "@/lib/chat-generation-indicators"
 import {
   actionInfoLevelStore,
@@ -20,13 +20,16 @@ import type {
   ChatMessage,
   ChatMessageAttachmentInput,
   GenerationStatus,
+  Prompt,
   SourceItem,
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
 import { ProviderIcon } from "@/components/ProviderIcon"
+import { PromptFormDialog } from "@/components/PromptFormDialog"
 import { getProviderIconCandidates } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
@@ -38,7 +41,7 @@ import ChatSidebar from "@/pages/chat/ChatSidebar"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
-import { MessageBubble } from "@/pages/chat/MessageBubble"
+import { MessageBubble, getFinalAnswerText } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 import {
   useChatSearch,
@@ -276,6 +279,12 @@ export const ChatPage = () => {
   const [agents, setAgents] = useState<Agent[]>([])
   const [toolEvents, setToolEvents] = useState<ChatMessage[]>([])
   const [message, setMessage] = useState("")
+  const [promptCount, setPromptCount] = useState(0)
+  const [insertPromptOpen, setInsertPromptOpen] = useState(false)
+  const [insertPrompts, setInsertPrompts] = useState<Prompt[]>([])
+  const [insertPromptQuery, setInsertPromptQuery] = useState("")
+  const [savePromptOpen, setSavePromptOpen] = useState(false)
+  const [savePromptBody, setSavePromptBody] = useState("")
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     modelStore.get() ?? undefined
   )
@@ -2063,6 +2072,48 @@ export const ChatPage = () => {
     return current.slice(0, start) + insert + current.slice(end)
   }
 
+  const insertPromptIntoComposer = useCallback(
+    (body: string) => {
+      const input = composerInputRef.current
+      const start = input?.selectionStart ?? message.length
+      const end = input?.selectionEnd ?? message.length
+      const spacer =
+        start > 0 && !/\s$/.test(message.slice(0, start)) && body.length > 0 ? "\n\n" : ""
+      const nextValue = insertAtCursor(message, `${spacer}${body}`, start, end)
+      setMessage(nextValue)
+      requestAnimationFrame(() => {
+        const el = composerInputRef.current
+        if (!el) return
+        const cursor = start + spacer.length + body.length
+        el.focus()
+        el.setSelectionRange(cursor, cursor)
+      })
+    },
+    [message]
+  )
+
+  const openInsertPromptPicker = useCallback(async () => {
+    try {
+      const items = await promptApi.list({
+        context_agent_id: activeAgentId ?? null,
+      })
+      setInsertPrompts(items)
+      setInsertPromptQuery("")
+      setInsertPromptOpen(true)
+      setPromptCount(items.length)
+    } catch {
+      setInsertPrompts([])
+    }
+  }, [activeAgentId])
+
+  const saveMessageAsPrompt = useCallback((msg: ChatMessage) => {
+    const body =
+      msg.role === "user" ? msg.content.trim() : getFinalAnswerText(msg).trim()
+    if (!body) return
+    setSavePromptBody(body)
+    setSavePromptOpen(true)
+  }, [])
+
   const handlePasteAttachments = async (
     event: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
@@ -2701,6 +2752,7 @@ export const ChatPage = () => {
           onDeleteFromMessage={deleteFromMessage}
           onRetryMessage={retryFailedMessage}
           onShareMessage={shareMessage}
+          onSaveAsPrompt={saveMessageAsPrompt}
           onSaveEditedMessage={saveEditedMessage}
           onCancelEdit={cancelEditMessage}
           onEditContentChange={setEditingContent}
@@ -2728,6 +2780,7 @@ export const ChatPage = () => {
       deleteFromMessage,
       retryFailedMessage,
       shareMessage,
+      saveMessageAsPrompt,
       saveEditedMessage,
       cancelEditMessage,
       handleEditPasteAttachments,
@@ -2829,6 +2882,7 @@ export const ChatPage = () => {
             newChat: t("chat_new"),
             history: t("chat_history"),
             projects: t("project_title"),
+            prompts: t("prompt_library"),
             close: t("common_close"),
           }}
           activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
@@ -2844,6 +2898,8 @@ export const ChatPage = () => {
             navigate("/projects")
           }}
           onToggleShareChat={toggleShareChat}
+          onInsertPrompt={insertPromptIntoComposer}
+          onPromptCountChange={setPromptCount}
           onRequestClose={() => setSidebarOpen(false)}
           footer={sidebarFooter}
         />
@@ -2883,6 +2939,7 @@ export const ChatPage = () => {
             newChat: t("chat_new"),
             history: t("chat_history"),
             projects: t("project_title"),
+            prompts: t("prompt_library"),
           }}
           activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
           activeChatId={chatId}
@@ -2891,6 +2948,8 @@ export const ChatPage = () => {
           onOpenHistory={() => navigate("/history")}
           onOpenProjects={() => navigate("/projects")}
           onToggleShareChat={toggleShareChat}
+          onInsertPrompt={insertPromptIntoComposer}
+          onPromptCountChange={setPromptCount}
           footer={sidebarFooter}
         />
       </aside>
@@ -3006,6 +3065,7 @@ export const ChatPage = () => {
                 codeExecutionEnabled={codeExecutionEnabled}
                 inputRef={composerInputRef}
                 showModelSelect
+                hasPrompts={promptCount > 0}
                 modelSelect={
                   <Select value={selectedModel} onValueChange={setSelectedModel}>
                     <SelectTrigger
@@ -3058,6 +3118,9 @@ export const ChatPage = () => {
                 onDrop={handleComposerDrop}
                 onWebSearchEnabledChange={setWebSearchEnabled}
                 onCodeExecutionEnabledChange={setCodeExecutionEnabled}
+                onInsertPromptRequest={() => {
+                  void openInsertPromptPicker()
+                }}
                 sendLabel={t("common_send")}
                 stopLabel={t("common_stop")}
                 welcomeTitle={welcomeTitle}
@@ -3175,6 +3238,76 @@ export const ChatPage = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <Dialog
+          open={insertPromptOpen}
+          onOpenChange={setInsertPromptOpen}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t("prompt_insert")}</DialogTitle>
+              <DialogDescription>{t("prompt_insert_description")}</DialogDescription>
+            </DialogHeader>
+            <Input
+              value={insertPromptQuery}
+              onChange={(event) => setInsertPromptQuery(event.target.value)}
+              placeholder={t("prompt_search_placeholder")}
+            />
+            <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+              {insertPrompts
+                .filter((prompt) => {
+                  const q = insertPromptQuery.trim().toLowerCase()
+                  if (!q) return true
+                  return (
+                    prompt.name.toLowerCase().includes(q) ||
+                    (prompt.description ?? "").toLowerCase().includes(q)
+                  )
+                })
+                .map((prompt) => (
+                  <Button
+                    key={prompt.id}
+                    type="button"
+                    variant="ghost"
+                    className="h-auto min-h-10 w-full flex-col items-start gap-0.5 px-3 py-2 text-left"
+                    onClick={() => {
+                      insertPromptIntoComposer(prompt.body)
+                      setInsertPromptOpen(false)
+                    }}
+                  >
+                    <span className="w-full truncate text-sm font-medium">{prompt.name}</span>
+                    {prompt.description ? (
+                      <span className="w-full truncate text-xs text-muted-foreground">
+                        {prompt.description}
+                      </span>
+                    ) : null}
+                  </Button>
+                ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+        <PromptFormDialog
+          open={savePromptOpen}
+          onOpenChange={setSavePromptOpen}
+          orgId={orgId}
+          spaces={agents}
+          initial={{
+            body: savePromptBody,
+            agent_id:
+              activeAgentId &&
+              agents.some(
+                (agent) =>
+                  agent.id === activeAgentId &&
+                  (agent.role === "owner" || agent.role === "editor")
+              )
+                ? activeAgentId
+                : null,
+          }}
+          title={t("prompt_save_message")}
+          description={t("prompt_form_description")}
+          onSaved={() => {
+            setPromptCount((count) => count + 1)
+            toast.success(t("prompt_saved"))
+          }}
+        />
       </main>
     </div>
   )

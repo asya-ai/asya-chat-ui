@@ -13,12 +13,14 @@ export type ActionInfoLevel = "none" | "short" | "detailed"
 export type SidebarSectionsState = {
   pinned: boolean
   spaces: boolean
+  prompts: boolean
   sessions: boolean
 }
 
 const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionsState = {
   pinned: true,
   spaces: false,
+  prompts: false,
   sessions: true,
 }
 
@@ -29,6 +31,7 @@ const parseSidebarSections = (raw: string | null): SidebarSectionsState => {
     return {
       pinned: parsed.pinned == null ? true : Boolean(parsed.pinned),
       spaces: Boolean(parsed.spaces),
+      prompts: Boolean(parsed.prompts),
       sessions: parsed.sessions == null ? true : Boolean(parsed.sessions),
     }
   } catch {

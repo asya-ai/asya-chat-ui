@@ -66,6 +66,7 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
         newChat: t("chat_new"),
         history: t("chat_history"),
         projects: t("project_title"),
+        prompts: t("prompt_library"),
         close: t("common_close"),
       }}
       activeSection={activeSection}

@@ -15,7 +15,7 @@ from app.models import (
     TeamModel,
     User,
 )
-from app.services.org_service import require_org_admin
+from app.services.org_service import require_org_admin, require_org_member
 from app.services.team_service import (
     TEAM_SOURCE_MANUAL,
     ensure_default_team,
@@ -151,6 +151,11 @@ def _ensure_unique_oidc_group(
         )
 
 
+class MyTeamRead(BaseModel):
+    id: str
+    name: str
+
+
 @router.get("/{org_id}/teams", response_model=list[TeamRead])
 def list_teams(
     org_id: str,
@@ -165,6 +170,30 @@ def list_teams(
         select(Team).where(Team.org_id == org_uuid).order_by(Team.is_default.desc(), Team.name)
     ).all()
     return [_team_read(session, team) for team in teams]
+
+
+@router.get("/{org_id}/teams/mine", response_model=list[MyTeamRead])
+def list_my_teams(
+    org_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[MyTeamRead]:
+    org_uuid = _parse_org_id(org_id)
+    require_org_member(
+        session, org_uuid, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    _get_org(session, org_uuid)
+    teams = session.exec(
+        select(Team)
+        .join(TeamMembership, TeamMembership.team_id == Team.id)
+        .where(
+            Team.org_id == org_uuid,
+            Team.is_default.is_(False),
+            TeamMembership.user_id == current_user.id,
+        )
+        .order_by(Team.name)
+    ).all()
+    return [MyTeamRead(id=str(team.id), name=team.name) for team in teams]
 
 
 @router.post("/{org_id}/teams", response_model=TeamRead)
