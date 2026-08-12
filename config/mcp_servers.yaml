@@ -23,12 +23,6 @@
 #     tool_blocklist: null
 
 servers:
-  - id: data-lv
-    name: Latvia Open Data
-    transport: http
-    url: https://gateway.pipeworx.io/data-lv/mcp
-    enabled: true
-    description: Search and query datasets from data.gov.lv (CKAN).
   - id: latvia-statistics
     name: Latvia Statistics
     transport: http
