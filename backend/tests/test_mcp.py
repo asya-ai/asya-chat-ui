@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -156,6 +157,45 @@ def test_truncate_json_text() -> None:
     out = truncate_json_text("abcdefghijklmnop", max_chars=14)
     assert out.endswith("...[truncated]")
     assert len(out) == 14
+
+
+def test_compact_mcp_tool_payload_dedupes_content_and_structured() -> None:
+    from app.services.mcp.client import compact_mcp_tool_payload
+
+    entity = {
+        "entity": "company",
+        "key": "40203171916",
+        "sources": [{"id": "register", "total": 1, "records": [{"name": "Asya"}]}],
+    }
+    raw = json.dumps(entity)
+    out = compact_mcp_tool_payload(
+        {
+            "content": [{"type": "text", "text": raw}],
+            "structured_content": {"result": raw},
+            "is_error": False,
+        }
+    )
+    assert out == {"is_error": False, "data": entity}
+    # One copy only — no content / structured_content twin.
+    assert "content" not in out
+    assert "structured_content" not in out
+
+
+def test_compact_mcp_tool_payload_keeps_non_text_blocks() -> None:
+    from app.services.mcp.client import compact_mcp_tool_payload
+
+    out = compact_mcp_tool_payload(
+        {
+            "content": [
+                {"type": "text", "text": '{"ok": true}'},
+                {"type": "image", "data": "abc"},
+            ],
+            "structured_content": {"ok": True},
+            "is_error": False,
+        }
+    )
+    assert out["data"] == {"ok": True}
+    assert out["content"] == [{"type": "image", "data": "abc"}]
 
 
 @pytest.mark.asyncio

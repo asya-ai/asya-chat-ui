@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -198,7 +199,70 @@ def content_blocks_to_json(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
+def _maybe_parse_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "[{":
+        return value
+    try:
+        return json.loads(text)
+    except Exception:
+        return value
+
+
+def compact_mcp_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Collapse duplicate content/structured_content into one parsed body.
+
+    Many MCP servers put the same JSON in both a text content block and
+    structuredContent (often as a string under ``result``). Passing both to the
+    model doubles token use with no extra information.
+    """
+    is_error = bool(payload.get("is_error"))
+    content = payload.get("content")
+    structured = payload.get("structured_content")
+
+    structured = _maybe_parse_json(structured)
+    if isinstance(structured, dict) and "result" in structured and len(structured) <= 2:
+        structured = _maybe_parse_json(structured.get("result"))
+
+    content_body: Any = None
+    non_text_blocks: list[dict[str, Any]] = []
+    if isinstance(content, list) and content:
+        texts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                texts.append(block["text"])
+            else:
+                non_text_blocks.append(block)
+        if len(texts) == 1:
+            content_body = _maybe_parse_json(texts[0])
+        elif texts:
+            content_body = [_maybe_parse_json(item) for item in texts]
+
+    # Prefer structured when present; otherwise parsed text; keep raw content only
+    # when we could not unwrap a body (or when there are non-text blocks).
+    if structured is not None:
+        body = structured
+    elif content_body is not None:
+        body = content_body
+    else:
+        body = None
+
+    out: dict[str, Any] = {"is_error": is_error}
+    if body is not None:
+        out["data"] = body
+    if non_text_blocks:
+        out["content"] = non_text_blocks
+    elif body is None and content is not None:
+        out["content"] = content
+    return out
+
+
 def truncate_json_text(value: Any, *, max_chars: int) -> Any:
+    """Soft per-string cap only — does not drop structured fields."""
     if max_chars <= 0:
         return value
     if isinstance(value, str):
@@ -232,7 +296,8 @@ async def call_mcp_tool(
         if hasattr(structured, "model_dump"):
             structured = structured.model_dump(mode="json")
         payload["structured_content"] = structured
-    return truncate_json_text(payload, max_chars=settings.mcp_max_result_chars)
+    # Deduplicate only — do not slim or hard-truncate the entity payload.
+    return compact_mcp_tool_payload(payload)
 
 
 async def read_mcp_resource(server: McpServerConfig, uri: str) -> dict[str, Any]:

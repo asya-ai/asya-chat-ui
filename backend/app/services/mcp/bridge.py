@@ -484,7 +484,10 @@ def mcp_source_items_from_tool_result(
         if output.get("is_error") is True:
             return []
         if output.get("error") and not (
-            output.get("content") or output.get("structured_content") or output.get("contents")
+            output.get("content")
+            or output.get("structured_content")
+            or output.get("data")
+            or output.get("contents")
         ):
             return []
 
