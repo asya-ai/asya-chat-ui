@@ -189,6 +189,96 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
 
 
 @pytest.mark.asyncio
+async def test_agentic_loop_shares_pending_attachments_with_later_tools():
+    """download_attachments → extract_pdf must see the same pending list mid-loop."""
+    pending_attachments: list[dict] = []
+    registry = ToolRegistry()
+    seen_pending_counts: list[int] = []
+
+    async def _download(_args: dict) -> ToolResult:
+        return ToolResult(
+            name="download_attachments",
+            output={"results": [{"file_name": "manual.pdf", "content_type": "application/pdf"}]},
+            attachments=[
+                {
+                    "file_name": "manual.pdf",
+                    "content_type": "application/pdf",
+                    "data_base64": "cGRm",
+                }
+            ],
+        )
+
+    async def _extract(_args: dict) -> ToolResult:
+        seen_pending_counts.append(len(pending_attachments))
+        return ToolResult(
+            name="extract_pdf",
+            output={
+                "file_name": pending_attachments[0]["file_name"] if pending_attachments else None,
+                "error": None if pending_attachments else "PDF attachment not found for this chat.",
+            },
+        )
+
+    registry.register(
+        ToolSpec(
+            name="download_attachments",
+            description="Download files",
+            parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        ),
+        _download,
+    )
+    registry.register(
+        ToolSpec(
+            name="extract_pdf",
+            description="Extract PDF",
+            parameters={"type": "object", "properties": {}},
+        ),
+        _extract,
+    )
+
+    @dataclass
+    class _DownloadThenExtractProvider:
+        calls: int = 0
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(),
+                    tool_calls=[
+                        ChatToolCall(
+                            id="dl-1",
+                            name="download_attachments",
+                            arguments={"url": "https://example.com/manual.pdf"},
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(),
+                    tool_calls=[ChatToolCall(id="pdf-1", name="extract_pdf", arguments={})],
+                )
+            return ChatResponse(content="done", usage=_usage(), tool_calls=[])
+
+    content, attachments, _sources, _image_usages, usage = await run_agentic_loop_langchain(
+        provider=_DownloadThenExtractProvider(),
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "read the manual"}],
+        tool_registry=registry,
+        max_steps=4,
+        pending_attachments=pending_attachments,
+    )
+
+    assert content == "done"
+    assert seen_pending_counts == [1]
+    assert attachments is pending_attachments
+    assert len(attachments) == 1
+    assert attachments[0]["file_name"] == "manual.pdf"
+    assert usage is not None
+
+
+@pytest.mark.asyncio
 async def test_agentic_loop_merges_usage_across_model_steps_and_tool_answers():
     registry = ToolRegistry()
 

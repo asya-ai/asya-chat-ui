@@ -1938,6 +1938,7 @@ async def _run_agentic_loop(
         messages=messages,
         tool_registry=tool_registry,
         max_steps=MAX_TOOL_STEPS,
+        pending_attachments=pending_attachments,
         activity_sender=activity_sender,
         tool_event_sender=tool_event_sender,
         delta_sender=delta_sender,

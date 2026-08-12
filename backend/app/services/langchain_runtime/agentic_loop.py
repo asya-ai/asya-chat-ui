@@ -200,13 +200,16 @@ async def run_agentic_loop_langchain(
     messages: list[dict],
     tool_registry: ToolRegistry,
     max_steps: int,
+    pending_attachments: list[dict] | None = None,
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
     delta_sender: anyio.abc.ObjectSendStream | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     executor = LangChainToolExecutor(tool_registry)
     tool_specs = executor.list_specs()
-    attachments: list[dict] = []
+    # Reuse the registry's pending list so mid-loop tools (e.g. extract_pdf)
+    # can see attachments produced by earlier tools (e.g. download_attachments).
+    attachments: list[dict] = pending_attachments if pending_attachments is not None else []
     image_usages: list[dict] = []
     usage: ChatUsage | None = None
 
