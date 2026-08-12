@@ -40,10 +40,10 @@ export const MePage = () => {
   const location = useLocation()
   const { clearToken } = useAuth()
   const { t } = useI18n()
-  const [email, setEmail] = useState<string>("")
   const [theme, setTheme] = useState(getTheme())
   const [isAdmin, setIsAdmin] = useState(false)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
@@ -60,6 +60,7 @@ export const MePage = () => {
     actionInfoLevelStore.get()
   )
   const [memoryEnabled, setMemoryEnabled] = useState(false)
+  const [memoriesOpen, setMemoriesOpen] = useState(false)
   const [memories, setMemories] = useState<UserMemory[]>([])
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState("")
@@ -69,18 +70,17 @@ export const MePage = () => {
     authApi
       .me()
       .then((me) => {
-        setEmail(me.email)
         setIsAdmin(me.is_admin)
         setIsSuperAdmin(me.is_super_admin)
         setMemoryEnabled(me.memory_enabled)
       })
-      .catch(() => setEmail(""))
+      .catch(() => null)
   }, [])
 
   useEffect(() => {
-    if (!memoryEnabled) return
+    if (!memoriesOpen || !memoryEnabled) return
     memoryApi.list().then(setMemories).catch(() => setMemories([]))
-  }, [memoryEnabled])
+  }, [memoriesOpen, memoryEnabled])
 
   useEffect(() => {
     if (!apiKeysOpen) return
@@ -115,11 +115,9 @@ export const MePage = () => {
 
   const onToggleMemory = async (enabled: boolean) => {
     setMemoryEnabled(enabled)
+    if (!enabled) setMemoriesOpen(false)
     try {
       await authApi.toggleMemory(enabled)
-      if (enabled) {
-        memoryApi.list().then(setMemories).catch(() => setMemories([]))
-      }
     } catch {
       setMemoryEnabled(!enabled)
     }
@@ -147,6 +145,17 @@ export const MePage = () => {
       setEditingMemoryId(null)
     } catch {
       // ignore
+    }
+  }
+
+  const onPasswordOpenChange = (open: boolean) => {
+    setPasswordOpen(open)
+    if (!open) {
+      setCurrentPassword("")
+      setNewPassword("")
+      setConfirmPassword("")
+      setError(null)
+      setSuccess(null)
     }
   }
 
@@ -259,15 +268,6 @@ export const MePage = () => {
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>{t("me_profile")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Input value={email} readOnly placeholder={t("auth_email")} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>{t("me_preferences")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -308,136 +308,101 @@ export const MePage = () => {
                 </Select>
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("me_memory_enabled")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="flex justify-between items-start gap-4 cursor-pointer">
-              <div className="space-y-1">
-                <p className="font-medium text-sm leading-5">
-                  {t("me_memory_enabled")}
-                </p>
-                <p className="text-muted-foreground text-xs leading-5">
-                  {t("me_memory_enabled_desc")}
-                </p>
-              </div>
-              <Switch
-                checked={memoryEnabled}
-                onCheckedChange={onToggleMemory}
-              />
-            </label>
-            {memoryEnabled ? (
-              <div className="pt-3 border-t space-y-2">
-                <p className="font-medium text-sm">{t("me_memory_title")}</p>
-                {memories.length === 0 ? (
-                  <p className="text-muted-foreground text-xs">
-                    {t("me_memory_empty")}
+            <div className="pt-1 border-t space-y-3">
+              <label className="flex justify-between items-start gap-4 cursor-pointer py-2">
+                <div className="space-y-1">
+                  <p className="font-medium text-sm leading-5">
+                    {t("me_memory_enabled")}
                   </p>
-                ) : (
-                  <div className="space-y-2">
-                    {memories.map((memory) => (
-                      <div
-                        key={memory.id}
-                        className="flex items-start gap-2 px-3 py-2 border rounded-md text-sm"
-                      >
-                        {editingMemoryId === memory.id ? (
-                          <div className="flex-1 flex items-center gap-2">
-                            <Input
-                              value={editingContent}
-                              onChange={(e) => setEditingContent(e.target.value)}
-                              className="h-8 text-sm"
-                              autoFocus
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") onSaveMemory()
-                                if (e.key === "Escape") setEditingMemoryId(null)
-                              }}
-                            />
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 shrink-0"
-                              onClick={onSaveMemory}
-                            >
-                              <Check className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 shrink-0"
-                              onClick={() => setEditingMemoryId(null)}
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </Button>
+                  <p className="text-muted-foreground text-xs leading-5">
+                    {t("me_memory_enabled_desc")}
+                  </p>
+                </div>
+                <Switch
+                  checked={memoryEnabled}
+                  onCheckedChange={onToggleMemory}
+                />
+              </label>
+              {memoryEnabled ? (
+                <Dialog open={memoriesOpen} onOpenChange={setMemoriesOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline">{t("me_memory_see")}</Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>{t("me_memory_title")}</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+                      {memories.length === 0 ? (
+                        <p className="text-muted-foreground text-sm">
+                          {t("me_memory_empty")}
+                        </p>
+                      ) : (
+                        memories.map((memory) => (
+                          <div
+                            key={memory.id}
+                            className="flex items-start gap-2 px-3 py-2 border rounded-md text-sm"
+                          >
+                            {editingMemoryId === memory.id ? (
+                              <div className="flex-1 flex items-center gap-2">
+                                <Input
+                                  value={editingContent}
+                                  onChange={(e) => setEditingContent(e.target.value)}
+                                  className="h-8 text-sm"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") onSaveMemory()
+                                    if (e.key === "Escape") setEditingMemoryId(null)
+                                  }}
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 shrink-0"
+                                  onClick={onSaveMemory}
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 shrink-0"
+                                  onClick={() => setEditingMemoryId(null)}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <>
+                                <span className="flex-1 min-w-0 wrap-break-word">
+                                  {memory.content}
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 shrink-0"
+                                  onClick={() => onStartEditMemory(memory)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                                  onClick={() => onDeleteMemory(memory.id)}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </>
+                            )}
                           </div>
-                        ) : (
-                          <>
-                            <span className="flex-1 min-w-0 wrap-break-word">{memory.content}</span>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 shrink-0"
-                              onClick={() => onStartEditMemory(memory)}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
-                              onClick={() => onDeleteMemory(memory.id)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("me_security")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Input
-              type="password"
-              placeholder={t("me_current_password")}
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-              className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
-            />
-            <Input
-              type="password"
-              placeholder={t("me_new_password")}
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
-            />
-            <Input
-              type="password"
-              placeholder={t("me_confirm_password")}
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              className={hasError ? "border-destructive focus-visible:ring-destructive" : ""}
-            />
-            {error ? (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            ) : null}
-            {success ? <p className="text-emerald-600 text-sm">{success}</p> : null}
-            <Button onClick={onChangePassword} disabled={saving}>
-              {saving ? t("me_password_updating") : t("me_update_password")}
-            </Button>
+                        ))
+                      )}
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
 
@@ -445,93 +410,140 @@ export const MePage = () => {
           <CardHeader>
             <CardTitle>{t("me_account")}</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-3">
+              <Dialog open={passwordOpen} onOpenChange={onPasswordOpenChange}>
+                <DialogTrigger asChild>
+                  <Button variant="outline">{t("me_change_password")}</Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>{t("me_change_password")}</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <Input
+                      type="password"
+                      placeholder={t("me_current_password")}
+                      value={currentPassword}
+                      onChange={(event) => setCurrentPassword(event.target.value)}
+                      className={
+                        hasError ? "border-destructive focus-visible:ring-destructive" : ""
+                      }
+                    />
+                    <Input
+                      type="password"
+                      placeholder={t("me_new_password")}
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      className={
+                        hasError ? "border-destructive focus-visible:ring-destructive" : ""
+                      }
+                    />
+                    <Input
+                      type="password"
+                      placeholder={t("me_confirm_password")}
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      className={
+                        hasError ? "border-destructive focus-visible:ring-destructive" : ""
+                      }
+                    />
+                    {error ? (
+                      <Alert variant="destructive">
+                        <AlertDescription>{error}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                    {success ? (
+                      <p className="text-emerald-600 text-sm">{success}</p>
+                    ) : null}
+                    <Button onClick={onChangePassword} disabled={saving}>
+                      {saving ? t("me_password_updating") : t("me_update_password")}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={apiKeysOpen} onOpenChange={setApiKeysOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline">{t("api_keys_manage")}</Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>{t("api_keys_title")}</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div className="px-3 py-2 border rounded-md text-muted-foreground text-xs">
+                      <p>
+                        {t("api_keys_endpoint_label")}{" "}
+                        <span className="font-semibold text-foreground">
+                          {`${window.location.origin}/api/v1`}
+                        </span>
+                      </p>
+                      <p>{t("api_keys_header_note")}</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Input
+                        placeholder={t("api_keys_name_placeholder")}
+                        value={apiKeyName}
+                        onChange={(event) => setApiKeyName(event.target.value)}
+                      />
+                      <Button onClick={onCreateApiKey} disabled={apiKeyCreating}>
+                        {apiKeyCreating ? t("common_saving") : t("api_keys_create")}
+                      </Button>
+                    </div>
+                    {createdKey ? (
+                      <Alert>
+                        <AlertDescription>
+                          <div className="space-y-2">
+                            <p>{t("api_keys_created_once")}</p>
+                            <Input value={createdKey} readOnly />
+                          </div>
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
+                    {apiKeyError ? (
+                      <Alert variant="destructive">
+                        <AlertDescription>{apiKeyError}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                    <div className="space-y-2">
+                      {apiKeys.length === 0 ? (
+                        <p className="text-muted-foreground text-sm">
+                          {t("api_keys_empty")}
+                        </p>
+                      ) : (
+                        apiKeys.map((key) => (
+                          <div
+                            key={key.id}
+                            className="flex justify-between items-center px-3 py-2 border rounded-md"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-medium text-sm truncate">{key.name}</p>
+                              <p className="text-muted-foreground text-xs">
+                                {t("api_keys_prefix")}: {key.prefix}
+                              </p>
+                            </div>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => onRevokeApiKey(key.id)}
+                              disabled={Boolean(key.revoked_at)}
+                            >
+                              {key.revoked_at
+                                ? t("api_keys_revoked")
+                                : t("api_keys_revoke")}
+                            </Button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
             <Button variant="destructive" onClick={onLogout}>
               {t("me_logout")}
             </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("api_keys_title")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Dialog open={apiKeysOpen} onOpenChange={setApiKeysOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline">{t("api_keys_manage")}</Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>{t("api_keys_title")}</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="px-3 py-2 border rounded-md text-muted-foreground text-xs">
-                    <p>
-                      {t("api_keys_endpoint_label")}{" "}
-                      <span className="font-semibold text-foreground">
-                        {`${window.location.origin}/api/v1`}
-                      </span>
-                    </p>
-                    <p>{t("api_keys_header_note")}</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Input
-                      placeholder={t("api_keys_name_placeholder")}
-                      value={apiKeyName}
-                      onChange={(event) => setApiKeyName(event.target.value)}
-                    />
-                    <Button onClick={onCreateApiKey} disabled={apiKeyCreating}>
-                      {apiKeyCreating ? t("common_saving") : t("api_keys_create")}
-                    </Button>
-                  </div>
-                  {createdKey ? (
-                    <Alert>
-                      <AlertDescription>
-                        <div className="space-y-2">
-                          <p>{t("api_keys_created_once")}</p>
-                          <Input value={createdKey} readOnly />
-                        </div>
-                      </AlertDescription>
-                    </Alert>
-                  ) : null}
-                  {apiKeyError ? (
-                    <Alert variant="destructive">
-                      <AlertDescription>{apiKeyError}</AlertDescription>
-                    </Alert>
-                  ) : null}
-                  <div className="space-y-2">
-                    {apiKeys.length === 0 ? (
-                      <p className="text-muted-foreground text-sm">
-                        {t("api_keys_empty")}
-                      </p>
-                    ) : (
-                      apiKeys.map((key) => (
-                        <div
-                          key={key.id}
-                          className="flex justify-between items-center px-3 py-2 border rounded-md"
-                        >
-                          <div className="min-w-0">
-                            <p className="font-medium text-sm truncate">{key.name}</p>
-                            <p className="text-muted-foreground text-xs">
-                              {t("api_keys_prefix")}: {key.prefix}
-                            </p>
-                          </div>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => onRevokeApiKey(key.id)}
-                            disabled={Boolean(key.revoked_at)}
-                          >
-                            {key.revoked_at ? t("api_keys_revoked") : t("api_keys_revoke")}
-                          </Button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
           </CardContent>
         </Card>
       </div>
