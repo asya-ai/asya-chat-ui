@@ -1290,52 +1290,54 @@ const MessageBubbleComponent = ({
     >
       <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
         {showUserSideActions ? (
-          <div className="top-1/2 right-full z-10 absolute flex items-center opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 mr-0.5 -translate-y-1/2">
-            {actionsEnabled ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="opacity-70 hover:opacity-100 size-7"
-                onClick={() => onStartEdit(msg)}
-                aria-label={t("chat_edit_message")}
-              >
-                <Pencil aria-hidden="true" className="size-4" />
-              </Button>
-            ) : null}
-            {canCopyMessage ? (
-              <CopyTextButton
-                text={msg.content}
-                label={t("chat_copy_message")}
-                copiedLabel={t("common_copied")}
-                iconOnly
-                className="opacity-70 hover:opacity-100 size-7"
-              />
-            ) : null}
-            {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="opacity-70 hover:opacity-100 size-7"
-                onClick={() => onSaveAsPrompt(msg)}
-                aria-label={t("prompt_save_message")}
-              >
-                <Bookmark aria-hidden="true" className="size-4" />
-              </Button>
-            ) : null}
-            {actionsEnabled ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="opacity-70 hover:opacity-100 size-7"
-                onClick={() => onDeleteFromMessage(msg)}
-                aria-label={t("chat_delete_message")}
-              >
-                <Trash2 aria-hidden="true" className="size-4" />
-              </Button>
-            ) : null}
+          <div className="pointer-events-none absolute inset-y-0 right-full mr-0.5 flex flex-col justify-end">
+            <div className="pointer-events-auto sticky bottom-0 z-10 flex items-center opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0">
+              {actionsEnabled ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100 size-7"
+                  onClick={() => onStartEdit(msg)}
+                  aria-label={t("chat_edit_message")}
+                >
+                  <Pencil aria-hidden="true" className="size-4" />
+                </Button>
+              ) : null}
+              {canCopyMessage ? (
+                <CopyTextButton
+                  text={msg.content}
+                  label={t("chat_copy_message")}
+                  copiedLabel={t("common_copied")}
+                  iconOnly
+                  className="opacity-70 hover:opacity-100 size-7"
+                />
+              ) : null}
+              {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100 size-7"
+                  onClick={() => onSaveAsPrompt(msg)}
+                  aria-label={t("prompt_save_message")}
+                >
+                  <Bookmark aria-hidden="true" className="size-4" />
+                </Button>
+              ) : null}
+              {actionsEnabled ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100 size-7"
+                  onClick={() => onDeleteFromMessage(msg)}
+                  aria-label={t("chat_delete_message")}
+                >
+                  <Trash2 aria-hidden="true" className="size-4" />
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : null}
         <div
