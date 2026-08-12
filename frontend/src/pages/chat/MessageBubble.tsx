@@ -1501,7 +1501,7 @@ const MessageBubbleComponent = ({
               </div>
               <div className="flex gap-2">
                 <Button size="sm" onClick={() => onSaveEditedMessage(msg)} disabled={!canSaveEdit}>
-                  {t("chat_save")}
+                  {t("chat_resend")}
                 </Button>
                 <Button size="sm" variant="outline" onClick={onCancelEdit}>
                   {t("chat_cancel")}

@@ -227,7 +227,7 @@ export const en = {
   chat_share_dialog_desc: "Anyone signed in with this link can view the chat while sharing is on.",
   chat_share_dialog_copied: "Share link copied to clipboard.",
   chat_share_incognito_blocked: "Incognito chats cannot be shared.",
-  chat_save: "Save",
+  chat_resend: "Resend",
   chat_cancel: "Cancel",
   chat_logout: "Log out",
   org_section_orgs: "Organisations",

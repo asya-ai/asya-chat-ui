@@ -229,7 +229,7 @@ export const lv = {
   chat_share_dialog_desc: "Ikviens, kas ir ielogojies un kam ir šī saite, var skatīt čatu, kamēr kopīgošana ir ieslēgta.",
   chat_share_dialog_copied: "Kopīgošanas saite nokopēta starpliktuvē.",
   chat_share_incognito_blocked: "Inkognito čatus nevar kopīgot.",
-  chat_save: "Saglabāt",
+  chat_resend: "Sūtīt atkārtoti",
   chat_cancel: "Atcelt",
   chat_logout: "Izrakstīties",
   org_section_orgs: "Organizācijas",

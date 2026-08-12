@@ -229,7 +229,7 @@ export const ja = {
   chat_share_dialog_desc: "共有がオンの間、このリンクを持つログイン済みユーザーがチャットを閲覧できます。",
   chat_share_dialog_copied: "共有リンクをクリップボードにコピーしました。",
   chat_share_incognito_blocked: "シークレットチャットは共有できません。",
-  chat_save: "保存",
+  chat_resend: "再送信",
   chat_cancel: "キャンセル",
   chat_logout: "ログアウト",
   org_section_orgs: "組織",
