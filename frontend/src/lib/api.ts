@@ -20,6 +20,7 @@ import type {
   OrgAuthSettings,
   OrgAuthSettingsUpdate,
   UsageSlice,
+  SystemDiagnosis,
   ApiKey,
   UserMemory,
   Agent,
@@ -478,6 +479,10 @@ export const usageApi = {
     const query = params.toString()
     return apiFetch<string[]>(`/usage/months${query ? `?${query}` : ""}`)
   },
+}
+
+export const systemDiagnosisApi = {
+  get: () => apiFetch<SystemDiagnosis>("/admin/system-diagnosis"),
 }
 
 export const modelApi = {

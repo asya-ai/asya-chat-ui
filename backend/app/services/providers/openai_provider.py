@@ -1078,7 +1078,7 @@ class AzureOpenAIProvider:
         return removed
 
     async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
-        deployment = settings.azure_openai_deployment or model
+        deployment = model
         payload = {"model": deployment, "messages": messages}
         self._apply_prompt_cache(payload)
         try:
@@ -1121,7 +1121,7 @@ class AzureOpenAIProvider:
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
     ) -> ChatResponse:
-        deployment = settings.azure_openai_deployment or model
+        deployment = model
         normalized_messages = []
         for message in messages:
             tool_calls = message.get("tool_calls")
@@ -1216,7 +1216,7 @@ class AzureOpenAIProvider:
         )
 
     async def chat_stream(self, model: str, messages: list[dict]):
-        deployment = settings.azure_openai_deployment or model
+        deployment = model
         payload = {
             "model": deployment,
             "messages": messages,
@@ -1271,7 +1271,7 @@ class AzureOpenAIProvider:
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
     ):
-        deployment = settings.azure_openai_deployment or model
+        deployment = model
         normalized_messages = []
         for message in messages:
             tool_calls = message.get("tool_calls")

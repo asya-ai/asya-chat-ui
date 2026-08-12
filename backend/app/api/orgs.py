@@ -168,7 +168,7 @@ def _has_global_config(provider: str) -> bool:
         case "openrouter":
             return bool(settings.openrouter_api_key)
         case "vertex":
-            if settings.google_vertex_project and settings.google_vertex_location:
+            if settings.google_vertex_project:
                 return True
             try:
                 parsed = json.loads(settings.gemini_vertex_json or "{}")
@@ -176,7 +176,11 @@ def _has_global_config(provider: str) -> bool:
                 return False
             if not isinstance(parsed, dict):
                 return False
-            return bool(parsed.get("project") and parsed.get("location"))
+            return bool(
+                parsed.get("project")
+                or parsed.get("project_id")
+                or parsed.get("projectId")
+            )
         case _:
             return False
 

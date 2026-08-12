@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 ARG AGENT_EMBEDDING_MODEL=BAAI/bge-m3
+ENV AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL}
 RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${AGENT_EMBEDDING_MODEL}', device='cpu')"
 
 COPY app ./app

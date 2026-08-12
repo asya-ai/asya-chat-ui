@@ -1215,12 +1215,22 @@ def _run_coro(coro: Any) -> Any:
     return _worker_loop.run_until_complete(coro)
 
 
-@celery_app.task(name="chatui.generate_chat_response")
+@celery_app.task(
+    name="chatui.generate_chat_response",
+    queue="generation",
+    soft_time_limit=60 * 15,
+    time_limit=60 * 20,
+)
 def generate_chat_response(task_id: str) -> None:
     _run_coro(_run_generation(UUID(task_id)))
 
 
-@celery_app.task(name="chatui.reindex_agent_source")
+@celery_app.task(
+    name="chatui.reindex_agent_source",
+    queue="embedding",
+    soft_time_limit=60 * 60 * 12,
+    time_limit=60 * 60 * 12 + 300,
+)
 def reindex_agent_source(source_id: str) -> None:
     with Session(engine) as session:
         source = session.get(AgentSource, UUID(source_id))
@@ -1322,6 +1332,93 @@ def cleanup_incognito_chats() -> None:
         for chat in expired_chats:
             _delete_expired_chat(session, chat)
         session.commit()
+
+
+# Queued rows can outlive their Celery broker message (Redis flush, worker
+# downtime, send_task failure after DB commit). Active rows can stay forever if
+# a worker is killed before it writes a terminal status.
+STALE_QUEUED_AFTER = timedelta(days=1)
+STALE_ACTIVE_AFTER = timedelta(days=1)
+
+
+def _fail_stale_generation_task(
+    session: Session, task: ChatGenerationTask, error: str
+) -> None:
+    now = datetime.utcnow()
+    task.status = GenerationStatus.failed
+    task.error = error
+    task.completed_at = now
+    session.add(task)
+    assistant = session.get(ChatMessage, task.assistant_message_id)
+    if not assistant:
+        return
+    if assistant.status in {"completed", "failed", "cancelled"}:
+        return
+    assistant.status = "failed"
+    assistant.completed_at = now
+    assistant.error_message = error
+    if not (assistant.content or "").strip():
+        assistant.content = error
+    session.add(assistant)
+
+
+@celery_app.task(name="chatui.cleanup_stale_generation_tasks")
+def cleanup_stale_generation_tasks() -> dict[str, int]:
+    """Mark orphaned generation tasks as failed so they stop blocking diagnostics/UI."""
+    now = datetime.utcnow()
+    queued_cutoff = now - STALE_QUEUED_AFTER
+    active_cutoff = now - STALE_ACTIVE_AFTER
+    failed_queued = 0
+    failed_active = 0
+    with Session(engine) as session:
+        stale_queued = session.scalars(
+            select(ChatGenerationTask).where(
+                ChatGenerationTask.status == GenerationStatus.queued,
+                ChatGenerationTask.created_at < queued_cutoff,
+            )
+        ).all()
+        for task in stale_queued:
+            _fail_stale_generation_task(
+                session,
+                task,
+                "Timed out waiting for a worker (task never started)",
+            )
+            failed_queued += 1
+
+        stale_active = session.scalars(
+            select(ChatGenerationTask).where(
+                ChatGenerationTask.status.in_(
+                    [GenerationStatus.running, GenerationStatus.streaming]
+                ),
+                ChatGenerationTask.started_at.is_not(None),
+                ChatGenerationTask.started_at < active_cutoff,
+            )
+        ).all()
+        stale_active_no_start = session.scalars(
+            select(ChatGenerationTask).where(
+                ChatGenerationTask.status.in_(
+                    [GenerationStatus.running, GenerationStatus.streaming]
+                ),
+                ChatGenerationTask.started_at.is_(None),
+                ChatGenerationTask.created_at < active_cutoff,
+            )
+        ).all()
+        for task in [*stale_active, *stale_active_no_start]:
+            _fail_stale_generation_task(
+                session,
+                task,
+                "Generation timed out (worker stopped without finishing)",
+            )
+            failed_active += 1
+
+        if failed_queued or failed_active:
+            session.commit()
+            logger.info(
+                "Cleaned stale generation tasks queued=%s active=%s",
+                failed_queued,
+                failed_active,
+            )
+    return {"queued": failed_queued, "active": failed_active}
 
 
 @celery_app.task(name="chatui.cleanup_retained_data")

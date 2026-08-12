@@ -44,30 +44,33 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
   - `WEB_SEARCH_LIMIT` (default: 5)
   - `SCRAPE_TEXT_LIMIT` (default: 20000)
   - `SCRAPE_PARALLEL_MAX` (default: 5)
-  - `AGENT_EMBEDDING_MODEL` (default: `BAAI/bge-m3`)
+  - `AGENT_EMBEDDING_MODEL` (default: `BAAI/bge-m3`; Docker build arg + runtime env must match — weights are downloaded at image build)
   - `AGENT_EMBEDDING_BATCH_SIZE` (default: 16)
   - `AGENT_EMBEDDING_DEVICE` (default: `cpu`)
+  - Compose-injected runtime vars (shown in System diagnosis): `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `DOCKER_HOST`, `EXEC_HOST_FILES_DIR`, `HF_HOME`
 - Public URL:
   - `PUBLIC_API_BASE_URL` (used for links/externally visible API references)
 
 ## Provider Configuration
 
 - OpenAI:
-  - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_CHAT_MODEL`, `OPENAI_IMAGE_MODEL`, `OPENAI_PROMPT_CACHE_RETENTION`
+  - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_PROMPT_CACHE_RETENTION`
 - Azure OpenAI:
-  - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION`
+  - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`
 - Gemini / Vertex:
-  - `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `GEMINI_VERTEX_JSON`, `GEMINI_CHAT_MODEL`, `GEMINI_IMAGE_MODEL`
+  - `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `GEMINI_VERTEX_JSON`
   - `GEMINI_CACHED_CONTENT_ENABLED`, `GEMINI_CACHED_CONTENT_TTL_SECONDS`, `GEMINI_CACHED_CONTENT_MAX_ITEMS`
-  - `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`
+  - `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION` (defaults to `global`)
 - Groq:
-  - `GROQ_API_KEY`, `GROQ_BASE_URL`, `GROQ_CHAT_MODEL`
+  - `GROQ_API_KEY`, `GROQ_BASE_URL`
 - Anthropic:
-  - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CHAT_MODEL`
+  - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
 - OpenRouter:
   - `OPENROUTER_API_KEY`
 - Perplexity:
   - `PERPLEXITY_API_KEY`, `PERPLEXITY_MODEL`
+
+Model IDs are configured in the Models settings UI, not via env vars.
 
 ## Email/SMTP
 
@@ -90,6 +93,8 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
 - `CELERY_BROKER_URL` (defaults to Redis in compose)
 - `CELERY_RESULT_BACKEND` (defaults to Redis in compose)
 - `WORKER_REPLICAS` (compose deploy replicas, default: 1)
+- `WORKER_CONCURRENCY` (Celery worker `--concurrency`, default: 2)
+- Workers consume queues in order `generation,celery,embedding` so chat answers preempt project reindex/embedding work.
 
 ## Scraper Variables
 

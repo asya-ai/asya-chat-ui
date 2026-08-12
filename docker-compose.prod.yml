@@ -32,6 +32,7 @@ services:
       APP_ENV: production
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     networks:
       - app
     depends_on:
@@ -52,6 +53,7 @@ services:
       DOCKER_HOST: tcp://dind:2375
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - files-data:/data/files
     networks:
@@ -89,6 +91,7 @@ services:
       DOCKER_HOST: tcp://dind:2375
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     volumes:
       - files-data:/data/files
     networks:
@@ -105,7 +108,7 @@ services:
         condition: service_healthy
       executor-bootstrap:
         condition: service_completed_successfully
-    command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "--concurrency=2", "--prefetch-multiplier=1"]
+    command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "-Q", "generation,celery,embedding", "--concurrency=${WORKER_CONCURRENCY:-2}", "--prefetch-multiplier=1"]
     deploy:
       replicas: ${WORKER_REPLICAS:-1}
       restart_policy:
@@ -120,6 +123,7 @@ services:
       APP_ENV: production
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
     networks:
       - app
     depends_on:

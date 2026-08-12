@@ -137,8 +137,9 @@ class VertexProvider(GeminiProvider):
         )
         location = (
             _extract_location(merged_config)
-            or settings.google_vertex_location
+            or (settings.google_vertex_location or "").strip()
             or _extract_location(env_config)
+            or "global"
         )
         credentials_info = _extract_credentials_info(merged_config)
         credentials_file = _extract_credentials_file(merged_config)

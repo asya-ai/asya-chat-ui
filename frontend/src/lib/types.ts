@@ -319,6 +319,99 @@ export type UsageSlice = {
   breakdown?: UsageSlice[]
 }
 
+export type EnvKeyDiagnosis = {
+  key: string
+  category: string
+  status: "ok" | "invalid" | "missing"
+  required: boolean
+  detail?: string | null
+  value?: string | null
+}
+
+export type DiskUsageInfo = {
+  label: string
+  path: string
+  total_bytes?: number | null
+  used_bytes?: number | null
+  free_bytes?: number | null
+  used_percent?: number | null
+  error?: string | null
+}
+
+export type DependencyCheck = {
+  name: string
+  status: "ok" | "invalid" | "missing"
+  latency_ms?: number | null
+  detail?: string | null
+}
+
+export type ResourceMetric = {
+  name: string
+  value: string
+  detail?: string | null
+  status?: "ok" | "invalid" | "warning" | null
+}
+
+export type ProviderSnapshot = {
+  provider: string
+  status: "ok" | "invalid" | "missing"
+  latency_ms?: number | null
+  detail?: string | null
+}
+
+export type DataVolumeMetric = {
+  name: string
+  value: string
+  detail?: string | null
+}
+
+export type WorkerLoadInfo = {
+  name: string
+  active: number
+  reserved: number
+  concurrency?: number | null
+  load_percent?: number | null
+  status?: "ok" | "invalid" | "warning" | null
+}
+
+export type TaskWaitStats = {
+  queued_now: number
+  oldest_queue_wait_seconds?: number | null
+  avg_wait_seconds_1h?: number | null
+  p95_wait_seconds_1h?: number | null
+  max_wait_seconds_1h?: number | null
+  sample_size_1h: number
+  detail?: string | null
+}
+
+export type WorkersSnapshot = {
+  worker_count: number
+  active_tasks: number
+  reserved_tasks: number
+  queue_depth: number
+  total_concurrency?: number | null
+  load_percent?: number | null
+  workers: WorkerLoadInfo[]
+  waits: TaskWaitStats
+  status?: "ok" | "invalid" | "warning" | null
+  detail?: string | null
+}
+
+export type SystemDiagnosis = {
+  keys: EnvKeyDiagnosis[]
+  disks: DiskUsageInfo[]
+  dependencies: DependencyCheck[]
+  resources: ResourceMetric[]
+  providers: ProviderSnapshot[]
+  data_volume: DataVolumeMetric[]
+  workers: WorkersSnapshot
+  summary: {
+    ok: number
+    invalid: number
+    missing: number
+  }
+}
+
 export type OrgMember = {
   user_id: string
   email: string

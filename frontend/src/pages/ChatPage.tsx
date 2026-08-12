@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { ApiError, agentApi, chatApi, configApi } from "@/lib/api"
+import { chatGenerationIndicatorsStore } from "@/lib/chat-generation-indicators"
 import {
   actionInfoLevelStore,
   codeExecutionEnabledStore,
@@ -23,7 +24,8 @@ import type {
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
-import { getProviderIconUrl } from "@/lib/providerIcons"
+import { ProviderIcon } from "@/components/ProviderIcon"
+import { getProviderIconCandidates } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -278,6 +280,24 @@ export const ChatPage = () => {
     modelStore.get() ?? undefined
   )
   const [loadingByChat, setLoadingByChat] = useState<Record<string, boolean>>({})
+  const chatIdRef = useRef(chatId)
+  chatIdRef.current = chatId
+  const setChatGenerating = useCallback(
+    (targetChatId: string, generating: boolean, options?: { unreadIfAway?: boolean }) => {
+      setLoadingByChat((prev) => ({ ...prev, [targetChatId]: generating }))
+      if (generating) {
+        chatGenerationIndicatorsStore.start(targetChatId)
+        return
+      }
+      const unreadIfAway = options?.unreadIfAway ?? true
+      if (unreadIfAway && chatIdRef.current !== targetChatId) {
+        chatGenerationIndicatorsStore.finish(targetChatId, true)
+      } else {
+        chatGenerationIndicatorsStore.clear(targetChatId)
+      }
+    },
+    []
+  )
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState("")
   const [editingAttachments, setEditingAttachments] = useState<
@@ -488,7 +508,7 @@ export const ChatPage = () => {
       currentCancelRef.current()
       currentCancelRef.current = null
     }
-    setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
+    setChatGenerating(chatId, false, { unreadIfAway: false })
   }
 
 
@@ -616,6 +636,7 @@ export const ChatPage = () => {
               : msg
           )
         )
+        setChatGenerating(targetChatId, false)
         return
       }
       if ("error" in event && typeof event.error === "string") {
@@ -636,6 +657,7 @@ export const ChatPage = () => {
               : msg
           )
         )
+        setChatGenerating(targetChatId, false, { unreadIfAway: false })
         return
       }
       if ("delta" in event && typeof event.delta === "string") {
@@ -801,7 +823,7 @@ export const ChatPage = () => {
         return
       }
     },
-    [appendToolEvent, t, updateChatMessagesFor]
+    [appendToolEvent, t, updateChatMessagesFor, setChatGenerating]
   )
 
   const normalizeTaskEvent = useCallback(
@@ -926,8 +948,10 @@ export const ChatPage = () => {
           }
         })
       )
+      const unreadIfAway = status === "completed"
+      setChatGenerating(targetChatId, false, { unreadIfAway })
     },
-    [t, updateChatMessagesFor]
+    [t, updateChatMessagesFor, setChatGenerating]
   )
 
   const syncTerminalTaskStatus = useCallback(
@@ -1361,13 +1385,9 @@ export const ChatPage = () => {
     deepLinkedScrolledRef.current = null
     isChatSwitchRef.current = true
     setAutoScrollEnabled(true)
-    Object.values(taskSubscriptionsRef.current).forEach((cancel) => cancel())
-    taskSubscriptionsRef.current = {}
-    Object.values(taskPollingRef.current).forEach((timeoutId) =>
-      window.clearTimeout(timeoutId)
-    )
-    taskPollingRef.current = {}
-    taskCursorRef.current = {}
+    if (chatId) chatGenerationIndicatorsStore.markRead(chatId)
+    // Keep task subscriptions/polling for other chats so background generations
+    // still update sidebar indicators and can be stopped after a reload.
   }, [chatId])
 
   useEffect(() => {
@@ -1406,12 +1426,6 @@ export const ChatPage = () => {
   }, [])
 
   useEffect(() => {
-    // Reset catch-up cursors when switching chats so a new chat doesn't
-    // inherit another chat's event offset.
-    taskCursorRef.current = {}
-  }, [chatId])
-
-  useEffect(() => {
     if (!chatId) return
     if (loadingByChat[chatId]) return
     // Wait for messages so catch-up can attach to the assistant bubble.
@@ -1435,6 +1449,7 @@ export const ChatPage = () => {
           }
           return
         }
+        let attached = 0
         for (const task of tasks) {
           if (cancelled) return
           const messages =
@@ -1463,6 +1478,10 @@ export const ChatPage = () => {
           await fetchTaskEvents(chatId, task.id, task.assistant_message_id)
           if (cancelled) return
           subscribeToTask(chatId, task.id, task.assistant_message_id)
+          attached += 1
+        }
+        if (attached > 0) {
+          setChatGenerating(chatId, true)
         }
       } catch {
         // ignore resume errors
@@ -1483,7 +1502,48 @@ export const ChatPage = () => {
     // Length is enough to retry once messages appear; avoid re-running on every delta.
     serverMessages.length,
     queryClient,
+    setChatGenerating,
   ])
+
+  useEffect(() => {
+    // After reload, re-attach to generating chats that are not currently open.
+    const generatingIds = chatGenerationIndicatorsStore
+      .generatingChatIds()
+      .filter((id) => id !== chatId)
+    if (generatingIds.length === 0) return
+    let cancelled = false
+    const reconcile = async () => {
+      for (const targetChatId of generatingIds) {
+        if (cancelled) return
+        try {
+          const tasks = await chatApi.listGenerationTasks(targetChatId, true)
+          if (cancelled) return
+          if (tasks.length === 0) {
+            setChatGenerating(targetChatId, false)
+            continue
+          }
+          setChatGenerating(targetChatId, true)
+          for (const task of tasks) {
+            if (cancelled) return
+            if (
+              taskSubscriptionsRef.current[task.id] ||
+              taskPollingRef.current[task.id]
+            ) {
+              continue
+            }
+            taskCursorRef.current[task.id] = taskCursorRef.current[task.id] ?? 0
+            subscribeToTask(targetChatId, task.id, task.assistant_message_id)
+          }
+        } catch {
+          // ignore per-chat reconcile errors
+        }
+      }
+    }
+    void reconcile()
+    return () => {
+      cancelled = true
+    }
+  }, [chatId, setChatGenerating, subscribeToTask])
 
   const visibleMessages = useMemo(() => {
     const nestedToolEventIds = new Set<string>()
@@ -1801,7 +1861,7 @@ export const ChatPage = () => {
         setIsUploadingAttachments(false)
       }
       await queryClient.cancelQueries({ queryKey: ["chatMessages", chat.id] })
-      setLoadingByChat((prev) => ({ ...prev, [chat.id]: true }))
+      setChatGenerating(chat.id, true)
       const updateMessages = (updater: (prev: ChatMessage[]) => ChatMessage[]) =>
         updateChatMessagesFor(chat.id, updater)
       const activityAt = new Date().toISOString()
@@ -1871,7 +1931,7 @@ export const ChatPage = () => {
       setIsUploadingAttachments(false)
       currentCancelRef.current = null
       if (requestChatId) {
-        setLoadingByChat((prev) => ({ ...prev, [requestChatId as string]: false }))
+        setChatGenerating(requestChatId, false)
       }
     }
   }
@@ -2352,7 +2412,7 @@ export const ChatPage = () => {
     setAutoScrollEnabled(true)
     lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", activeChat.id] })
-    setLoadingByChat((prev) => ({ ...prev, [activeChat.id]: true }))
+    setChatGenerating(activeChat.id, true)
     setToolEvents([])
     const activityAt = new Date().toISOString()
     bumpChatActivity(activeChat.id, activityAt)
@@ -2420,7 +2480,7 @@ export const ChatPage = () => {
         .catch(() => null)
     } finally {
       currentCancelRef.current = null
-      setLoadingByChat((prev) => ({ ...prev, [activeChat.id]: false }))
+      setChatGenerating(activeChat.id, false)
     }
   }, [
     activeChat,
@@ -2440,6 +2500,7 @@ export const ChatPage = () => {
     refetchChats,
     replaceChatMessagesFor,
     bumpChatActivity,
+    setChatGenerating,
     t,
   ])
 
@@ -2475,7 +2536,7 @@ export const ChatPage = () => {
     setAutoScrollEnabled(true)
     lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", chatId] })
-    setLoadingByChat((prev) => ({ ...prev, [chatId]: true }))
+    setChatGenerating(chatId, true)
     setToolEvents([])
     const activityAt = new Date().toISOString()
     bumpChatActivity(chatId, activityAt)
@@ -2512,7 +2573,7 @@ export const ChatPage = () => {
       const message =
         error instanceof Error ? error.message : t("chat_attachment_upload_failed")
       setAttachmentError(message)
-      setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
+      setChatGenerating(chatId, false, { unreadIfAway: false })
       return
     } finally {
       setIsUploadingAttachments(false)
@@ -2552,7 +2613,7 @@ export const ChatPage = () => {
       )
     } finally {
       currentCancelRef.current = null
-      setLoadingByChat((prev) => ({ ...prev, [chatId]: false }))
+      setChatGenerating(chatId, false)
     }
   }, [
     chatId,
@@ -2571,6 +2632,7 @@ export const ChatPage = () => {
     uploadAttachmentsForChat,
     updateChatMessagesFor,
     bumpChatActivity,
+    setChatGenerating,
   ])
 
   const renderMessage = useCallback(
@@ -2954,10 +3016,11 @@ export const ChatPage = () => {
                     </SelectTrigger>
                     <SelectContent className="z-100 max-h-96">
                       {selectableChatModels.map((model) => {
-                        const providerIconUrl = getProviderIconUrl(
-                          model.provider,
-                          model.model_name
-                        )
+                        const hasProviderIcon =
+                          getProviderIconCandidates(
+                            model.provider,
+                            model.model_name
+                          ).length > 0
                         return (
                           <SelectItem
                             key={model.id}
@@ -2965,13 +3028,11 @@ export const ChatPage = () => {
                             disabled={model.is_available === false}
                           >
                             <span className="inline-flex items-center gap-2">
-                              {providerIconUrl ? (
-                                <span
-                                  aria-hidden="true"
-                                  className="figma-icon size-5 shrink-0"
-                                  style={{
-                                    maskImage: `url('${providerIconUrl}')`,
-                                  }}
+                              {hasProviderIcon ? (
+                                <ProviderIcon
+                                  provider={model.provider}
+                                  modelName={model.model_name}
+                                  className="size-5"
                                 />
                               ) : isImageOutputModel(model) ? (
                                 <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

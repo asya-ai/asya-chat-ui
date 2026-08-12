@@ -996,6 +996,12 @@ export const OrgPage = () => {
       active: activeSection === "models",
     },
     {
+      label: t("diagnosis_title"),
+      href: "/settings/diagnosis",
+      visible: isSuperAdmin,
+      active: false,
+    },
+    {
       label: t("usage_title"),
       href: "/usage",
       visible: isAdmin,

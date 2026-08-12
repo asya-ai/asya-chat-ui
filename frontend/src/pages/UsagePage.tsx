@@ -322,6 +322,12 @@ export const UsagePage = () => {
       active: location.pathname.startsWith("/settings/models"),
     },
     {
+      label: t("diagnosis_title"),
+      href: "/settings/diagnosis",
+      visible: isSuperAdmin,
+      active: location.pathname.startsWith("/settings/diagnosis"),
+    },
+    {
       label: t("usage_title"),
       href: "/usage",
       visible: isAdmin,

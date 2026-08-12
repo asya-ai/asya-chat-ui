@@ -21,8 +21,11 @@ class OpenRouterProvider(OpenAIProvider):
             prompt_cache_retention=prompt_cache_retention,
             prefer_responses_api=prefer_responses_api,
         )
-        self.client.default_headers = {
-            "HTTP-Referer": "https://chatui.com", # TODO: Make this configurable
-            "X-Title": "ChatUI",
-        }
+        # AsyncOpenAI.default_headers is read-only; merge via with_options.
+        self.client = self.client.with_options(
+            default_headers={
+                "HTTP-Referer": "https://chatui.com",  # TODO: Make this configurable
+                "X-Title": "ChatUI",
+            }
+        )
         self.logger = logging.getLogger(__name__)

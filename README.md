@@ -139,6 +139,7 @@ cp .env.example .env
 - `AGENT_EMBEDDING_MODEL` (default `BAAI/bge-m3`) for project RAG embeddings
 - execution limits (`EXEC_*`) and attachment limits
 - `WORKER_REPLICAS` to scale Celery workers
+- `WORKER_CONCURRENCY` for per-worker Celery concurrency (default: 2)
 
 ## Running with Docker Compose
 

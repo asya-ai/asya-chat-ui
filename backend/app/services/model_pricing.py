@@ -23,8 +23,20 @@ _PRICING_URLS = (
     "https://www.aipricing.guru/api/pricing.json",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 )
+_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _PRICING_CACHE_TTL_SECONDS = 6 * 60 * 60
 _pricing_cache: _PricingCache | None = None
+
+
+def _parse_per_token_price(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _normalize_key(value: str) -> str:
@@ -161,6 +173,50 @@ def _merge_litellm_pricing(
         _index_litellm_key(by_provider, provider, key, price)
 
 
+def _merge_openrouter_pricing(
+    by_provider: dict[str, dict[str, ModelTokenPrice]], payload: dict
+) -> None:
+    models = payload.get("data")
+    if not isinstance(models, list):
+        return
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        pricing = item.get("pricing")
+        if not isinstance(model_id, str) or not isinstance(pricing, dict):
+            continue
+        input_price = _parse_per_token_price(pricing.get("prompt"))
+        output_price = _parse_per_token_price(pricing.get("completion"))
+        if input_price is None or output_price is None:
+            continue
+        cached_price = _parse_per_token_price(pricing.get("input_cache_read"))
+        price = ModelTokenPrice(
+            input_per_million=input_price * 1_000_000,
+            output_per_million=output_price * 1_000_000,
+            cached_input_per_million=(
+                cached_price * 1_000_000 if cached_price is not None else None
+            ),
+        )
+        # Prefer full OpenRouter ids (author/slug) so lookups hit before routed-provider fallback.
+        _index_model_price(by_provider, "openrouter", model_id, price)
+
+
+def _fetch_json(url: str) -> dict | list | None:
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "chatui-usage-pricing"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if isinstance(payload, (dict, list)):
+            return payload
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+    return None
+
+
 def _fetch_pricing_cache() -> _PricingCache | None:
     global _pricing_cache
     now = time.monotonic()
@@ -168,21 +224,22 @@ def _fetch_pricing_cache() -> _PricingCache | None:
         return _pricing_cache
     by_provider: dict[str, dict[str, ModelTokenPrice]] = {}
     did_fetch = False
+
+    # OpenRouter first: its /models pricing is authoritative for openrouter provider lookups.
+    openrouter_payload = _fetch_json(_OPENROUTER_MODELS_URL)
+    if isinstance(openrouter_payload, dict):
+        _merge_openrouter_pricing(by_provider, openrouter_payload)
+        did_fetch = True
+
     for url in _PRICING_URLS:
-        try:
-            request = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "User-Agent": "chatui-usage-pricing"},
-            )
-            with urllib.request.urlopen(request, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            if isinstance(payload, dict) and isinstance(payload.get("models"), list):
-                _merge_api_pricing(by_provider, payload)
-            elif isinstance(payload, dict):
-                _merge_litellm_pricing(by_provider, payload)
-            did_fetch = True
-        except (OSError, ValueError, urllib.error.URLError):
+        payload = _fetch_json(url)
+        if not isinstance(payload, dict):
             continue
+        if isinstance(payload.get("models"), list):
+            _merge_api_pricing(by_provider, payload)
+        else:
+            _merge_litellm_pricing(by_provider, payload)
+        did_fetch = True
     if not did_fetch:
         return _pricing_cache
     _pricing_cache = _PricingCache(fetched_at=now, by_provider=by_provider)

@@ -61,20 +61,11 @@ class Settings(BaseSettings):
     openai_base_url: str = Field(
         default="https://api.openai.com/v1", validation_alias="OPENAI_BASE_URL"
     )
-    openai_chat_model: str = Field(
-        default="gpt-4o-mini", validation_alias="OPENAI_CHAT_MODEL"
-    )
-    openai_image_model: str = Field(
-        default="gpt-image-1", validation_alias="OPENAI_IMAGE_MODEL"
-    )
     openai_prompt_cache_retention: str | None = Field(
         default=None, validation_alias="OPENAI_PROMPT_CACHE_RETENTION"
     )
     azure_openai_api_key: str = Field(default="", validation_alias="AZURE_OPENAI_API_KEY")
     azure_openai_endpoint: str = Field(default="", validation_alias="AZURE_OPENAI_ENDPOINT")
-    azure_openai_deployment: str = Field(
-        default="", validation_alias="AZURE_OPENAI_DEPLOYMENT"
-    )
     azure_openai_api_version: str = Field(
         default="2024-06-01", validation_alias="AZURE_OPENAI_API_VERSION"
     )
@@ -84,12 +75,6 @@ class Settings(BaseSettings):
         validation_alias="GEMINI_BASE_URL",
     )
     gemini_vertex_json: str = Field(default="{}", validation_alias="GEMINI_VERTEX_JSON")
-    gemini_chat_model: str = Field(
-        default="gemini-1.5-flash", validation_alias="GEMINI_CHAT_MODEL"
-    )
-    gemini_image_model: str = Field(
-        default="imagen-3.0-generate-001", validation_alias="GEMINI_IMAGE_MODEL"
-    )
     gemini_cached_content_enabled: bool = Field(
         default=True, validation_alias="GEMINI_CACHED_CONTENT_ENABLED"
     )
@@ -100,22 +85,16 @@ class Settings(BaseSettings):
         default=512, validation_alias="GEMINI_CACHED_CONTENT_MAX_ITEMS"
     )
     google_vertex_project: str | None = Field(default=None, validation_alias="GOOGLE_VERTEX_PROJECT")
-    google_vertex_location: str | None = Field(default=None, validation_alias="GOOGLE_VERTEX_LOCATION")
+    # Vertex Gemini API supports the "global" endpoint; regional locations remain overridable.
+    google_vertex_location: str = Field(default="global", validation_alias="GOOGLE_VERTEX_LOCATION")
     openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     groq_base_url: str = Field(
         default="https://api.groq.com", validation_alias="GROQ_BASE_URL"
     )
-    groq_chat_model: str = Field(
-        default="llama-3.1-8b-instant", validation_alias="GROQ_CHAT_MODEL"
-    )
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
     anthropic_base_url: str = Field(
         default="https://api.anthropic.com", validation_alias="ANTHROPIC_BASE_URL"
-    )
-    anthropic_chat_model: str = Field(
-        default="claude-3-5-sonnet-20241022",
-        validation_alias="ANTHROPIC_CHAT_MODEL",
     )
     perplexity_api_key: str = Field(default="", validation_alias="PERPLEXITY_API_KEY")
     perplexity_model: str = Field(

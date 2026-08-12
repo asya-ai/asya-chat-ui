@@ -1286,14 +1286,15 @@ async def _maybe_update_chat_title(
     message_count = len(history)
     if message_count != 2:
         return
-    title_source = history[:2]
-    prompt_lines = []
-    for item in title_source:
-        content = (item.content or "").strip()
-        if not content and item.role == "assistant":
-            content = "[image generated]"
-        prompt_lines.append(f"{item.role.upper()}: {content}")
-    title_prompt = "\n".join(prompt_lines)
+    user_message = next(
+        (item for item in history if item.role == "user"),
+        None,
+    )
+    if user_message is None:
+        return
+    title_prompt = (user_message.content or "").strip()
+    if not title_prompt:
+        title_prompt = "[image attached]"
 
     title_model = model
     title_provider = provider
@@ -1345,7 +1346,7 @@ async def _maybe_update_chat_title(
     title_messages = [
         {
             "role": "system",
-            "content": "Create a concise chat title (max 6 words) that summarizes what the chat is about. Reply with the title only. Don't use markdown or other formatting.",
+            "content": "Create a concise chat title (max 6 words) that summarizes the user's question. Reply with the title only. Don't use markdown or other formatting.",
         },
         {"role": "user", "content": title_prompt},
     ]

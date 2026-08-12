@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router"
-import { ChevronDown, ChevronRight, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, Loader2, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
 import { agentApi } from "@/lib/api"
+import { useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import { useI18n } from "@/lib/i18n-context"
 import { orgStore, sidebarSectionsStore } from "@/lib/storage"
 import type { Agent, Chat } from "@/lib/types"
@@ -102,6 +103,41 @@ export const ChatSidebar = ({
   const [createError, setCreateError] = useState<string | null>(null)
   const { data: searchedChats = [] } = useChatSearch(orgId, sessionQueryDebounced)
   const currentChatId = activeChatId ?? routeChatId ?? null
+  const generationIndicators = useChatGenerationIndicators()
+
+  const chatSessionStatus = (chatId: string) => {
+    const status = generationIndicators[chatId] ?? null
+    // Keep thinking/generating visible on the active chat; only hide unread ready.
+    if (currentChatId === chatId && status === "ready") return null
+    return status
+  }
+
+  const sessionStatusOverlay = (chatId: string) => {
+    const status = chatSessionStatus(chatId)
+    if (status === "generating") {
+      return (
+        <>
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-md ring-2 ring-inset ring-primary/70 animate-pulse"
+          />
+          <Loader2
+            aria-hidden="true"
+            className="pointer-events-none absolute right-1.5 size-3.5 animate-spin text-primary group-hover/chat-item:hidden"
+          />
+        </>
+      )
+    }
+    if (status === "ready") {
+      return (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 rounded-md ring-2 ring-inset ring-primary"
+        />
+      )
+    }
+    return null
+  }
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
@@ -353,14 +389,15 @@ export const ChatSidebar = ({
                         <ContextMenuTrigger asChild>
                           <div
                             className={cn(
-                              "group/chat-item relative flex h-8 w-full min-w-0 items-center rounded-md",
+                              "group/chat-item relative flex h-8 w-full min-w-0 items-center rounded-md hover:bg-sidebar-accent has-[[data-state=open]]:bg-sidebar-accent",
                               currentChatId === chat.id && "bg-sidebar-accent"
                             )}
                           >
+                            {sessionStatusOverlay(chat.id)}
                             <Button
                               asChild
                               variant="ghost"
-                              className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal"
+                              className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal hover:bg-transparent"
                             >
                               <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                 <span className="min-w-0 flex-1 truncate">
@@ -373,7 +410,7 @@ export const ChatSidebar = ({
                                 <Button
                                   type="button"
                                   variant="ghost"
-                                  className="absolute right-1 hidden size-6 rounded-md bg-sidebar-accent p-0 group-hover/chat-item:flex data-[state=open]:flex"
+                                  className="absolute right-1 hidden size-6 rounded-md bg-sidebar p-0 hover:bg-sidebar group-hover/chat-item:flex data-[state=open]:flex"
                                   onClick={(e) => e.stopPropagation()}
                                 >
                                   <MoreVertical className="size-4" />
@@ -593,14 +630,15 @@ export const ChatSidebar = ({
                             <ContextMenuTrigger asChild>
                               <div
                                 className={cn(
-                                  "group/chat-item relative flex h-8 w-full min-w-0 items-center rounded-md",
+                                  "group/chat-item relative flex h-8 w-full min-w-0 items-center rounded-md hover:bg-sidebar-accent has-[[data-state=open]]:bg-sidebar-accent",
                                   currentChatId === chat.id && "bg-sidebar-accent"
                                 )}
                               >
+                                {sessionStatusOverlay(chat.id)}
                                 <Button
                                   asChild
                                   variant="ghost"
-                                  className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal"
+                                  className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal hover:bg-transparent"
                                 >
                                   <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                     <span className="min-w-0 flex-1 truncate">
@@ -613,7 +651,7 @@ export const ChatSidebar = ({
                                 <Button
                                   type="button"
                                   variant="ghost"
-                                  className="absolute right-1 hidden size-6 rounded-md bg-sidebar-accent p-0 group-hover/chat-item:flex data-[state=open]:flex"
+                                  className="absolute right-1 hidden size-6 rounded-md bg-sidebar p-0 hover:bg-sidebar group-hover/chat-item:flex data-[state=open]:flex"
                                   onClick={(e) => e.stopPropagation()}
                                 >
                                   <MoreVertical className="size-4" />

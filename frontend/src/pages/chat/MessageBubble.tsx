@@ -412,7 +412,7 @@ const downloadAnswerPdf = async (
         object-fit: contain;
       }
       .pdf-brand span {
-        font: 600 18px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font: 600 18px/1 "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
         letter-spacing: -0.02em;
         text-transform: lowercase;
       }
@@ -423,7 +423,7 @@ const downloadAnswerPdf = async (
         letter-spacing: -0.02em;
       }
       .pdf-body {
-        font: 400 16px/1.55 "Times New Roman", Times, serif;
+        font: 400 16px/1.55 "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
       }
       .pdf-body p {
         margin: 0 0 16px;
@@ -448,7 +448,7 @@ const downloadAnswerPdf = async (
         margin: 0 0 8px;
       }
       .pdf-body strong {
-        font-family: "Times New Roman", Times, serif;
+        font-family: "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
         font-weight: 700;
       }
       .pdf-body em { font-style: italic; }
@@ -474,7 +474,7 @@ const downloadAnswerPdf = async (
       .sources {
         margin: 0;
         padding-left: 18px;
-        font: 400 12px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font: 400 12px/1.55 "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
         color: rgba(25, 9, 6, 0.78);
       }
       .sources li { margin: 0 0 6px; }
@@ -565,14 +565,29 @@ const downloadAnswerPdf = async (
 
 const downloadAnswerDocx = async (msg: ChatMessage) => {
   const text = getFinalAnswerText(msg)
+  const bodyFont = "Google Sans Flex"
   const paragraphs = text.split(/\n/).map(
     (line) =>
       new Paragraph({
-        children: [new TextRun({ text: line, size: 24 })],
+        children: [new TextRun({ text: line, size: 24, font: bodyFont })],
       })
   )
   const document = new Document({
-    sections: [{ children: paragraphs.length > 0 ? paragraphs : [new Paragraph("")] }],
+    styles: {
+      default: {
+        document: {
+          run: { font: bodyFont, size: 24 },
+        },
+      },
+    },
+    sections: [
+      {
+        children:
+          paragraphs.length > 0
+            ? paragraphs
+            : [new Paragraph({ children: [new TextRun({ text: "", font: bodyFont, size: 24 })] })],
+      },
+    ],
   })
   const blob = await Packer.toBlob(document)
   downloadBlob(blob, `${answerFileStem(msg)}.docx`)

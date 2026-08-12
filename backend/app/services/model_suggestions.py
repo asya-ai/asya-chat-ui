@@ -394,14 +394,18 @@ def _vertex_models() -> tuple[list[dict[str, object]], str | None]:
             vertex_config = {}
 
     project = _extract_vertex_project(vertex_config) or settings.google_vertex_project
-    location = _extract_vertex_location(vertex_config) or settings.google_vertex_location
+    location = (
+        _extract_vertex_location(vertex_config)
+        or (settings.google_vertex_location or "").strip()
+        or "global"
+    )
     credentials_info = _extract_vertex_credentials_info(vertex_config)
     credentials_file = _extract_vertex_credentials_file(vertex_config)
     scopes = _extract_vertex_scopes(vertex_config) or [
         "https://www.googleapis.com/auth/cloud-platform"
     ]
-    if not project or not location:
-        return [], "Vertex project/location not set (GOOGLE_VERTEX_* or GEMINI_VERTEX_JSON)"
+    if not project:
+        return [], "Vertex project not set (GOOGLE_VERTEX_PROJECT or GEMINI_VERTEX_JSON)"
     try:
         client_kwargs: dict[str, object] = {
             "vertexai": True,
