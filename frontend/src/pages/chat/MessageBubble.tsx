@@ -383,18 +383,22 @@ const downloadAnswerPdf = async (
          </ol>`
       : ""
 
+  // A4 at 96dpi CSS reference width. Keep the offscreen node fully opaque —
+  // opacity:0 makes some browsers skip font rasterization / soft-blur glyphs.
+  const pageCssWidth = 794
   const root = document.createElement("div")
   root.setAttribute("data-pdf-export", "true")
-  root.style.cssText =
-    "position:fixed;left:0;top:0;width:794px;opacity:0;pointer-events:none;z-index:-1;"
+  root.style.cssText = `position:fixed;left:-10000px;top:0;width:${pageCssWidth}px;pointer-events:none;z-index:-1;`
   root.innerHTML = `
     <style>
       .pdf-page {
         box-sizing: border-box;
-        width: 794px;
+        width: ${pageCssWidth}px;
         padding: 64px 72px 72px;
         background: #ffffff;
         color: #1a1210;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: geometricPrecision;
       }
       .pdf-brand {
         display: flex;
@@ -412,9 +416,10 @@ const downloadAnswerPdf = async (
         letter-spacing: -0.02em;
         text-transform: lowercase;
       }
+      /* Instrument Serif ships only as weight 400 — faux-bold looks pixelated in canvas. */
       .pdf-title {
         margin: 0 0 28px;
-        font: 700 34px/1.2 "Instrument Serif", "Times New Roman", Times, serif;
+        font: 400 36px/1.2 "Instrument Serif", "Times New Roman", Times, serif;
         letter-spacing: -0.02em;
       }
       .pdf-body {
@@ -428,12 +433,12 @@ const downloadAnswerPdf = async (
       .pdf-body h3 {
         margin: 28px 0 12px;
         font-family: "Instrument Serif", "Times New Roman", Times, serif;
-        font-weight: 700;
+        font-weight: 400;
         line-height: 1.25;
       }
-      .pdf-body h1 { font-size: 26px; }
-      .pdf-body h2 { font-size: 22px; }
-      .pdf-body h3 { font-size: 18px; }
+      .pdf-body h1 { font-size: 28px; }
+      .pdf-body h2 { font-size: 24px; }
+      .pdf-body h3 { font-size: 20px; }
       .pdf-body ul,
       .pdf-body ol {
         margin: 0 0 16px;
@@ -442,7 +447,10 @@ const downloadAnswerPdf = async (
       .pdf-body li {
         margin: 0 0 8px;
       }
-      .pdf-body strong { font-weight: 700; }
+      .pdf-body strong {
+        font-family: "Times New Roman", Times, serif;
+        font-weight: 700;
+      }
       .pdf-body em { font-style: italic; }
       .pdf-body code {
         font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -491,8 +499,9 @@ const downloadAnswerPdf = async (
   try {
     const page = root.querySelector(".pdf-page")
     if (!(page instanceof HTMLElement)) return
-    await Promise.all(
-      Array.from(page.querySelectorAll("img")).map(
+    await Promise.all([
+      document.fonts?.ready ?? Promise.resolve(),
+      ...Array.from(page.querySelectorAll("img")).map(
         (img) =>
           new Promise<void>((resolve) => {
             if (img.complete) {
@@ -502,29 +511,51 @@ const downloadAnswerPdf = async (
             img.onload = () => resolve()
             img.onerror = () => resolve()
           })
-      )
-    )
+      ),
+    ])
+    // ~300dpi: 794px @ 96dpi → scale ≈ 3.125. Cap at 4 to limit memory on long answers.
+    const scale = Math.min(4, Math.max(3, Math.ceil((window.devicePixelRatio || 1) * 2)))
     const canvas = await html2canvas(page, {
-      scale: 2,
+      scale,
       backgroundColor: "#ffffff",
       useCORS: true,
       logging: false,
+      windowWidth: pageCssWidth,
     })
-    const imgData = canvas.toDataURL("image/png")
     const doc = new jsPDF({ unit: "pt", format: "a4", compress: true })
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
-    const imgWidth = pageWidth
-    const imgHeight = (canvas.height * imgWidth) / canvas.width
-    let heightLeft = imgHeight
-    let position = 0
-    doc.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
-    heightLeft -= pageHeight
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight
-      doc.addPage()
-      doc.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
-      heightLeft -= pageHeight
+    // Slice the high-res canvas into page-sized bitmaps instead of offsetting one
+    // giant image — cleaner in viewers and avoids soft downscale artifacts.
+    const pageCanvasHeight = Math.max(1, Math.floor((pageHeight * canvas.width) / pageWidth))
+    let sourceY = 0
+    let pageIndex = 0
+    while (sourceY < canvas.height) {
+      const sliceHeight = Math.min(pageCanvasHeight, canvas.height - sourceY)
+      const pageCanvas = document.createElement("canvas")
+      pageCanvas.width = canvas.width
+      pageCanvas.height = sliceHeight
+      const ctx = pageCanvas.getContext("2d")
+      if (!ctx) break
+      ctx.fillStyle = "#ffffff"
+      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+      ctx.drawImage(
+        canvas,
+        0,
+        sourceY,
+        canvas.width,
+        sliceHeight,
+        0,
+        0,
+        canvas.width,
+        sliceHeight
+      )
+      const imgData = pageCanvas.toDataURL("image/png")
+      const sliceImgHeight = (sliceHeight * pageWidth) / canvas.width
+      if (pageIndex > 0) doc.addPage()
+      doc.addImage(imgData, "PNG", 0, 0, pageWidth, sliceImgHeight)
+      sourceY += pageCanvasHeight
+      pageIndex += 1
     }
     doc.save(`${answerFileStem(msg)}.pdf`)
   } finally {
