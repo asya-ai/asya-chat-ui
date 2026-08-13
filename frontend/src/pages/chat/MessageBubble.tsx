@@ -1080,6 +1080,22 @@ const MessageBubbleComponent = ({
         void node
         return <hr className="my-3 border-muted-foreground/30" {...rest} />
       },
+      strong({ children, node, ...rest }: any) {
+        void node
+        return (
+          <strong className="font-medium" {...rest}>
+            {children}
+          </strong>
+        )
+      },
+      b({ children, node, ...rest }: any) {
+        void node
+        return (
+          <b className="font-medium" {...rest}>
+            {children}
+          </b>
+        )
+      },,
       h1({ children, node, ...rest }: any) {
         void node
         return (
