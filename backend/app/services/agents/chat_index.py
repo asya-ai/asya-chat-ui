@@ -5,8 +5,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, or_, select
-from sqlmodel import Session
+from sqlalchemy import delete, or_
+from sqlmodel import Session, select
 
 from app.models.entities import (
     AgentChunk,

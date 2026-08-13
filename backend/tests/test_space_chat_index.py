@@ -114,6 +114,61 @@ def test_upsert_space_chat_source_creates_queued_chat_source(monkeypatch):
     assert "budget" in source.content_text.lower()
 
 
+def test_upsert_space_chat_source_updates_existing(monkeypatch):
+    existing = AgentSource(
+        id=uuid4(),
+        agent_id=uuid4(),
+        kind=AgentSourceKind.chat,
+        title="Old title",
+        url=chat_source_url(uuid4()),
+        content_text="stale",
+        status=AgentSourceStatus.ready,
+        metadata_json={"origin": "chat"},
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+
+    class _Session:
+        def __init__(self):
+            self.added = []
+
+        def exec(self, _statement):
+            return _Result(
+                [
+                    ("user", "Updated budget note"),
+                    ("assistant", "Got it"),
+                ]
+            )
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        def flush(self):
+            return None
+
+    monkeypatch.setattr(chat_index, "find_chat_source", lambda *_args, **_kwargs: existing)
+    session = _Session()
+    chat = Chat(
+        id=uuid4(),
+        org_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=existing.agent_id,
+        title="Budget chat",
+        is_deleted=False,
+        is_incognito=False,
+        created_at=datetime.utcnow(),
+        last_activity_at=datetime.utcnow(),
+    )
+    source = upsert_space_chat_source(session, chat)  # type: ignore[arg-type]
+    assert source is existing
+    assert source.title == "Budget chat"
+    assert source.status == AgentSourceStatus.queued
+    assert source.error_message is None
+    assert source.metadata_json["chat_id"] == str(chat.id)
+    assert "budget" in source.content_text.lower()
+    assert session.added == [existing]
+
+
 def test_upsert_skips_incognito_and_non_space_chats():
     class _Session:
         def exec(self, _statement):

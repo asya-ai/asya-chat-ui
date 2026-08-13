@@ -158,7 +158,7 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
       headers.set("Authorization", `Bearer ${token}`)
     }
   }
-  if (!(options.body instanceof FormData)) {
+  if (options.body != null && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
   }
   const response = await fetch(`${API_BASE}${path}`, {
@@ -237,7 +237,11 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
   if (response.status === 204) {
     return {} as T
   }
-  return response.json() as Promise<T>
+  const text = await response.text()
+  if (!text) {
+    return {} as T
+  }
+  return JSON.parse(text) as T
 }
 
 export const configApi = {

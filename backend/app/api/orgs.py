@@ -625,21 +625,33 @@ def remove_member(
             status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
         )
 
-    ensure_default_roles(session, org_uuid)
     admin_role = session.exec(
         select(Role).where(Role.org_id == org_uuid, Role.name == "admin")
     ).first()
     if admin_role and membership.role_id == admin_role.id:
-        admin_memberships = session.exec(
+        admin_count = session.exec(
             select(OrgMembership).where(
                 OrgMembership.org_id == org_uuid, OrgMembership.role_id == admin_role.id
             )
         ).all()
-        if len(admin_memberships) <= 1:
+        if len(admin_count) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot remove the last organization admin",
             )
+
+    org_team_ids = [
+        team.id
+        for team in session.exec(select(Team).where(Team.org_id == org_uuid)).all()
+    ]
+    if org_team_ids:
+        for team_membership in session.exec(
+            select(TeamMembership).where(
+                TeamMembership.user_id == user_uuid,
+                TeamMembership.team_id.in_(org_team_ids),
+            )
+        ).all():
+            session.delete(team_membership)
 
     session.delete(membership)
     session.commit()

@@ -545,9 +545,15 @@ export const OrgPage = () => {
   }
 
   const removeMember = async (member: OrgMember) => {
-    if (!usersOrgId) return
-    await orgApi.removeMember(usersOrgId, member.user_id)
-    setMembers((prev) => prev.filter((item) => item.user_id !== member.user_id))
+    const orgId = usersOrgId ?? selectedOrg
+    if (!orgId) return
+    try {
+      await orgApi.removeMember(orgId, member.user_id)
+      setMembers((prev) => prev.filter((item) => item.user_id !== member.user_id))
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
   }
 
   const createModel = async () => {
@@ -1520,9 +1526,10 @@ export const OrgPage = () => {
                       <TableCell>
                         {canManageOrgSettings ? (
                           <Button
+                            type="button"
                             size="sm"
                             variant="outline"
-                            onClick={() => removeMember(member)}
+                            onClick={() => void removeMember(member)}
                             disabled={member.user_id === currentUserId}
                           >
                             {t("org_users_remove_member")}

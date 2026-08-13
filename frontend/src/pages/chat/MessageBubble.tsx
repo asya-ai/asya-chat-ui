@@ -638,12 +638,19 @@ const ToolEventDetails = ({
     )
   }
   if (toolEvent.type === "tool_call") {
+    const rawPreview = toolEvent.input_preview?.trim() ?? ""
+    let preview = rawPreview
+    if (rawPreview.startsWith("{") || rawPreview.startsWith("[")) {
+      try {
+        preview = JSON.stringify(JSON.parse(rawPreview), null, 2)
+      } catch {
+        preview = rawPreview
+      }
+    }
     return (
       <div className="space-y-1 py-1 text-xs">
-        <div className="opacity-80">
-          {toolEvent.action_summary ||
-            toolEvent.input_preview ||
-            t("chat_running_tool_call")}
+        <div className="opacity-80 whitespace-pre-wrap wrap-break-word">
+          {preview || t("chat_running_tool_call")}
         </div>
         {toolEvent.output?.result_preview ? (
           <div className="text-muted-foreground">{toolEvent.output.result_preview}</div>
@@ -1290,8 +1297,8 @@ const MessageBubbleComponent = ({
     >
       <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
         {showUserSideActions ? (
-          <div className="pointer-events-none absolute inset-y-0 right-full mr-0.5 flex flex-col justify-end">
-            <div className="pointer-events-auto sticky bottom-0 z-10 flex items-center opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0">
+          <div className="right-full absolute inset-y-0 flex flex-col justify-end mr-0.5 pointer-events-none">
+            <div className="bottom-0 z-10 sticky flex items-center opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto">
               {actionsEnabled ? (
                 <Button
                   type="button"
