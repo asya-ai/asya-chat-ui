@@ -159,7 +159,12 @@ async def refresh_mcp_cache(*, force: bool = False) -> list[McpServerSnapshot]:
             try:
                 discovered = await discover_server_capabilities(server)
             except Exception as exc:
-                logger.warning("MCP discovery failed for %s: %s", server.id, exc)
+                logger.warning(
+                    "MCP discovery failed for %s: %s",
+                    server.id,
+                    exc,
+                    exc_info=True,
+                )
                 continue
             tools = _filter_tools(server, discovered.get("tools") or [])
             resources = list(discovered.get("resources") or [])
@@ -229,10 +234,11 @@ def register_mcp_tools(registry: ToolRegistry) -> None:
             ) -> ToolResult:
                 try:
                     output = await call_mcp_tool(_server, _remote, args or {})
-                    if output.get("is_error"):
+                    if output.get("is_error") or output.get("error"):
+                        error = output.get("error") or "MCP tool returned an error"
                         return ToolResult(
                             name=mcp_tool_name(_server.id, _remote),
-                            output={"error": "MCP tool returned an error", **output},
+                            output={**output, "error": str(error)},
                         )
                     return ToolResult(
                         name=mcp_tool_name(_server.id, _remote),
@@ -244,10 +250,15 @@ def register_mcp_tools(registry: ToolRegistry) -> None:
                         _server.id,
                         _remote,
                         exc,
+                        exc_info=True,
                     )
                     return ToolResult(
                         name=mcp_tool_name(_server.id, _remote),
-                        output={"error": str(exc)},
+                        output={
+                            "error": str(exc),
+                            "server_id": _server.id,
+                            "tool": _remote,
+                        },
                     )
 
             registry.register(
@@ -290,6 +301,12 @@ def register_mcp_tools(registry: ToolRegistry) -> None:
                         output=output,
                     )
                 except Exception as exc:
+                    logger.warning(
+                        "MCP read_resource failed server=%s: %s",
+                        _server.id,
+                        exc,
+                        exc_info=True,
+                    )
                     return ToolResult(
                         name=mcp_tool_name(_server.id, META_READ_RESOURCE),
                         output={"error": str(exc)},
@@ -360,6 +377,12 @@ def register_mcp_tools(registry: ToolRegistry) -> None:
                         output=output,
                     )
                 except Exception as exc:
+                    logger.warning(
+                        "MCP get_prompt failed server=%s: %s",
+                        _server.id,
+                        exc,
+                        exc_info=True,
+                    )
                     return ToolResult(
                         name=mcp_tool_name(_server.id, META_GET_PROMPT),
                         output={"error": str(exc)},

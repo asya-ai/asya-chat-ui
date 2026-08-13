@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, ValidationError, create_model
 from langchain_core.tools import StructuredTool
 
 from app.services.tools.registry import ToolRegistry, ToolResult, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_model_name(name: str) -> str:
@@ -100,8 +103,41 @@ class LangChainToolExecutor:
     async def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
-            raise ValueError(f"Tool not found: {name}")
-        return await tool.ainvoke(self._to_schema_args(name, arguments or {}))
+            return ToolResult(name=name, output={"error": f"Tool not found: {name}"})
+        try:
+            result = await tool.ainvoke(self._to_schema_args(name, arguments or {}))
+        except ValidationError as exc:
+            logger.warning("Tool arg validation failed name=%s: %s", name, exc)
+            return ToolResult(
+                name=name,
+                output={"error": f"Invalid tool arguments: {exc}"},
+            )
+        except Exception as exc:
+            logger.warning("Tool execute failed name=%s: %s", name, exc, exc_info=True)
+            return ToolResult(
+                name=name,
+                output={"error": f"{type(exc).__name__}: {exc}"},
+            )
+        if isinstance(result, ToolResult):
+            if not isinstance(result.output, dict):
+                return ToolResult(
+                    name=result.name or name,
+                    output={
+                        "error": "Tool returned non-object output",
+                        "raw": result.output,
+                    },
+                    attachments=result.attachments,
+                )
+            return result
+        if isinstance(result, dict):
+            return ToolResult(name=name, output=result)
+        return ToolResult(
+            name=name,
+            output={
+                "error": f"Unexpected tool return type: {type(result).__name__}",
+                "raw": str(result)[:500],
+            },
+        )
 
     def _create_tool(self, spec: ToolSpec) -> StructuredTool:
         args_model, field_map = _json_schema_to_model(spec.name, spec.parameters)

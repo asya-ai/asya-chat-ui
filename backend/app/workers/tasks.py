@@ -1198,19 +1198,22 @@ async def _run_generation(task_id: UUID) -> None:
                 session.rollback()
             except Exception:
                 pass
+            error_text = str(exc) or "Generation failed"
             assistant_message.status = "failed"
             assistant_message.completed_at = datetime.utcnow()
-            assistant_message.error_message = str(exc)
+            assistant_message.error_message = error_text
+            if not (assistant_message.content or "").strip():
+                assistant_message.content = error_text
             session.add(assistant_message)
             task.status = GenerationStatus.failed
-            task.error = str(exc)
+            task.error = error_text
             session.commit()
             _append_event(
                 session,
                 task.id,
                 sequence_ref,
                 "error",
-                {"error": str(exc)},
+                {"error": error_text},
             )
         finally:
             try:

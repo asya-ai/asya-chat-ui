@@ -70,6 +70,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    networks:
+      - default
+      - asya-mcp
 
   dind:
     image: docker:dind
@@ -132,6 +135,9 @@ services:
       replicas: ${WORKER_REPLICAS:-1}
       restart_policy:
         condition: on-failure
+    networks:
+      - default
+      - asya-mcp
 
   beat:
     image: chatui-backend
@@ -185,3 +191,7 @@ services:
 
 volumes:
   dind-data:
+networks:
+  default:
+  asya-mcp:
+    external: true

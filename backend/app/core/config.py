@@ -147,7 +147,7 @@ class Settings(BaseSettings):
         default=300, validation_alias="MCP_CACHE_TTL_SECONDS"
     )
     mcp_call_timeout_seconds: int = Field(
-        default=60, validation_alias="MCP_CALL_TIMEOUT_SECONDS"
+        default=300, validation_alias="MCP_CALL_TIMEOUT_SECONDS"
     )
     mcp_max_result_chars: int = Field(
         default=50000, validation_alias="MCP_MAX_RESULT_CHARS"

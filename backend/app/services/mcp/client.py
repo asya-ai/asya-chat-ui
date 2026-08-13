@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from pydantic import AnyUrl
 
 from app.core.config import settings
+from app.core.exceptions import format_exception_detail
 from app.services.mcp.catalog import McpServerConfig
 
 logger = logging.getLogger(__name__)
@@ -20,6 +22,26 @@ logger = logging.getLogger(__name__)
 
 def _timeout() -> timedelta:
     return timedelta(seconds=max(1, int(settings.mcp_call_timeout_seconds)))
+
+
+def _contains_timeout(exc: BaseException) -> bool:
+    """True when exc is (or wraps) a timeout — including ExceptionGroup cleanup paths."""
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return any(_contains_timeout(item) for item in exc.exceptions)
+    cause = exc.__cause__
+    if cause is not None and cause is not exc and _contains_timeout(cause):
+        return True
+    ctx = exc.__context__
+    if (
+        ctx is not None
+        and ctx is not exc
+        and not getattr(exc, "__suppress_context__", False)
+        and _contains_timeout(ctx)
+    ):
+        return True
+    return False
 
 
 @asynccontextmanager
@@ -252,6 +274,11 @@ def compact_mcp_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
         body = None
 
     out: dict[str, Any] = {"is_error": is_error}
+    error = payload.get("error")
+    if error is not None:
+        out["error"] = error
+    elif is_error:
+        out["error"] = "MCP tool returned an error"
     if body is not None:
         out["data"] = body
     if non_text_blocks:
@@ -279,19 +306,55 @@ def truncate_json_text(value: Any, *, max_chars: int) -> Any:
     return value
 
 
+def _mcp_error_text(content: list[dict[str, Any]] | None, fallback: str) -> str:
+    if not content:
+        return fallback
+    texts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and isinstance(block.get("text"), str):
+            text = block["text"].strip()
+            if text:
+                texts.append(text)
+    if not texts:
+        return fallback
+    joined = " | ".join(texts)
+    return joined if len(joined) <= 500 else joined[:497] + "..."
+
+
 async def call_mcp_tool(
     server: McpServerConfig, tool_name: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
-    async with open_mcp_session(server) as session:
-        result = await session.call_tool(tool_name, arguments=arguments or {})
+    timeout_seconds = max(1, int(settings.mcp_call_timeout_seconds))
+    try:
+        async with open_mcp_session(server) as session:
+            result = await asyncio.wait_for(
+                session.call_tool(tool_name, arguments=arguments or {}),
+                timeout=timeout_seconds,
+            )
+    except Exception as exc:
+        if _contains_timeout(exc):
+            raise TimeoutError(
+                f"MCP tool timed out after {timeout_seconds}s "
+                f"(server={server.id} tool={tool_name})"
+            ) from exc
+        raise RuntimeError(
+            f"MCP tool call failed (server={server.id} tool={tool_name}): "
+            f"{format_exception_detail(exc)}"
+        ) from exc
+
     structured = getattr(result, "structuredContent", None) or getattr(
         result, "structured_content", None
     )
     is_error = bool(getattr(result, "isError", False) or getattr(result, "is_error", False))
-    payload = {
-        "content": content_blocks_to_json(getattr(result, "content", None)),
+    content = content_blocks_to_json(getattr(result, "content", None))
+    payload: dict[str, Any] = {
+        "content": content,
         "is_error": is_error,
     }
+    if is_error:
+        payload["error"] = _mcp_error_text(
+            content, f"MCP tool {server.id}__{tool_name} returned an error"
+        )
     if structured is not None:
         if hasattr(structured, "model_dump"):
             structured = structured.model_dump(mode="json")
@@ -301,8 +364,23 @@ async def call_mcp_tool(
 
 
 async def read_mcp_resource(server: McpServerConfig, uri: str) -> dict[str, Any]:
-    async with open_mcp_session(server) as session:
-        result = await session.read_resource(AnyUrl(uri))
+    timeout_seconds = max(1, int(settings.mcp_call_timeout_seconds))
+    try:
+        async with open_mcp_session(server) as session:
+            result = await asyncio.wait_for(
+                session.read_resource(AnyUrl(uri)),
+                timeout=timeout_seconds,
+            )
+    except Exception as exc:
+        if _contains_timeout(exc):
+            raise TimeoutError(
+                f"MCP resource read timed out after {timeout_seconds}s "
+                f"(server={server.id} uri={uri})"
+            ) from exc
+        raise RuntimeError(
+            f"MCP resource read failed (server={server.id} uri={uri}): "
+            f"{format_exception_detail(exc)}"
+        ) from exc
     contents = []
     for item in getattr(result, "contents", None) or []:
         if hasattr(item, "model_dump"):
@@ -328,8 +406,23 @@ async def get_mcp_prompt(
     name: str,
     arguments: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    async with open_mcp_session(server) as session:
-        result = await session.get_prompt(name, arguments=arguments or {})
+    timeout_seconds = max(1, int(settings.mcp_call_timeout_seconds))
+    try:
+        async with open_mcp_session(server) as session:
+            result = await asyncio.wait_for(
+                session.get_prompt(name, arguments=arguments or {}),
+                timeout=timeout_seconds,
+            )
+    except Exception as exc:
+        if _contains_timeout(exc):
+            raise TimeoutError(
+                f"MCP prompt fetch timed out after {timeout_seconds}s "
+                f"(server={server.id} name={name})"
+            ) from exc
+        raise RuntimeError(
+            f"MCP prompt fetch failed (server={server.id} name={name}): "
+            f"{format_exception_detail(exc)}"
+        ) from exc
     messages = []
     for message in getattr(result, "messages", None) or []:
         if hasattr(message, "model_dump"):

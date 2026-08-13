@@ -34,13 +34,45 @@ class ToolRegistry:
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         if name not in self._tools:
-            raise ValueError(f"Tool not found: {name}")
+            return ToolResult(
+                name=name,
+                output={"error": f"Tool not found: {name}"},
+            )
         spec, handler = self._tools[name]
         logger.info(
             "Tool start name=%s args_keys=%s", name, list(arguments.keys())
         )
-        result = await handler(arguments)
-        output_keys = list(result.output.keys()) if isinstance(result.output, dict) else []
+        try:
+            result = await handler(arguments)
+        except Exception as exc:
+            logger.warning("Tool handler failed name=%s: %s", name, exc, exc_info=True)
+            return ToolResult(
+                name=name,
+                output={"error": f"{type(exc).__name__}: {exc}"},
+            )
+        if not isinstance(result, ToolResult):
+            logger.warning(
+                "Tool handler returned non-ToolResult name=%s type=%s",
+                name,
+                type(result).__name__,
+            )
+            return ToolResult(
+                name=name,
+                output={
+                    "error": (
+                        f"Tool handler returned {type(result).__name__} "
+                        "instead of ToolResult"
+                    ),
+                    "raw": str(result)[:500],
+                },
+            )
+        if not isinstance(result.output, dict):
+            result = ToolResult(
+                name=result.name or name,
+                output={"error": "Tool returned non-object output", "raw": result.output},
+                attachments=result.attachments,
+            )
+        output_keys = list(result.output.keys())
         logger.info(
             "Tool done name=%s output_keys=%s has_attachments=%s",
             name,

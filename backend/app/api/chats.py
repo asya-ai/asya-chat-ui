@@ -2314,7 +2314,7 @@ async def _run_agentic_loop(
                             "output": result.output,
                         }
                     )
-                if "error" in result.output:
+                if isinstance(result.output, dict) and result.output.get("error"):
                     logger.info(
                         "Tool error name=%s error=%s",
                         call.name,
@@ -2323,7 +2323,7 @@ async def _run_agentic_loop(
                     error_text = result.output.get("error")
                     if isinstance(error_text, str) and error_text:
                         last_tool_error = error_text
-                if result.output.get("requires_approval"):
+                if isinstance(result.output, dict) and result.output.get("requires_approval"):
                     last_tool_error = "Execution requires approval."
                 await _emit_tool_event(
                     {

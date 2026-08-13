@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, select
 
 from app.core.config import settings
+from app.core.exceptions import format_exception_detail
 from app.db.session import engine
 from app.models import (
     Chat,
@@ -1176,7 +1177,11 @@ def _timed_ms(fn: Callable[[], Any]) -> tuple[float, Any, str | None]:
         result = fn()
         return (time.perf_counter() - started) * 1000.0, result, None
     except Exception as exc:
-        return (time.perf_counter() - started) * 1000.0, None, _truncate(str(exc))
+        return (
+            (time.perf_counter() - started) * 1000.0,
+            None,
+            _truncate(format_exception_detail(exc, limit=400), limit=320),
+        )
 
 
 def _db_connect_kwargs() -> dict[str, Any]:
@@ -1869,7 +1874,7 @@ def _collect_mcp_servers() -> list[McpServerCheck]:
                         name=server.name,
                         transport=getattr(server, "transport", None),
                         status="invalid",
-                        detail=_truncate(str(exc)),
+                        detail=_truncate(format_exception_detail(exc, limit=400), limit=320),
                     )
                 )
     checks.sort(key=lambda item: item.id)

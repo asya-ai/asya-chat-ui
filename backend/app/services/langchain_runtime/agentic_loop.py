@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import anyio
@@ -11,6 +12,8 @@ from app.services.tools.previews import tool_call_action_summary
 from app.services.tools.registry import ToolResult, ToolRegistry
 from app.services.langchain_runtime.tool_adapters import LangChainToolExecutor
 from app.services.mcp import mcp_source_items_from_tool_result
+
+logger = logging.getLogger(__name__)
 
 WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
 WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
@@ -337,33 +340,69 @@ async def run_agentic_loop_langchain(
                         "output": {},
                     }
                 )
-            result: ToolResult = await executor.execute(call.name, call.arguments)
+
+            result = ToolResult(name=call.name, output={})
             answer_usage: ChatUsage | None = None
-            if (
-                call.name == "web_scrape"
-                and str((call.arguments or {}).get("output") or "").strip().lower() == "answer"
-            ):
-                result, answer_usage = await _normalize_web_scrape_answer_result(
-                    provider=provider,
-                    model_name=model_name,
-                    result=result,
+            tool_output: dict[str, Any] = {}
+            try:
+                result = await executor.execute(call.name, call_arguments)
+                if (
+                    call.name == "web_scrape"
+                    and str(call_arguments.get("output") or "").strip().lower() == "answer"
+                ):
+                    result, answer_usage = await _normalize_web_scrape_answer_result(
+                        provider=provider,
+                        model_name=model_name,
+                        result=result,
+                    )
+                raw_output = (
+                    _strip_inline_attachment_data(result.output)
+                    if result.attachments
+                    else result.output
                 )
-            if result.attachments:
-                tool_output = _strip_inline_attachment_data(result.output)
-            else:
-                tool_output = result.output
+                if isinstance(raw_output, dict):
+                    tool_output = raw_output
+                else:
+                    tool_output = {
+                        "error": "Tool returned non-object output",
+                        "raw": raw_output,
+                    }
+                    result = ToolResult(
+                        name=result.name or call.name,
+                        output=tool_output,
+                        attachments=result.attachments,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Tool call failed name=%s: %s",
+                    call.name,
+                    exc,
+                    exc_info=True,
+                )
+                tool_output = {"error": f"{type(exc).__name__}: {exc}"}
+                result = ToolResult(name=call.name, output=tool_output)
+
+            error_text = tool_output.get("error")
+            if error_text is None and tool_output.get("is_error"):
+                error_text = "Tool reported an error"
+            is_error = error_text is not None
+            try:
+                result_preview = json.dumps(tool_output, ensure_ascii=False)[:240]
+            except Exception:
+                result_preview = str(tool_output)[:240]
+
             async with emit_lock:
                 if call.name == "code_execution":
                     await _emit_tool_event(
                         {
                             "type": "code_execution",
                             "id": call.id,
-                            "code": (call.arguments or {}).get("code", ""),
+                            "code": call_arguments.get("code", ""),
                             "output": tool_output,
                         }
                     )
                 elif call.name == "download_attachments":
-                    urls = (call.arguments or {}).get("urls") or (call.arguments or {}).get("url")
+                    urls = call_arguments.get("urls") or call_arguments.get("url")
                     if isinstance(urls, str):
                         urls = [urls]
                     await _emit_tool_event(
@@ -383,10 +422,10 @@ async def run_agentic_loop_langchain(
                         "input_preview": input_preview,
                         "action_summary": action_summary,
                         "output": {
-                            "status": "error" if tool_output.get("error") else "ok",
-                            "result_preview": json.dumps(tool_output, ensure_ascii=False)[:240],
+                            "status": "error" if is_error else "ok",
+                            "result_preview": result_preview,
                             "raw_output": tool_output,
-                            "error": tool_output.get("error"),
+                            "error": str(error_text) if error_text is not None else None,
                             "attachments": [
                                 {
                                     "file_name": item.get("file_name"),

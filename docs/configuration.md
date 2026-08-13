@@ -50,7 +50,7 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
   - Compose-injected runtime vars (shown in System diagnosis): `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `DOCKER_HOST`, `EXEC_HOST_FILES_DIR`, `HF_HOME`
 - MCP data sources (host-mounted catalog at `/config/mcp_servers.yaml`):
   - `MCP_CACHE_TTL_SECONDS` (default: 300)
-  - `MCP_CALL_TIMEOUT_SECONDS` (default: 60)
+  - `MCP_CALL_TIMEOUT_SECONDS` (default: 300)
   - `MCP_MAX_RESULT_CHARS` (default: 50000)
 - Public URL:
   - `PUBLIC_API_BASE_URL` (used for links/externally visible API references)

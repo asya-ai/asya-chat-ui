@@ -1654,6 +1654,16 @@ const MessageBubbleComponent = ({
                           </span>
                           <span className="min-w-0 wrap-break-word">{part.label}</span>
                         </div>
+                        {part.tool_event?.type === "tool_call" &&
+                        (part.tool_event.output?.status === "error" ||
+                          part.tool_event.output?.error) ? (
+                          <div className="pl-3 text-destructive/90 text-xs wrap-break-word">
+                            {t("common_error")}:{" "}
+                            {part.tool_event.output.error ||
+                              part.tool_event.output.result_preview ||
+                              t("chat_generation_failed")}
+                          </div>
+                        ) : null}
                         {actionAttachments.length > 0 ? (
                           <div className="flex flex-wrap gap-2 pl-3">
                             {actionAttachments.map((attachment, attachmentIndex) => {
