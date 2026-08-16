@@ -35,10 +35,10 @@ def ensure_default_team(session: Session, org_id: UUID, *, commit: bool = True) 
 def seed_default_team_model(
     session: Session, org_id: UUID, model_id: UUID, *, enabled: bool = True
 ) -> None:
-    """Add a newly enabled org model to Default when Default still mirrors org access.
+    """Add a newly enabled org model to Default so it appears in the chat picker.
 
-    If an admin has already customized Default team models (so they no longer match
-    the prior org-enabled set), leave Default unchanged.
+    If Default has never been configured, mirror the full org-enabled set.
+    Existing Default rows (including manual disables) are left unchanged.
     """
     if not enabled:
         return
@@ -69,12 +69,6 @@ def seed_default_team_model(
         # Default has never been configured — mirror the full org-enabled set.
         for mid in org_enabled:
             session.add(TeamModel(team_id=team.id, model_id=mid, is_enabled=True))
-        return
-
-    prior_org_enabled = org_enabled - {model_id}
-    default_enabled = {link.model_id for link in existing_links if link.is_enabled}
-    # Default is still in auto-sync if it matches every previously org-enabled model.
-    if default_enabled != prior_org_enabled:
         return
 
     session.add(TeamModel(team_id=team.id, model_id=model_id, is_enabled=True))

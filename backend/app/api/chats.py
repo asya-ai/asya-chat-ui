@@ -1377,6 +1377,7 @@ async def _maybe_update_chat_title(
                     endpoint=provider_config.endpoint_override if provider_config else None,
                     prefer_responses_api=fallback.uses_responses_api is True,
                     config=config,
+                    openrouter_endpoint=fallback.openrouter_endpoint,
                 )
                 title_model = fallback
             except Exception:
@@ -4261,6 +4262,7 @@ async def create_message(
         prompt_cache_enabled=prompt_cache_enabled,
         prefer_responses_api=model.uses_responses_api is True,
         config=config,
+        openrouter_endpoint=model.openrouter_endpoint,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
     effective_web_search_enabled = _effective_web_tool_enabled(
@@ -5180,6 +5182,7 @@ async def edit_message(
         prompt_cache_enabled=prompt_cache_enabled,
         prefer_responses_api=model.uses_responses_api is True,
         config=config,
+        openrouter_endpoint=model.openrouter_endpoint,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
     effective_web_search_enabled = _effective_web_tool_enabled(

@@ -187,3 +187,59 @@ async def test_response_stream_chunks_emit_text_and_tool_calls() -> None:
     assert usage_chunk.usage.output_tokens == 5
     assert usage_chunk.usage.cached_tokens == 7
     assert usage_chunk.usage.thinking_tokens == 2
+
+
+class _RecordingCompletions:
+    def __init__(self, parent: "_RecordingOpenAIClient") -> None:
+        self._parent = parent
+
+    async def create(self, **payload):
+        self._parent.payloads.append(dict(payload))
+        return object()
+
+
+class _RecordingChat:
+    def __init__(self, parent: "_RecordingOpenAIClient") -> None:
+        self.completions = _RecordingCompletions(parent)
+
+
+class _RecordingOpenAIClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict] = []
+        self.chat = _RecordingChat(self)
+
+    def with_options(self, **kwargs):
+        return self
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_includes_openrouter_extra_body() -> None:
+    provider = OpenAIProvider(
+        api_key="test-key",
+        extra_body={
+            "provider": {"only": ["google-vertex/eu"], "allow_fallbacks": False},
+        },
+    )
+    fake_client = _RecordingOpenAIClient()
+    provider.client = fake_client
+
+    await provider._create_chat_completion(
+        {"model": "google/gemini-2.5-pro", "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    assert fake_client.payloads[0]["extra_body"] == {
+        "provider": {"only": ["google-vertex/eu"], "allow_fallbacks": False},
+    }
+
+
+def test_openrouter_endpoint_sets_provider_routing() -> None:
+    from app.services.providers.registry import get_provider
+
+    provider = get_provider(
+        "openrouter",
+        api_key="test-key",
+        openrouter_endpoint="google-vertex/eu",
+    )
+    assert provider.extra_body == {
+        "provider": {"only": ["google-vertex/eu"], "allow_fallbacks": False},
+    }

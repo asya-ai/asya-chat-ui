@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "react-router"
 
 import { authApi, modelApi, orgApi } from "@/lib/api"
@@ -9,6 +10,7 @@ import type {
   ChatModel,
   Invite,
   ModelSuggestionProvider,
+  OpenRouterEndpoint,
   Org,
   OrgAuthSettings,
   OrgMember,
@@ -90,6 +92,7 @@ const SortableModelRow = ({
 }
 
 const PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic", "openrouter", "vertex"] as const
+const OPENROUTER_ENDPOINT_AUTO = "__auto__"
 
 type ProviderConfigUI = ProviderConfig & {
   mode: "disabled" | "default" | "override"
@@ -98,6 +101,7 @@ type ProviderConfigUI = ProviderConfig & {
 export const OrgPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
+  const queryClient = useQueryClient()
   const [activeSection, setActiveSection] = useState<SettingsSection>("orgs")
   const [orgs, setOrgs] = useState<Org[]>([])
   const [models, setModels] = useState<ChatModel[]>([])
@@ -127,6 +131,10 @@ export const OrgPage = () => {
   const [modelName, setModelName] = useState("")
   const [modelDisplayName, setModelDisplayName] = useState("")
   const [modelReasoningEffort, setModelReasoningEffort] = useState("none")
+  const [modelOpenRouterEndpoint, setModelOpenRouterEndpoint] = useState("")
+  const [openRouterEndpointsByModel, setOpenRouterEndpointsByModel] = useState<
+    Record<string, OpenRouterEndpoint[]>
+  >({})
   const [modelSuggestions, setModelSuggestions] = useState<ModelSuggestionProvider[]>([])
   const { t } = useI18n()
   const [selectedOrg, setSelectedOrg] = useState<string | null>(orgStore.get())
@@ -323,6 +331,53 @@ export const OrgPage = () => {
       .then(setModelSuggestions)
       .catch(() => setModelSuggestions([]))
   }, [activeSection, isSuperAdmin, selectedOrg])
+
+  useEffect(() => {
+    if (!isSuperAdmin || activeSection !== "models") return
+    const names = new Set<string>()
+    if (modelProvider === "openrouter" && modelName.includes("/")) {
+      names.add(modelName.trim())
+    }
+    for (const model of models) {
+      if (model.provider === "openrouter" && model.model_name.includes("/")) {
+        names.add(model.model_name)
+      }
+    }
+    const missing = [...names].filter((name) => !(name in openRouterEndpointsByModel))
+    if (missing.length === 0) return
+    let cancelled = false
+    const load = async () => {
+      const entries = await Promise.all(
+        missing.map(async (name) => {
+          try {
+            const result = await modelApi.openRouterEndpoints(name)
+            return [name, result.endpoints] as const
+          } catch {
+            return [name, [] as OpenRouterEndpoint[]] as const
+          }
+        })
+      )
+      if (cancelled) return
+      setOpenRouterEndpointsByModel((prev) => {
+        const next = { ...prev }
+        for (const [name, endpoints] of entries) {
+          next[name] = endpoints
+        }
+        return next
+      })
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeSection,
+    isSuperAdmin,
+    modelProvider,
+    modelName,
+    models,
+    openRouterEndpointsByModel,
+  ])
 
   useEffect(() => {
     if (!isSuperAdmin || activeSection !== "models" || orgs.length <= 1) {
@@ -571,9 +626,12 @@ export const OrgPage = () => {
       supports_image_input: matchedSuggestion?.supports_image_input ?? null,
       supports_image_output: matchedSuggestion?.supports_image_output ?? null,
       reasoning_effort: modelReasoningEffort,
+      openrouter_endpoint:
+        modelProvider === "openrouter" ? modelOpenRouterEndpoint || null : null,
       is_active: true,
     })
     await modelApi.setOrgModels(selectedOrg, [{ model_id: model.id, is_enabled: true }])
+    await queryClient.invalidateQueries({ queryKey: ["models"] })
     setModels((prev) => [...prev, model])
     if (selectedOrg) {
       setAccessByOrgId((prev) => ({
@@ -584,6 +642,7 @@ export const OrgPage = () => {
     setModelName("")
     setModelDisplayName("")
     setModelReasoningEffort("none")
+    setModelOpenRouterEndpoint("")
   }
 
   const removeModel = async (modelId: string) => {
@@ -630,6 +689,19 @@ export const OrgPage = () => {
     )
   }
 
+  const updateOpenRouterEndpoint = async (modelId: string, value: string) => {
+    const updated = await modelApi.update(modelId, {
+      openrouter_endpoint: value === OPENROUTER_ENDPOINT_AUTO ? "" : value,
+    })
+    setModels((prev) =>
+      prev.map((model) =>
+        model.id === modelId
+          ? { ...model, openrouter_endpoint: updated.openrouter_endpoint }
+          : model
+      )
+    )
+  }
+
   const toggleModelAccess = async (orgId: string, modelId: string) => {
     const key = `${orgId}:${modelId}`
     const wasEnabled = (accessByOrgId[orgId] ?? []).includes(modelId)
@@ -643,6 +715,7 @@ export const OrgPage = () => {
     })
     try {
       await modelApi.setOrgModels(orgId, [{ model_id: modelId, is_enabled: !wasEnabled }])
+      await queryClient.invalidateQueries({ queryKey: ["models"] })
     } catch (err) {
       setAccessByOrgId((prev) => {
         const current = prev[orgId] ?? []
@@ -682,6 +755,9 @@ export const OrgPage = () => {
         return t("org_reasoning_none")
     }
   }
+  const endpointLabel = (endpoint: OpenRouterEndpoint) =>
+    endpoint.quantization ? `${endpoint.tag} (${endpoint.quantization})` : endpoint.tag
+  const currentOpenRouterEndpoints = openRouterEndpointsByModel[modelName.trim()] ?? []
 
   const sectionTitle = useMemo(() => {
     switch (activeSection) {
@@ -1625,8 +1701,14 @@ export const OrgPage = () => {
                 <CardContent className="space-y-4">
                   {isSuperAdmin ? (
                     <>
-                      <div className="gap-3 grid md:grid-cols-4">
-                        <Select value={modelProvider} onValueChange={setModelProvider}>
+                      <div className="gap-3 grid md:grid-cols-4 xl:grid-cols-5">
+                        <Select
+                          value={modelProvider}
+                          onValueChange={(value) => {
+                            setModelProvider(value)
+                            setModelOpenRouterEndpoint("")
+                          }}
+                        >
                           <SelectTrigger>
                             <SelectValue placeholder={t("org_models_provider_placeholder")} />
                           </SelectTrigger>
@@ -1644,6 +1726,7 @@ export const OrgPage = () => {
                           onChange={(event) => {
                             const value = event.target.value
                             setModelName(value)
+                            setModelOpenRouterEndpoint("")
                             const match = currentProviderSuggestions.find(
                               (item) => item.model_name === value
                             )
@@ -1673,6 +1756,38 @@ export const OrgPage = () => {
                             ))}
                           </SelectContent>
                         </Select>
+                        {modelProvider === "openrouter" ? (
+                          <Select
+                            value={modelOpenRouterEndpoint || OPENROUTER_ENDPOINT_AUTO}
+                            onValueChange={(value) =>
+                              setModelOpenRouterEndpoint(
+                                value === OPENROUTER_ENDPOINT_AUTO ? "" : value
+                              )
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder={t("org_models_endpoint_placeholder")} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={OPENROUTER_ENDPOINT_AUTO}>
+                                {t("org_models_endpoint_auto")}
+                              </SelectItem>
+                              {currentOpenRouterEndpoints.map((endpoint) => (
+                                <SelectItem key={endpoint.tag} value={endpoint.tag}>
+                                  {endpointLabel(endpoint)}
+                                </SelectItem>
+                              ))}
+                              {modelOpenRouterEndpoint &&
+                              !currentOpenRouterEndpoints.some(
+                                (endpoint) => endpoint.tag === modelOpenRouterEndpoint
+                              ) ? (
+                                <SelectItem value={modelOpenRouterEndpoint}>
+                                  {modelOpenRouterEndpoint}
+                                </SelectItem>
+                              ) : null}
+                            </SelectContent>
+                          </Select>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Button onClick={createModel} disabled={!selectedOrg || !modelName.trim()}>
@@ -1742,11 +1857,48 @@ export const OrgPage = () => {
                           )}
                           <p className="text-muted-foreground text-xs">
                             {model.provider} · {model.model_name}
+                            {model.provider === "openrouter" && model.openrouter_endpoint
+                              ? ` · ${model.openrouter_endpoint}`
+                              : ""}
                           </p>
                         </div>
                         </div>
                         {isSuperAdmin ? (
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {model.provider === "openrouter" ? (
+                              <Select
+                                value={model.openrouter_endpoint || OPENROUTER_ENDPOINT_AUTO}
+                                onValueChange={(value) =>
+                                  updateOpenRouterEndpoint(model.id, value)
+                                }
+                              >
+                                <SelectTrigger className="w-52 h-8">
+                                  <SelectValue
+                                    placeholder={t("org_models_endpoint_placeholder")}
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={OPENROUTER_ENDPOINT_AUTO}>
+                                    {t("org_models_endpoint_auto")}
+                                  </SelectItem>
+                                  {(openRouterEndpointsByModel[model.model_name] ?? []).map(
+                                    (endpoint) => (
+                                      <SelectItem key={endpoint.tag} value={endpoint.tag}>
+                                        {endpointLabel(endpoint)}
+                                      </SelectItem>
+                                    )
+                                  )}
+                                  {model.openrouter_endpoint &&
+                                  !(openRouterEndpointsByModel[model.model_name] ?? []).some(
+                                    (endpoint) => endpoint.tag === model.openrouter_endpoint
+                                  ) ? (
+                                    <SelectItem value={model.openrouter_endpoint}>
+                                      {model.openrouter_endpoint}
+                                    </SelectItem>
+                                  ) : null}
+                                </SelectContent>
+                              </Select>
+                            ) : null}
                             <Select
                               value={model.reasoning_effort ?? "none"}
                               onValueChange={(value) => updateReasoningEffort(model.id, value)}

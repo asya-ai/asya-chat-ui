@@ -206,9 +206,9 @@ def test_seed_default_team_model_on_enable():
         assert {link.model_id for link in links} == {model_a.id, model_b.id}
 
 
-def test_seed_default_skips_when_default_was_customized():
+def test_seed_default_adds_new_model_when_default_was_customized():
     with _session() as session:
-        org, _, model_a, model_b = _seed_org(session)
+        org, user, model_a, model_b = _seed_org(session)
         default = ensure_default_team(session, org.id)
         # Org has A+B enabled, but admin only left A on Default.
         session.add(TeamModel(team_id=default.id, model_id=model_a.id, is_enabled=True))
@@ -232,5 +232,26 @@ def test_seed_default_skips_when_default_was_customized():
         links = session.exec(
             select(TeamModel).where(TeamModel.team_id == default.id)
         ).all()
-        assert {link.model_id for link in links if link.is_enabled} == {model_a.id}
-        assert model_c.id not in {link.model_id for link in links}
+        enabled_ids = {link.model_id for link in links if link.is_enabled}
+        assert enabled_ids == {model_a.id, model_c.id}
+        assert model_b.id not in enabled_ids
+        assert allowed_model_ids(session, org.id, user.id) == {model_a.id, model_c.id}
+
+
+def test_seed_default_does_not_reenable_manually_disabled_model():
+    with _session() as session:
+        org, _, model_a, model_b = _seed_org(session)
+        default = ensure_default_team(session, org.id)
+        session.add(TeamModel(team_id=default.id, model_id=model_a.id, is_enabled=True))
+        session.add(TeamModel(team_id=default.id, model_id=model_b.id, is_enabled=False))
+        session.commit()
+
+        seed_default_team_model(session, org.id, model_b.id, enabled=True)
+        session.commit()
+
+        link = session.exec(
+            select(TeamModel).where(
+                TeamModel.team_id == default.id, TeamModel.model_id == model_b.id
+            )
+        ).one()
+        assert link.is_enabled is False

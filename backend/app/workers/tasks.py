@@ -597,6 +597,7 @@ async def _run_generation(task_id: UUID) -> None:
             prompt_cache_enabled=prompt_cache_enabled,
             prefer_responses_api=model.uses_responses_api is True,
             config=config,
+            openrouter_endpoint=model.openrouter_endpoint,
         )
 
         sequence = session.exec(

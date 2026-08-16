@@ -335,6 +335,8 @@ export const en = {
   org_models_name_placeholder: "Model name",
   org_models_display_placeholder: "Display name",
   org_models_reasoning_placeholder: "Reasoning effort",
+  org_models_endpoint_placeholder: "Endpoint",
+  org_models_endpoint_auto: "Auto (any)",
   org_models_add: "Add model",
   org_models_remove: "Remove",
   org_models_no_models: "No models yet.",

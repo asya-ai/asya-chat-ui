@@ -14,7 +14,7 @@ from app.services.model_capabilities import (
     ensure_models_capabilities,
     resolve_capabilities_for_storage,
 )
-from app.services.model_suggestions import get_model_suggestions
+from app.services.model_suggestions import fetch_openrouter_endpoints, get_model_suggestions
 from app.services.org_service import (
     require_org_admin,
     require_provider_enabled,
@@ -39,6 +39,7 @@ class ModelCreateRequest(BaseModel):
     supports_image_output: bool | None = None
     uses_responses_api: bool | None = None
     reasoning_effort: str | None = None
+    openrouter_endpoint: str | None = None
 
 
 class ModelRead(BaseModel):
@@ -53,6 +54,7 @@ class ModelRead(BaseModel):
     supports_image_output: bool | None = None
     uses_responses_api: bool | None = None
     reasoning_effort: str | None = None
+    openrouter_endpoint: str | None = None
     is_available: bool = True
 
 
@@ -60,6 +62,7 @@ class ModelUpdateRequest(BaseModel):
     display_name: str | None = None
     reasoning_effort: str | None = None
     uses_responses_api: bool | None = None
+    openrouter_endpoint: str | None = None
 
 
 class ModelOrderUpdateRequest(BaseModel):
@@ -82,6 +85,37 @@ class ModelSuggestionProvider(BaseModel):
     error: str | None = None
 
 
+class OpenRouterEndpointItem(BaseModel):
+    tag: str
+    name: str
+    provider_name: str | None = None
+    quantization: str | None = None
+
+
+class OpenRouterEndpointsResponse(BaseModel):
+    model_name: str
+    endpoints: list[OpenRouterEndpointItem]
+    error: str | None = None
+
+
+def _model_read(model: ChatModel, *, is_available: bool = True) -> ModelRead:
+    return ModelRead(
+        id=str(model.id),
+        provider=model.provider,
+        model_name=model.model_name,
+        display_name=model.display_name,
+        is_active=model.is_active,
+        display_order=model.display_order,
+        context_length=model.context_length,
+        supports_image_input=model.supports_image_input,
+        supports_image_output=model.supports_image_output,
+        uses_responses_api=model.uses_responses_api,
+        reasoning_effort=model.reasoning_effort,
+        openrouter_endpoint=model.openrouter_endpoint,
+        is_available=is_available,
+    )
+
+
 def _normalize_reasoning_effort(value: str | None) -> str | None:
     if value is None:
         return None
@@ -92,6 +126,13 @@ def _normalize_reasoning_effort(value: str | None) -> str | None:
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Invalid reasoning effort (use none/low/medium/high)",
     )
+
+
+def _normalize_openrouter_endpoint(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _normalize_provider_model_name(provider: str, model_name: str) -> str:
@@ -238,6 +279,11 @@ def create_model(
         supports_image_output=supports_image_output_value,
         uses_responses_api=payload.uses_responses_api,
         reasoning_effort=_normalize_reasoning_effort(payload.reasoning_effort),
+        openrouter_endpoint=(
+            _normalize_openrouter_endpoint(payload.openrouter_endpoint)
+            if payload.provider == "openrouter"
+            else None
+        ),
     )
     session.add(model)
     session.commit()
@@ -258,19 +304,7 @@ def create_model(
     seed_default_team_model(session, org_uuid, model.id, enabled=True)
     session.commit()
 
-    return ModelRead(
-        id=str(model.id),
-        provider=model.provider,
-        model_name=model.model_name,
-        display_name=model.display_name,
-        is_active=model.is_active,
-        display_order=model.display_order,
-        context_length=model.context_length,
-        supports_image_input=model.supports_image_input,
-        supports_image_output=model.supports_image_output,
-        uses_responses_api=model.uses_responses_api,
-        reasoning_effort=model.reasoning_effort,
-    )
+    return _model_read(model)
 
 
 @router.get("", response_model=list[ModelRead])
@@ -296,22 +330,7 @@ def list_models(
             .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
         ).all()
         ensure_models_capabilities(session, models)
-        return [
-            ModelRead(
-                id=str(model.id),
-                provider=model.provider,
-                model_name=model.model_name,
-                display_name=model.display_name,
-                is_active=model.is_active,
-                display_order=model.display_order,
-                context_length=model.context_length,
-                supports_image_input=model.supports_image_input,
-                supports_image_output=model.supports_image_output,
-                uses_responses_api=model.uses_responses_api,
-                reasoning_effort=model.reasoning_effort,
-            )
-            for model in models
-        ]
+        return [_model_read(model) for model in models]
     if current_user.is_super_admin and org_id:
         try:
             org_uuid = UUID(org_id)
@@ -328,22 +347,7 @@ def list_models(
             .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
         ).all()
         ensure_models_capabilities(session, models)
-        return [
-            ModelRead(
-                id=str(model.id),
-                provider=model.provider,
-                model_name=model.model_name,
-                display_name=model.display_name,
-                is_active=model.is_active,
-                display_order=model.display_order,
-                context_length=model.context_length,
-                supports_image_input=model.supports_image_input,
-                supports_image_output=model.supports_image_output,
-                uses_responses_api=model.uses_responses_api,
-                reasoning_effort=model.reasoning_effort,
-            )
-            for model in models
-        ]
+        return [_model_read(model) for model in models]
     else:
         membership = session.exec(
             select(OrgMembership).where(OrgMembership.user_id == current_user.id)
@@ -397,20 +401,7 @@ def list_models(
     models = session.exec(models_query).all()
     ensure_models_capabilities(session, models)
     return [
-        ModelRead(
-            id=str(model.id),
-            provider=model.provider,
-            model_name=model.model_name,
-            display_name=model.display_name,
-            is_active=model.is_active,
-            display_order=model.display_order,
-            context_length=model.context_length,
-            supports_image_input=model.supports_image_input,
-            supports_image_output=model.supports_image_output,
-            uses_responses_api=model.uses_responses_api,
-            reasoning_effort=model.reasoning_effort,
-            is_available=model.provider not in disabled_providers,
-        )
+        _model_read(model, is_available=model.provider not in disabled_providers)
         for model in models
     ]
 
@@ -449,6 +440,21 @@ def list_model_suggestions(
             and _is_vertex_model_invokable(session, org_uuid, model["model_name"])
         ]
     return suggestions
+
+
+@router.get("/openrouter/endpoints", response_model=OpenRouterEndpointsResponse)
+def list_openrouter_endpoints(
+    model_name: str,
+    current_user: User = Depends(get_current_user),
+) -> OpenRouterEndpointsResponse:
+    require_super_admin(current_user)
+    trimmed = model_name.strip()
+    endpoints, error = fetch_openrouter_endpoints(trimmed)
+    return OpenRouterEndpointsResponse(
+        model_name=trimmed,
+        endpoints=[OpenRouterEndpointItem(**item) for item in endpoints],
+        error=error,
+    )
 
 
 @router.delete("/{model_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -502,22 +508,7 @@ def update_model_order(
         .where(ChatModel.is_active.is_(True))
         .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
     ).all()
-    return [
-        ModelRead(
-            id=str(model.id),
-            provider=model.provider,
-            model_name=model.model_name,
-            display_name=model.display_name,
-            is_active=model.is_active,
-            display_order=model.display_order,
-            context_length=model.context_length,
-            supports_image_input=model.supports_image_input,
-            supports_image_output=model.supports_image_output,
-            uses_responses_api=model.uses_responses_api,
-            reasoning_effort=model.reasoning_effort,
-        )
-        for model in ordered
-    ]
+    return [_model_read(model) for model in ordered]
 
 
 @router.patch("/{model_id:uuid}", response_model=ModelRead)
@@ -537,22 +528,17 @@ def update_model(
         model.reasoning_effort = _normalize_reasoning_effort(payload.reasoning_effort)
     if payload.uses_responses_api is not None:
         model.uses_responses_api = payload.uses_responses_api
+    if payload.openrouter_endpoint is not None:
+        if model.provider != "openrouter":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="openrouter_endpoint is only valid for openrouter models",
+            )
+        model.openrouter_endpoint = _normalize_openrouter_endpoint(payload.openrouter_endpoint)
     session.add(model)
     session.commit()
     session.refresh(model)
-    return ModelRead(
-        id=str(model.id),
-        provider=model.provider,
-        model_name=model.model_name,
-        display_name=model.display_name,
-        is_active=model.is_active,
-        display_order=model.display_order,
-        context_length=model.context_length,
-        supports_image_input=model.supports_image_input,
-        supports_image_output=model.supports_image_output,
-        uses_responses_api=model.uses_responses_api,
-        reasoning_effort=model.reasoning_effort,
-    )
+    return _model_read(model)
 
 
 class OrgModelUpdateRequest(BaseModel):
@@ -622,19 +608,4 @@ def set_org_models(
         .where(ChatModel.is_active.is_(True), ChatModel.id.in_(enabled_model_ids))
         .order_by(ChatModel.display_order, ChatModel.display_name, ChatModel.id)
     ).all()
-    return [
-        ModelRead(
-            id=str(model.id),
-            provider=model.provider,
-            model_name=model.model_name,
-            display_name=model.display_name,
-            is_active=model.is_active,
-            display_order=model.display_order,
-            context_length=model.context_length,
-            supports_image_input=model.supports_image_input,
-            supports_image_output=model.supports_image_output,
-            uses_responses_api=model.uses_responses_api,
-            reasoning_effort=model.reasoning_effort,
-        )
-        for model in models
-    ]
+    return [_model_read(model) for model in models]

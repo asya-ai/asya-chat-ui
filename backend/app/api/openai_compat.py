@@ -509,6 +509,7 @@ async def chat_completions(
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
         prefer_responses_api=model.uses_responses_api is True,
+        openrouter_endpoint=model.openrouter_endpoint,
     )
     message_payload, dropped_tool_messages, coerced_orphan_tool_messages = (
         _normalize_provider_messages(

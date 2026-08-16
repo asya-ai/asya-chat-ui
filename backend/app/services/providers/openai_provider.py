@@ -358,6 +358,7 @@ class OpenAIProvider:
         prompt_cache_retention: str | None = None,
         prompt_cache_enabled: bool = True,
         prefer_responses_api: bool = False,
+        extra_body: dict | None = None,
     ) -> None:
         self.chat_timeout_seconds = 120.0
         # /v1/responses calls can take several minutes when reasoning.effort is high.
@@ -380,6 +381,16 @@ class OpenAIProvider:
         # Loaded from ChatModel.uses_responses_api; flipped true if chat.completions rejects.
         self._prefer_responses_api = prefer_responses_api
         self._discovered_responses_api = False
+        self.extra_body = extra_body or None
+
+    def _apply_extra_body(self, payload: dict) -> None:
+        if not self.extra_body:
+            return
+        existing = payload.get("extra_body")
+        if isinstance(existing, dict):
+            payload["extra_body"] = {**self.extra_body, **existing}
+        else:
+            payload["extra_body"] = dict(self.extra_body)
 
     def _apply_prompt_cache(self, payload: dict) -> None:
         if self.prompt_cache_key:
@@ -418,6 +429,7 @@ class OpenAIProvider:
         return None
 
     async def _create_chat_completion(self, payload: dict) -> object:
+        self._apply_extra_body(payload)
         try:
             return await self.client.with_options(
                 timeout=self.chat_timeout_seconds,
@@ -459,6 +471,7 @@ class OpenAIProvider:
             raise
 
     async def _create_response(self, payload: dict) -> object:
+        self._apply_extra_body(payload)
         try:
             return await self.client.with_options(
                 timeout=self.responses_timeout_seconds,
@@ -501,6 +514,7 @@ class OpenAIProvider:
             raise
 
     async def _create_response_stream(self, payload: dict):
+        self._apply_extra_body(payload)
         stream_payload = {**payload, "stream": True}
         try:
             return await self.client.with_options(
@@ -615,6 +629,7 @@ class OpenAIProvider:
         return await self._create_response(payload)
 
     async def _create_text_completion(self, payload: dict) -> object:
+        self._apply_extra_body(payload)
         try:
             return await self.client.completions.create(**payload)
         except Exception as exc:

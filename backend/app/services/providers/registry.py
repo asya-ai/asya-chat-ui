@@ -19,6 +19,8 @@ def get_provider(
     prompt_cache_enabled: bool = True,
     prefer_responses_api: bool = False,
     config: dict | None = None,
+    extra_body: dict | None = None,
+    openrouter_endpoint: str | None = None,
 ) -> ChatProvider:
     match provider:
         case "openai":
@@ -65,6 +67,16 @@ def get_provider(
                 base_url=base_url,
             )
         case "openrouter":
+            body = extra_body
+            tag = (openrouter_endpoint or "").strip()
+            if tag:
+                routed = {
+                    "provider": {
+                        "only": [tag],
+                        "allow_fallbacks": False,
+                    }
+                }
+                body = {**routed, **(body or {})}
             return OpenRouterProvider(
                 api_key=api_key,
                 base_url=base_url,
@@ -72,6 +84,7 @@ def get_provider(
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 prefer_responses_api=prefer_responses_api,
+                extra_body=body,
             )
         case _:
             raise ValueError(f"Unsupported provider: {provider}")

@@ -1083,7 +1083,7 @@ const MessageBubbleComponent = ({
       strong({ children, node, ...rest }: any) {
         void node
         return (
-          <strong className="font-medium" {...rest}>
+          <strong {...rest} className="font-medium">
             {children}
           </strong>
         )
@@ -1091,11 +1091,11 @@ const MessageBubbleComponent = ({
       b({ children, node, ...rest }: any) {
         void node
         return (
-          <b className="font-medium" {...rest}>
+          <b {...rest} className="font-medium">
             {children}
           </b>
         )
-      },,
+      },
       h1({ children, node, ...rest }: any) {
         void node
         return (
@@ -1364,7 +1364,7 @@ const MessageBubbleComponent = ({
           </div>
         ) : null}
         <div
-          className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal ${
+          className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal [&_strong]:font-medium [&_b]:font-medium ${
             isUser
               ? "bg-secondary p-2 text-base leading-5 text-foreground"
               : hasEventHeader

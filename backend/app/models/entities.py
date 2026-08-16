@@ -172,6 +172,8 @@ class ChatModel(SQLModel, table=True):
     # Learned automatically when chat.completions rejects the model.
     uses_responses_api: Optional[bool] = Field(default=None)
     reasoning_effort: Optional[str] = Field(default=None)
+    # OpenRouter provider routing tag, e.g. "google-vertex/eu".
+    openrouter_endpoint: Optional[str] = Field(default=None)
 
     chats: List["Chat"] = Relationship(back_populates="model")
     usage_events: List["UsageEvent"] = Relationship(back_populates="model")

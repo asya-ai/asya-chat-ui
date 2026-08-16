@@ -9,6 +9,7 @@ import type {
   ChatMessageAttachmentInput,
   Invite,
   ModelSuggestionProvider,
+  OpenRouterEndpointsResponse,
   Org,
   OrgMember,
   OrgUpdate,
@@ -517,6 +518,7 @@ export const modelApi = {
     supports_image_input?: boolean | null
     supports_image_output?: boolean | null
     reasoning_effort?: string | null
+    openrouter_endpoint?: string | null
   }) => apiFetch<ChatModel>("/models", { method: "POST", body: JSON.stringify(payload) }),
   suggestions: (orgId?: string, invokableOnly = false) => {
     const params = new URLSearchParams()
@@ -534,11 +536,20 @@ export const modelApi = {
       method: "PATCH",
       body: JSON.stringify({ display_name: displayName }),
     }),
-  update: (modelId: string, payload: { reasoning_effort?: string | null }) =>
+  update: (
+    modelId: string,
+    payload: { reasoning_effort?: string | null; openrouter_endpoint?: string | null }
+  ) =>
     apiFetch<ChatModel>(`/models/${modelId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  openRouterEndpoints: (modelName: string) => {
+    const params = new URLSearchParams({ model_name: modelName })
+    return apiFetch<OpenRouterEndpointsResponse>(
+      `/models/openrouter/endpoints?${params.toString()}`
+    )
+  },
   updateOrder: (payload: { model_id: string; display_order: number }[]) =>
     apiFetch<ChatModel[]>("/models/order", {
       method: "PATCH",

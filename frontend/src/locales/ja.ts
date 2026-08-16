@@ -337,6 +337,8 @@ export const ja = {
   org_models_name_placeholder: "モデル名",
   org_models_display_placeholder: "表示名",
   org_models_reasoning_placeholder: "推論の強さ",
+  org_models_endpoint_placeholder: "エンドポイント",
+  org_models_endpoint_auto: "自動（指定なし）",
   org_models_add: "モデルを追加",
   org_models_remove: "削除",
   org_models_no_models: "モデルはまだありません。",

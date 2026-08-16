@@ -6,6 +6,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Iterable
 import copy
@@ -33,6 +34,8 @@ _VERTEX_KNOWN_GEMINI_MODELS = (
 )
 _MODEL_SUGGESTIONS_CACHE_TTL_SECONDS = 300
 _MODEL_SUGGESTIONS_CACHE: tuple[float, list[dict[str, object]]] | None = None
+_OPENROUTER_ENDPOINTS_CACHE_TTL_SECONDS = 300
+_OPENROUTER_ENDPOINTS_CACHE: dict[str, tuple[float, list[dict[str, object]], str | None]] = {}
 
 
 def _normalize_gemini_name(name: str) -> str:
@@ -379,6 +382,102 @@ def _openrouter_models() -> tuple[list[dict[str, object]], str | None]:
                 }
             )
         return items, None
+    except Exception as exc:  # pragma: no cover - external API call
+        return [], f"OpenRouter error: {exc}"
+
+
+def _openrouter_author_slug(model_name: str) -> tuple[str, str] | None:
+    value = model_name.strip()
+    if "/" not in value:
+        return None
+    author, slug = value.split("/", 1)
+    author = author.strip()
+    slug = slug.strip()
+    if not author or not slug:
+        return None
+    return author, slug
+
+
+def parse_openrouter_endpoints(payload: object) -> list[dict[str, object]]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    raw_endpoints = None
+    if isinstance(data, dict):
+        raw_endpoints = data.get("endpoints")
+    elif isinstance(payload, dict):
+        raw_endpoints = payload.get("endpoints")
+    if not isinstance(raw_endpoints, list):
+        return []
+    items: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for endpoint in raw_endpoints:
+        if not isinstance(endpoint, dict):
+            continue
+        tag = endpoint.get("tag") or endpoint.get("provider_tag")
+        if not isinstance(tag, str):
+            continue
+        tag = tag.strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        name = endpoint.get("name")
+        provider_name = endpoint.get("provider_name")
+        quantization = endpoint.get("quantization")
+        items.append(
+            {
+                "tag": tag,
+                "name": name.strip() if isinstance(name, str) and name.strip() else tag,
+                "provider_name": (
+                    provider_name.strip()
+                    if isinstance(provider_name, str) and provider_name.strip()
+                    else None
+                ),
+                "quantization": (
+                    quantization.strip()
+                    if isinstance(quantization, str) and quantization.strip()
+                    and quantization.strip().lower() != "unknown"
+                    else None
+                ),
+            }
+        )
+    return items
+
+
+def fetch_openrouter_endpoints(
+    model_name: str, *, use_cache: bool = True
+) -> tuple[list[dict[str, object]], str | None]:
+    parsed = _openrouter_author_slug(model_name)
+    if parsed is None:
+        return [], "OpenRouter model name must be author/slug"
+    cache_key = f"{parsed[0]}/{parsed[1]}"
+    now = time.time()
+    if use_cache:
+        cached = _OPENROUTER_ENDPOINTS_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return copy.deepcopy(cached[1]), cached[2]
+    author, slug = parsed
+    url = (
+        "https://openrouter.ai/api/v1/models/"
+        f"{urllib.parse.quote(author, safe='')}/"
+        f"{urllib.parse.quote(slug, safe=':/')}/endpoints"
+    )
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "chatui-openrouter-endpoints"},
+        )
+        if settings.openrouter_api_key:
+            request.add_header("Authorization", f"Bearer {settings.openrouter_api_key}")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        items = parse_openrouter_endpoints(payload)
+        error = None if items else "OpenRouter returned no endpoints for this model"
+        if use_cache:
+            _OPENROUTER_ENDPOINTS_CACHE[cache_key] = (
+                now + _OPENROUTER_ENDPOINTS_CACHE_TTL_SECONDS,
+                items,
+                error,
+            )
+        return copy.deepcopy(items), error
     except Exception as exc:  # pragma: no cover - external API call
         return [], f"OpenRouter error: {exc}"
 

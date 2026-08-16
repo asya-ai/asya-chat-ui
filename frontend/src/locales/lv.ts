@@ -337,6 +337,8 @@ export const lv = {
   org_models_name_placeholder: "Modeļa nosaukums",
   org_models_display_placeholder: "Attēlojamais nosaukums",
   org_models_reasoning_placeholder: "Domāšanas līmenis",
+  org_models_endpoint_placeholder: "Gala punkts",
+  org_models_endpoint_auto: "Automātiski (jebkurš)",
   org_models_add: "Pievienot modeli",
   org_models_remove: "Noņemt",
   org_models_no_models: "Nav modeļu.",

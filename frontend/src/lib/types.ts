@@ -83,6 +83,7 @@ export type ChatModel = {
   supports_image_output?: boolean | null
   uses_responses_api?: boolean | null
   reasoning_effort?: string | null
+  openrouter_endpoint?: string | null
   is_available?: boolean
 }
 
@@ -98,6 +99,19 @@ export type ModelSuggestionItem = {
 export type ModelSuggestionProvider = {
   provider: string
   models: ModelSuggestionItem[]
+  error?: string | null
+}
+
+export type OpenRouterEndpoint = {
+  tag: string
+  name: string
+  provider_name?: string | null
+  quantization?: string | null
+}
+
+export type OpenRouterEndpointsResponse = {
+  model_name: string
+  endpoints: OpenRouterEndpoint[]
   error?: string | null
 }
 

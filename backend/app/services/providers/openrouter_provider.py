@@ -12,6 +12,7 @@ class OpenRouterProvider(OpenAIProvider):
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         prefer_responses_api: bool = False,
+        extra_body: dict | None = None,
     ) -> None:
         super().__init__(
             api_key=api_key or settings.openrouter_api_key,
@@ -20,6 +21,7 @@ class OpenRouterProvider(OpenAIProvider):
             prompt_cache_key=prompt_cache_key,
             prompt_cache_retention=prompt_cache_retention,
             prefer_responses_api=prefer_responses_api,
+            extra_body=extra_body,
         )
         # AsyncOpenAI.default_headers is read-only; merge via with_options.
         self.client = self.client.with_options(
