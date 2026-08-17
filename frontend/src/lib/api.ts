@@ -16,6 +16,7 @@ import type {
   OrgWebSettings,
   SourceItem,
   ToolEvent,
+  CoworkDocument,
   ProviderConfig,
   ProviderConfigUpdate,
   OrgAuthSettings,
@@ -59,6 +60,7 @@ type StreamEvent =
   | { task_id: string; assistant_message_id?: string }
   | { activity: { label: string; state: "start" | "end" } }
   | { tool_event: ToolEvent }
+  | { chat_title: string; chat_id?: string }
   | { error: string; status?: number }
   | {
       done: true
@@ -616,6 +618,44 @@ export const chatApi = {
       body: JSON.stringify(payload),
     }),
   messages: (chatId: string) => apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`),
+  listCoworkDocuments: (chatId: string) =>
+    apiFetch<CoworkDocument[]>(`/chats/${chatId}/cowork`),
+  getActiveCoworkDocument: (chatId: string) =>
+    apiFetch<CoworkDocument | null>(`/chats/${chatId}/cowork/active`),
+  getCoworkDocument: (chatId: string, docId: string) =>
+    apiFetch<CoworkDocument>(`/chats/${chatId}/cowork/${docId}`),
+  activateCoworkDocument: (chatId: string, docId: string) =>
+    apiFetch<CoworkDocument>(`/chats/${chatId}/cowork/${docId}/activate`, {
+      method: "POST",
+    }),
+  deleteCoworkDocument: (chatId: string, docId: string) =>
+    apiFetch<CoworkDocument | null>(`/chats/${chatId}/cowork/${docId}`, {
+      method: "DELETE",
+    }),
+  patchCoworkDocument: (
+    chatId: string,
+    docId: string,
+    payload: { content: string; base_version: number }
+  ) =>
+    apiFetch<CoworkDocument>(`/chats/${chatId}/cowork/${docId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  downloadCoworkDocument: async (chatId: string, docId: string) => {
+    const headers = new Headers()
+    const token = tokenStore.get()
+    if (token) headers.set("Authorization", `Bearer ${token}`)
+    const response = await fetch(`${API_BASE}/chats/${chatId}/cowork/${docId}/download`, {
+      headers,
+    })
+    if (!response.ok) {
+      throw new ApiError("Download failed", response.status)
+    }
+    const disposition = response.headers.get("content-disposition") || ""
+    const match = /filename="([^"]+)"/i.exec(disposition)
+    const blob = await response.blob()
+    return { blob, fileName: match?.[1] || "document.txt" }
+  },
   sendMessage: (
     chatId: string,
     content: string,

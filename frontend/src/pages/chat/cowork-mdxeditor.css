@@ -1,0 +1,248 @@
+/* Cowork MDXEditor: theme tokens + table chrome fixes */
+
+.cowork-mdxeditor.mdxeditor,
+.mdxeditor-popup-container.cowork-mdxeditor,
+.dark .mdxeditor-popup-container {
+  --basePageBg: var(--background);
+  --baseBase: var(--background);
+  --baseBgSubtle: var(--muted);
+  --baseBg: var(--muted);
+  --baseBgHover: color-mix(in oklab, var(--muted) 80%, var(--foreground) 8%);
+  --baseBgActive: color-mix(in oklab, var(--muted) 70%, var(--foreground) 12%);
+  --baseLine: var(--border);
+  --baseBorder: var(--border);
+  --baseBorderHover: color-mix(in oklab, var(--border) 70%, var(--foreground) 30%);
+  --baseSolid: var(--muted-foreground);
+  --baseSolidHover: var(--foreground);
+  --baseText: var(--muted-foreground);
+  --baseTextContrast: var(--foreground);
+  --accentSolid: var(--primary);
+  --accentSolidHover: var(--primary);
+  --accentText: var(--primary);
+  --accentTextContrast: var(--primary-foreground);
+  --accentBg: color-mix(in oklab, var(--primary) 12%, transparent);
+  --accentBgHover: color-mix(in oklab, var(--primary) 18%, transparent);
+  --accentBgActive: color-mix(in oklab, var(--primary) 24%, transparent);
+  --accentBorder: color-mix(in oklab, var(--primary) 35%, var(--border));
+  --accentBorderHover: color-mix(in oklab, var(--primary) 50%, var(--border));
+  color: var(--foreground);
+  background: var(--background);
+  border-color: var(--border);
+}
+
+.cowork-mdxeditor.mdxeditor .mdxeditor-toolbar {
+  background: var(--background) !important;
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+}
+
+/* Paragraph / select triggers — avoid washed-out light chrome */
+.cowork-mdxeditor.mdxeditor [class*="toolbarNodeKindSelectTrigger"],
+.cowork-mdxeditor.mdxeditor [class*="selectTrigger"],
+.cowork-mdxeditor.mdxeditor [class*="toolbarButtonSelectTrigger"],
+.mdxeditor-select-content {
+  background-color: var(--background) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+
+.mdxeditor-select-content [class*="selectItem"],
+.mdxeditor-select-content [role="option"] {
+  color: var(--foreground);
+}
+
+.mdxeditor-select-content [class*="selectItem"][data-highlighted],
+.mdxeditor-select-content [role="option"][data-highlighted] {
+  background-color: var(--muted) !important;
+  color: var(--foreground) !important;
+}
+
+/* Extra grip cols/rows stay at 0 width/height. Controls overlay in the margin.
+   table-layout:auto so Qty/price shrink to content instead of equal 25% cols. */
+.cowork-md-editor table[class*="tableEditor"] {
+  position: relative;
+  table-layout: auto !important;
+  height: auto !important;
+  width: 100%;
+  max-width: 100%;
+  margin: 1.6rem 1.5rem 1.25rem;
+  width: calc(100% - 3rem);
+  overflow: visible;
+  border-collapse: collapse;
+}
+
+.cowork-md-editor table[class*="tableEditor"] > colgroup > col:first-child,
+.cowork-md-editor table[class*="tableEditor"] > colgroup > col:last-child,
+.cowork-md-editor table[class*="tableEditor"] [class*="tableToolsColumn"] {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] > thead,
+.cowork-md-editor table[class*="tableEditor"] > tfoot,
+.cowork-md-editor table[class*="tableEditor"] > thead > tr,
+.cowork-md-editor table[class*="tableEditor"] > tfoot > tr {
+  height: 0;
+  line-height: 0;
+}
+
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr > :first-child[class*="toolCell"],
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr > :first-child[data-tool-cell],
+.cowork-md-editor table[class*="tableEditor"] > thead > tr > :first-child,
+.cowork-md-editor table[class*="tableEditor"] > thead > tr > :last-child,
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr > :last-child[data-tool-cell],
+.cowork-md-editor table[class*="tableEditor"] > tfoot > tr > :first-child,
+.cowork-md-editor table[class*="tableEditor"] > tfoot > tr > :last-child {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  overflow: visible !important;
+  position: relative;
+  font-size: 0;
+}
+
+.cowork-md-editor table[class*="tableEditor"] > thead th,
+.cowork-md-editor table[class*="tableEditor"] > tfoot th {
+  height: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  overflow: visible !important;
+  position: relative;
+  line-height: 0;
+  text-align: center !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="tableColumnEditorTrigger"],
+.cowork-md-editor table[class*="tableEditor"] [class*="iconButton"],
+.cowork-md-editor table[class*="tableEditor"] [class*="addColumnButton"],
+.cowork-md-editor table[class*="tableEditor"] [class*="addRowButton"] {
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+  margin: 0 !important;
+  color: var(--muted-foreground);
+}
+
+.cowork-md-editor table[class*="tableEditor"]:hover [class*="tableColumnEditorTrigger"],
+.cowork-md-editor table[class*="tableEditor"]:hover [class*="iconButton"],
+.cowork-md-editor table[class*="tableEditor"]:hover [class*="addColumnButton"],
+.cowork-md-editor table[class*="tableEditor"]:hover [class*="addRowButton"],
+.cowork-md-editor table[class*="tableEditor"]:focus-within [class*="tableColumnEditorTrigger"],
+.cowork-md-editor table[class*="tableEditor"]:focus-within [class*="iconButton"],
+.cowork-md-editor table[class*="tableEditor"]:focus-within [class*="addColumnButton"],
+.cowork-md-editor table[class*="tableEditor"]:focus-within [class*="addRowButton"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Column menus sit on the column’s text edge (right-align → right, else center). */
+.cowork-md-editor table[class*="tableEditor"] > thead > tr > th:not(:first-child):not(:last-child) [class*="tableColumnEditorTrigger"] {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, calc(-100% - 2px));
+}
+
+.cowork-md-editor table[class*="tableEditor"] > colgroup > col[class*="rightAlignedCell"] {
+  text-align: right;
+}
+
+.cowork-md-editor table[class*="tableEditor"] > thead > tr > :last-child [class*="iconButton"] {
+  top: 0;
+  left: 0;
+  transform: translate(0.15rem, calc(-100% - 2px));
+}
+
+/* Row menus: same trigger class as columns. Park them in the left gutter. */
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr > :first-child [class*="tableColumnEditorTrigger"] {
+  top: 0.4rem;
+  left: 0;
+  transform: translateX(-110%);
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="addColumnButton"] {
+  top: 0.4rem;
+  left: 0.15rem;
+  height: auto;
+  width: 1.25rem;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="addRowButton"] {
+  top: 0.2rem;
+  left: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* Markdown column align must reach nested Lexical paragraphs. */
+.cowork-md-editor table[class*="tableEditor"] [class*="leftAlignedCell"] {
+  text-align: left !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="rightAlignedCell"] {
+  text-align: right !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="centeredCell"] {
+  text-align: center !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="leftAlignedCell"] [contenteditable],
+.cowork-md-editor table[class*="tableEditor"] [class*="leftAlignedCell"] p {
+  text-align: left !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="rightAlignedCell"] [contenteditable],
+.cowork-md-editor table[class*="tableEditor"] [class*="rightAlignedCell"] p {
+  text-align: right !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="centeredCell"] [contenteditable],
+.cowork-md-editor table[class*="tableEditor"] [class*="centeredCell"] p {
+  text-align: center !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="tableColumnEditorToolbar"],
+.cowork-md-editor table[class*="tableEditor"] [class*="tableRowEditorTrigger"] + *,
+.mdxeditor-popup-container [class*="tableColumnEditorToolbar"],
+.mdxeditor-popup-container [role="toolbar"] {
+  background: var(--popover, var(--background)) !important;
+  color: var(--popover-foreground, var(--foreground)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="tableColumnEditorToolbar"] > button,
+.mdxeditor-popup-container [class*="tableColumnEditorToolbar"] > button {
+  color: var(--foreground) !important;
+}
+
+.cowork-md-editor table[class*="tableEditor"] [class*="tableColumnEditorToolbar"] > button:hover,
+.mdxeditor-popup-container [class*="tableColumnEditorToolbar"] > button:hover {
+  background: var(--muted) !important;
+}
+
+/* Real data cells only */
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr > td:not([data-tool-cell="true"]):not([class*="toolCell"]),
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr > th:not([data-tool-cell="true"]):not([class*="toolCell"]):not([class*="tableToolsColumn"]) {
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.5rem;
+  background: transparent;
+  vertical-align: top;
+}
+
+.cowork-md-editor table[class*="tableEditor"] > tbody > tr:first-child > th:not([data-tool-cell="true"]):not([class*="toolCell"]) {
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  font-weight: 500;
+}
+
+.cowork-md-editor table[class*="tableEditor"] td p,
+.cowork-md-editor table[class*="tableEditor"] th p {
+  margin: 0;
+}

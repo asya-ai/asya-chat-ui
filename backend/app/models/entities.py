@@ -333,6 +333,36 @@ class ChatUpload(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class CoworkFormat(str, Enum):
+    markdown = "markdown"
+    code = "code"
+    text = "text"
+    json = "json"
+    csv = "csv"
+    presentation = "presentation"
+
+
+class ChatCoworkDocument(SQLModel, table=True):
+    __tablename__ = "chat_cowork_documents"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    chat_id: UUID = Field(foreign_key="chats.id", index=True)
+    title: str = Field(default="Untitled")
+    file_name: str = Field(default="document.txt")
+    format: CoworkFormat = Field(
+        default=CoworkFormat.text,
+        sa_column=Column(String(32), nullable=False),
+    )
+    language: Optional[str] = Field(default=None)
+    content: str = Field(default="")
+    version: int = Field(default=1, nullable=False)
+    is_active: bool = Field(default=True, index=True)
+    last_assistant_version: int = Field(default=1, nullable=False)
+    content_at_assistant_version: str = Field(default="")
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class ChatViewEvent(SQLModel, table=True):
     __tablename__ = "chat_view_events"
 

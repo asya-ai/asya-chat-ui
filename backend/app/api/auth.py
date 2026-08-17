@@ -831,6 +831,18 @@ async def oidc_callback(
         email = email.strip().lower()
     if isinstance(username, str):
         username = username.strip().lower()
+    display_name = claims.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        display_name = display_name.strip()
+    else:
+        given = claims.get("given_name")
+        family = claims.get("family_name")
+        parts = [
+            part.strip()
+            for part in (given, family)
+            if isinstance(part, str) and part.strip()
+        ]
+        display_name = " ".join(parts) or None
 
     user = None
     if email:
@@ -847,6 +859,11 @@ async def oidc_callback(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="User already belongs to another organization",
             )
+        if display_name and not (user.display_name and user.display_name.strip()):
+            user.display_name = display_name
+            session.add(user)
+            session.commit()
+            session.refresh(user)
     else:
         if not org.oidc_auto_create_users:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not allowed")
@@ -857,6 +874,7 @@ async def oidc_callback(
         user = User(
             email=email,
             username=username,
+            display_name=display_name,
             hashed_password=get_password_hash(secrets.token_urlsafe(32)),
             auth_provider="oidc",
             is_super_admin=email.lower() in get_super_admin_emails(),

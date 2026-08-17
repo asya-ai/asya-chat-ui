@@ -476,7 +476,7 @@ export const ChatSidebar = ({
                             >
                               <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                 <span className="min-w-0 flex-1 truncate">
-                                  {chat.title || t("chat_untitled")}
+                                  {chat.title || t("chat_new_title")}
                                 </span>
                               </Link>
                             </Button>
@@ -826,7 +826,7 @@ export const ChatSidebar = ({
                                 >
                                   <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                     <span className="min-w-0 flex-1 truncate">
-                                      {chat.title || t("chat_untitled")}
+                                      {chat.title || t("chat_new_title")}
                                     </span>
                                   </Link>
                                 </Button>

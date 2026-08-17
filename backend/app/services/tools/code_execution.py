@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import mimetypes
 import os
@@ -17,8 +18,16 @@ from docker.types import Ulimit
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import AgentSource, AgentSourceKind, AgentSourceStatus, ChatMessage, ChatMessageAttachment
+from app.models import (
+    AgentSource,
+    AgentSourceKind,
+    AgentSourceStatus,
+    ChatCoworkDocument,
+    ChatMessage,
+    ChatMessageAttachment,
+)
 from app.services.file_storage import maybe_read_file_bytes
+from app.services.tools.cowork_tools import bump_content, document_payload, list_documents
 from app.services.tools.registry import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -283,6 +292,135 @@ def project_source_exec_path(source: AgentSource) -> str:
         display_name = _text_standin_name(display_name)
     safe_name = _sanitize_filename(display_name)
     return f"/inputs/project/{source.id}_{safe_name}"
+
+
+def cowork_exec_path(doc: ChatCoworkDocument, *, safe_name: str | None = None) -> str:
+    name = safe_name or _sanitize_filename(doc.file_name or "document.txt")
+    return f"/workspace/cowork/{name}"
+
+
+def _write_cowork_workspace(
+    docs: Iterable[ChatCoworkDocument], work_dir: Path
+) -> tuple[list[dict], dict[str, UUID], dict[str, str]]:
+    """Seed /workspace/cowork with chat co-editing docs. Returns listing, path→id, snapshots."""
+    cowork_dir = work_dir / "cowork"
+    cowork_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        cowork_dir.chmod(0o777)
+    except OSError:
+        pass
+
+    listing: list[dict] = []
+    path_to_id: dict[str, UUID] = {}
+    snapshots: dict[str, str] = {}
+    used_names: set[str] = set()
+
+    for doc in docs:
+        safe = _sanitize_filename(doc.file_name or "document.txt")
+        if safe.lower() in used_names or safe.lower() == "manifest.json":
+            safe = f"{doc.id}_{safe}"
+        used_names.add(safe.lower())
+        content = doc.content or ""
+        file_path = cowork_dir / safe
+        try:
+            file_path.write_text(content, encoding="utf-8")
+            file_path.chmod(0o666)
+        except Exception as exc:
+            logger.warning(
+                "Failed to write cowork doc id=%s filename=%s: %s",
+                doc.id,
+                doc.file_name,
+                exc,
+            )
+            continue
+        container_path = cowork_exec_path(doc, safe_name=safe)
+        path_to_id[safe] = doc.id
+        snapshots[safe] = content
+        fmt = doc.format.value if hasattr(doc.format, "value") else doc.format
+        listing.append(
+            {
+                "document_id": str(doc.id),
+                "title": doc.title,
+                "file_name": doc.file_name,
+                "format": fmt,
+                "language": doc.language,
+                "path": container_path,
+                "is_active": bool(doc.is_active),
+                "version": int(doc.version or 0),
+            }
+        )
+
+    try:
+        (cowork_dir / "manifest.json").write_text(
+            json.dumps(listing, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning("Failed to write cowork manifest: %s", exc)
+
+    return listing, path_to_id, snapshots
+
+
+def _sync_cowork_workspace(
+    session: Session,
+    chat_id: UUID,
+    work_dir: Path,
+    *,
+    path_to_id: dict[str, UUID],
+    snapshots: dict[str, str],
+) -> list[dict]:
+    """Persist text changes under /workspace/cowork back to ChatCoworkDocument rows."""
+    cowork_dir = work_dir / "cowork"
+    if not cowork_dir.is_dir() or not path_to_id:
+        return []
+
+    updated_payloads: list[dict] = []
+    for safe_name, doc_id in path_to_id.items():
+        file_path = cowork_dir / safe_name
+        if not file_path.is_file():
+            continue
+        try:
+            if file_path.stat().st_size > settings.attachments_max_file_bytes:
+                logger.warning(
+                    "Skipping oversized cowork sync id=%s (%s bytes)",
+                    doc_id,
+                    file_path.stat().st_size,
+                )
+                continue
+            new_content = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            logger.warning(
+                "Skipping non-text cowork sync id=%s filename=%s",
+                doc_id,
+                safe_name,
+            )
+            continue
+        except Exception as exc:
+            logger.warning(
+                "Failed reading cowork sync id=%s filename=%s: %s",
+                doc_id,
+                safe_name,
+                exc,
+            )
+            continue
+
+        if new_content == snapshots.get(safe_name):
+            continue
+
+        doc = session.get(ChatCoworkDocument, doc_id)
+        if not doc or doc.chat_id != chat_id:
+            continue
+        bump_content(doc, new_content, sync_assistant_snapshot=True)
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        payload = document_payload(doc)
+        payload["status"] = "synced_from_code"
+        payload["action"] = "update"
+        payload["synced_path"] = f"/workspace/cowork/{safe_name}"
+        updated_payloads.append(payload)
+
+    return updated_payloads
 
 
 def _write_project_inputs(
@@ -733,6 +871,12 @@ async def run_code_execution(
                 used_files=len(inputs),
             )
             inputs = inputs + project_inputs
+
+    cowork_docs = list_documents(context.session, chat_uuid)
+    cowork_files, cowork_path_to_id, cowork_snapshots = _write_cowork_workspace(
+        cowork_docs, work_dir
+    )
+
     code_path = work_dir / "main.py"
     code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
     def _runner():
@@ -776,6 +920,19 @@ async def run_code_execution(
         stderr = ""
 
     attachments_out, output_items = _collect_outputs(outputs_dir)
+    cowork_updated: list[dict] = []
+    if cowork_path_to_id:
+        try:
+            cowork_updated = _sync_cowork_workspace(
+                context.session,
+                chat_uuid,
+                work_dir,
+                path_to_id=cowork_path_to_id,
+                snapshots=cowork_snapshots,
+            )
+        except Exception as exc:
+            logger.warning("Failed syncing cowork workspace: %s", exc, exc_info=True)
+
     return ToolResult(
         name="code_execution",
         output={
@@ -784,8 +941,21 @@ async def run_code_execution(
             "exit_code": exit_code,
             "timed_out": timed_out,
             "inputs": inputs,
+            "cowork_files": cowork_files,
+            "cowork_updated": [
+                {
+                    "document_id": item.get("document_id"),
+                    "file_name": item.get("file_name"),
+                    "version": item.get("version"),
+                    "synced_path": item.get("synced_path"),
+                }
+                for item in cowork_updated
+            ],
             "outputs": [item["file_name"] for item in attachments_out],
             "output_files": output_items,
+            # Full payloads for UI stream (not needed in model-facing summary if huge —
+            # kept for agentic_loop coworking events).
+            "_cowork_updated_payloads": cowork_updated,
         },
         attachments=attachments_out or None,
     )

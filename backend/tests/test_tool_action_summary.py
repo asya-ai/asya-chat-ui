@@ -17,6 +17,19 @@ def test_action_summary_web_scrape_uses_host():
     )
 
 
+def test_action_summary_web_scrape_includes_question():
+    assert (
+        tool_call_action_summary(
+            "web_scrape",
+            {
+                "url": "https://www.rotorama.de/product/walksnail-avatar-hd-moonlight-kit",
+                "question": "What is the current price and stock status?",
+            },
+        )
+        == "Exploring www.rotorama.de: What is the current price and stock status?"
+    )
+
+
 def test_action_summary_code_execution_prefers_purpose():
     assert (
         tool_call_action_summary(

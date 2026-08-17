@@ -38,6 +38,9 @@ import { toast } from "sonner"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
+import { CoworkPanel } from "@/pages/chat/CoworkPanel"
+import { useCoworkDocument } from "@/pages/chat/useCoworkDocument"
+import { useIsMobile } from "@/hooks/use-mobile"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
@@ -146,6 +149,17 @@ const actionLabelMatchesToolEvent = (
   if (toolEvent.type === "context_summary") {
     return label === "Summarizing context" || label.toLowerCase().includes("summar")
   }
+  if (toolEvent.type === "coworking") {
+    return (
+      label === "Opening co-editing" ||
+      label === "Updating document" ||
+      label === "Closing co-editing" ||
+      label === "Co-editing" ||
+      label.toLowerCase().includes("co-edit") ||
+      label.toLowerCase().includes("cowork") ||
+      label.toLowerCase().includes("document")
+    )
+  }
   return false
 }
 
@@ -154,7 +168,8 @@ const isSpecializedToolEvent = (
 ): boolean =>
   toolEvent.type === "code_execution" ||
   toolEvent.type === "url_attachments" ||
-  toolEvent.type === "context_summary"
+  toolEvent.type === "context_summary" ||
+  toolEvent.type === "coworking"
 
 const resolveToolEventActionLabel = (
   toolEvent: NonNullable<ChatMessage["tool_event"]>
@@ -167,11 +182,23 @@ const resolveToolEventActionLabel = (
     if (toolEvent.tool_name === "download_attachments") return "Downloading attachments"
     if (toolEvent.tool_name === "code_execution") return "Running code"
     if (toolEvent.tool_name === "extract_pdf") return "Extracting PDF"
+    if (toolEvent.tool_name === "start_coworking") return "Opening co-editing"
+    if (toolEvent.tool_name === "cowork_write") return "Writing document"
+    if (toolEvent.tool_name === "cowork_str_replace") return "Editing document"
+    if (toolEvent.tool_name === "cowork_append") return "Appending to document"
+    if (toolEvent.tool_name === "cowork_read") return "Reading document"
     return `Running ${toolEvent.tool_name}`
   }
   if (toolEvent.type === "code_execution") return "Running code"
   if (toolEvent.type === "url_attachments") return "Downloading attachments"
   if (toolEvent.type === "context_summary") return "Summarizing context"
+  if (toolEvent.type === "coworking") {
+    if (toolEvent.action === "open") return "Opening co-editing"
+    if (toolEvent.action === "writing") return "Writing document"
+    if (toolEvent.action === "update") return "Updating document"
+    if (toolEvent.action === "close") return "Closing co-editing"
+    return "Co-editing"
+  }
   return "Running tool"
 }
 
@@ -278,6 +305,10 @@ export const ChatPage = () => {
   const [orgId, setOrgId] = useState<string | null>(orgStore.get())
   const [agents, setAgents] = useState<Agent[]>([])
   const [toolEvents, setToolEvents] = useState<ChatMessage[]>([])
+  const cowork = useCoworkDocument(chatId)
+  const isMobile = useIsMobile()
+  const coworkHandleRef = useRef(cowork.handleCoworkingEvent)
+  coworkHandleRef.current = cowork.handleCoworkingEvent
   const [message, setMessage] = useState("")
   const [promptCount, setPromptCount] = useState(0)
   const [insertPromptOpen, setInsertPromptOpen] = useState(false)
@@ -442,6 +473,10 @@ export const ChatPage = () => {
             const status = msg.tool_event.output?.status
             return status !== "ok" && status !== "error"
           }
+          if (msg.tool_event?.type === "coworking") {
+            const status = msg.tool_event.output?.status
+            return status !== "ok" && status !== "error"
+          }
           return false
         })
         if (existingIndex >= 0) {
@@ -472,18 +507,20 @@ export const ChatPage = () => {
   }, [])
 
   const currentCancelRef = useRef<null | (() => void)>(null)
+  const generationEpochRef = useRef(0)
+  const composerBusyRef = useRef(false)
   const taskCursorRef = useRef<Record<string, number>>({})
   const taskSubscriptionsRef = useRef<Record<string, () => void>>({})
   const taskPollingRef = useRef<Record<string, number>>({})
 
   const stopGeneration = () => {
     if (!chatId) return
+    generationEpochRef.current += 1
     const activeAssistant = [...visibleMessages]
       .reverse()
       .find(
         (msg) =>
           msg.role === "assistant" &&
-          !!msg.task_id &&
           !isTerminalStatus(msg.generation_status ?? null)
       )
     const activeTaskId = activeAssistant?.task_id ?? null
@@ -497,12 +534,15 @@ export const ChatPage = () => {
         window.clearTimeout(taskPollingRef.current[activeTaskId])
         delete taskPollingRef.current[activeTaskId]
       }
+    }
+    if (activeAssistant) {
       updateChatMessagesFor(chatId, (prev) =>
         prev.map((msg) =>
-          msg.task_id === activeTaskId
+          msg.id === activeAssistant.id ||
+          (activeTaskId && msg.task_id === activeTaskId && msg.role === "assistant")
             ? {
                 ...msg,
-                generation_status: "cancelled",
+                generation_status: "cancelled" as const,
                 thinking_steps: msg.thinking_steps ?? [],
                 content:
                   msg.content && msg.content.trim().length > 0
@@ -613,6 +653,25 @@ export const ChatPage = () => {
           Boolean(event.task_id) &&
           msg.task_id === event.task_id
         )
+      }
+
+      if (typeof event.chat_title === "string" && event.chat_title.trim()) {
+        const titledChatId =
+          typeof event.chat_id === "string" && event.chat_id
+            ? event.chat_id
+            : targetChatId
+        if (orgId) {
+          queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
+            prev
+              ? prev.map((chat) =>
+                  chat.id === titledChatId
+                    ? { ...chat, title: event.chat_title as string }
+                    : chat
+                )
+              : prev
+          )
+        }
+        return
       }
 
       if ("done" in event && event.done === true) {
@@ -790,6 +849,9 @@ export const ChatPage = () => {
       if ("tool_event" in event) {
         const toolEvent = event.tool_event as ChatMessage["tool_event"]
         if (toolEvent) {
+          if (toolEvent.type === "coworking") {
+            coworkHandleRef.current?.(toolEvent)
+          }
           appendToolEvent(
             toolEvent,
             typeof event.task_id === "string" ? event.task_id : null
@@ -832,7 +894,7 @@ export const ChatPage = () => {
         return
       }
     },
-    [appendToolEvent, t, updateChatMessagesFor, setChatGenerating]
+    [appendToolEvent, orgId, queryClient, t, updateChatMessagesFor, setChatGenerating]
   )
 
   const normalizeTaskEvent = useCallback(
@@ -851,6 +913,9 @@ export const ChatPage = () => {
         return event.payload
       }
       if (event.event_type === "error") {
+        return event.payload
+      }
+      if (event.event_type === "chat_title") {
         return event.payload
       }
       return null
@@ -1702,7 +1767,6 @@ export const ChatPage = () => {
     if (!orgId) return null
     const chat = await createChatMutation.mutateAsync({
       model_id: selectedModel,
-      title: t("chat_new_title"),
       agent_id: isAgentMode && activeAgentId ? activeAgentId : undefined,
       is_incognito: incognitoEnabled,
     })
@@ -1842,13 +1906,19 @@ export const ChatPage = () => {
   )
 
   const sendMessage = async () => {
-    if (chatId && loadingByChat[chatId]) return
+    if (composerBusyRef.current) return
     const trimmed = message.trim()
     if (!trimmed && pendingAttachments.length === 0) return
+    if (chatId && loadingByChat[chatId]) {
+      stopGeneration()
+    }
     setAttachmentError(null)
     setAutoScrollEnabled(true)
     lastScrolledKeyRef.current = null
     let requestChatId: string | null = null
+    let streamCancel: (() => void) | null = null
+    let generationEpoch = 0
+    composerBusyRef.current = true
     try {
       let chat = activeChat
       if (isAgentMode && activeAgentId && chat && chat.agent_id !== activeAgentId) {
@@ -1872,6 +1942,7 @@ export const ChatPage = () => {
         setIsUploadingAttachments(false)
       }
       await queryClient.cancelQueries({ queryKey: ["chatMessages", chat.id] })
+      generationEpoch = ++generationEpochRef.current
       setChatGenerating(chat.id, true)
       const updateMessages = (updater: (prev: ChatMessage[]) => ChatMessage[]) =>
         updateChatMessagesFor(chat.id, updater)
@@ -1914,11 +1985,16 @@ export const ChatPage = () => {
           applyStreamEvent(chat.id, assistantId, event)
         }
       )
+      streamCancel = cancel
       currentCancelRef.current = cancel
+      composerBusyRef.current = false
       try {
         await promise
-        refetchChats()
+        if (generationEpochRef.current === generationEpoch) {
+          refetchChats()
+        }
       } catch {
+        if (generationEpochRef.current !== generationEpoch) return
         updateMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantId
@@ -1939,9 +2015,12 @@ export const ChatPage = () => {
         }
       }
     } finally {
+      composerBusyRef.current = false
       setIsUploadingAttachments(false)
-      currentCancelRef.current = null
-      if (requestChatId) {
+      if (streamCancel && currentCancelRef.current === streamCancel) {
+        currentCancelRef.current = null
+      }
+      if (requestChatId && generationEpochRef.current === generationEpoch) {
         setChatGenerating(requestChatId, false)
       }
     }
@@ -2502,6 +2581,7 @@ export const ChatPage = () => {
       setIsUploadingAttachments(false)
     }
     stopGeneration()
+    const generationEpoch = ++generationEpochRef.current
     setAutoScrollEnabled(true)
     lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", activeChat.id] })
@@ -2553,8 +2633,11 @@ export const ChatPage = () => {
     currentCancelRef.current = cancel
     try {
       await promise
-      refetchChats()
+      if (generationEpochRef.current === generationEpoch) {
+        refetchChats()
+      }
     } catch {
+      if (generationEpochRef.current !== generationEpoch) return
       updateMessages((prev) =>
         prev.map((item) =>
           item.id === tempAssistantId
@@ -2572,8 +2655,12 @@ export const ChatPage = () => {
         .then((data) => replaceChatMessagesFor(activeChat.id, data))
         .catch(() => null)
     } finally {
-      currentCancelRef.current = null
-      setChatGenerating(activeChat.id, false)
+      if (currentCancelRef.current === cancel) {
+        currentCancelRef.current = null
+      }
+      if (generationEpochRef.current === generationEpoch) {
+        setChatGenerating(activeChat.id, false)
+      }
     }
   }, [
     activeChat,
@@ -2626,6 +2713,7 @@ export const ChatPage = () => {
     if (!sourceUser || sourceUser.id.startsWith("temp-")) return
 
     stopGeneration()
+    const generationEpoch = ++generationEpochRef.current
     setAutoScrollEnabled(true)
     lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", chatId] })
@@ -2691,8 +2779,11 @@ export const ChatPage = () => {
     currentCancelRef.current = cancel
     try {
       await promise
-      refetchChats()
+      if (generationEpochRef.current === generationEpoch) {
+        refetchChats()
+      }
     } catch {
+      if (generationEpochRef.current !== generationEpoch) return
       updateChatMessagesFor(chatId, (prev) =>
         prev.map((msg) =>
           msg.id === tempAssistantId
@@ -2705,8 +2796,12 @@ export const ChatPage = () => {
         )
       )
     } finally {
-      currentCancelRef.current = null
-      setChatGenerating(chatId, false)
+      if (currentCancelRef.current === cancel) {
+        currentCancelRef.current = null
+      }
+      if (generationEpochRef.current === generationEpoch) {
+        setChatGenerating(chatId, false)
+      }
     }
   }, [
     chatId,
@@ -3035,8 +3130,40 @@ export const ChatPage = () => {
             onToggleShareChat={toggleShareChat}
           />
         ) : (
-          <div className="flex flex-1 min-w-0 min-h-0">
-            <div className="relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden">
+          <div className="flex flex-1 min-w-0 min-h-0 flex-col">
+            {cowork.open && cowork.document && isMobile ? (
+              <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
+                <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={cowork.mobileTab === "chat" ? "secondary" : "ghost"}
+                    className="h-7 px-2.5 text-xs"
+                    onClick={() => cowork.setMobileTab("chat")}
+                  >
+                    Chat
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={cowork.mobileTab === "document" ? "secondary" : "ghost"}
+                    className="h-7 px-2.5 text-xs"
+                    onClick={() => cowork.setMobileTab("document")}
+                  >
+                    Document
+                    {cowork.document.version > cowork.document.last_assistant_version ? (
+                      <span className="ml-1 inline-block size-1.5 rounded-full bg-amber-500" />
+                    ) : null}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            <div className="flex min-h-0 min-w-0 flex-1">
+            <div
+              className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
+                isMobile && cowork.open && cowork.mobileTab === "document" ? "hidden" : ""
+              }`}
+            >
               <h1 className="sr-only">{activeChatTitle}</h1>
               <div className="-top-px -left-px relative flex justify-between items-center bg-background px-3 py-2.5 w-[calc(100%+2px)] h-15 shrink-0">
                 <div className="flex items-center gap-2 min-w-0">
@@ -3072,14 +3199,33 @@ export const ChatPage = () => {
                     </div>
                   ) : null}
                 </div>
-                <label className="hidden md:inline-flex items-center gap-2 cursor-pointer">
-                  <span className="text-sm leading-5">{t("chat_save_session")}</span>
-                  <Switch
-                    checked={!incognitoEnabled}
-                    onCheckedChange={(checked) => setIncognitoEnabled(!checked)}
-                    aria-label={t("chat_save_session")}
-                  />
-                </label>
+                <div className="flex items-center gap-2">
+                  {cowork.document && !cowork.open ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="hidden h-8 md:inline-flex"
+                      onClick={() => {
+                        cowork.setOpen(true)
+                        cowork.setMobileTab("document")
+                      }}
+                    >
+                      Document
+                      {cowork.document.version > cowork.document.last_assistant_version ? (
+                        <span className="ml-1 size-1.5 rounded-full bg-amber-500" />
+                      ) : null}
+                    </Button>
+                  ) : null}
+                  <label className="hidden md:inline-flex items-center gap-2 cursor-pointer">
+                    <span className="text-sm leading-5">{t("chat_save_session")}</span>
+                    <Switch
+                      checked={!incognitoEnabled}
+                      onCheckedChange={(checked) => setIncognitoEnabled(!checked)}
+                      aria-label={t("chat_save_session")}
+                    />
+                  </label>
+                </div>
               </div>
               <MessageList
                 key={chatId ?? "new"}
@@ -3169,7 +3315,34 @@ export const ChatPage = () => {
                 centered={isEmptyChat}
               />
             </div>
-            {sourcesPanelSources ? (
+            {cowork.open && cowork.document && (!isMobile || cowork.mobileTab === "document") ? (
+              <CoworkPanel
+                document={cowork.document}
+                documents={cowork.documents}
+                open={cowork.open}
+                saving={cowork.saving}
+                writing={cowork.writing}
+                conflict={cowork.conflict}
+                content={cowork.content}
+                resizable={!isMobile}
+                className={isMobile ? "max-w-none border-l-0" : undefined}
+                onClose={cowork.closePanel}
+                onContentChange={cowork.handleContentChange}
+                onDownload={(options) => {
+                  void cowork.downloadDocument(options)
+                }}
+                onActivateDocument={(documentId) => {
+                  void cowork.activateDocument(documentId)
+                }}
+                onDeleteDocument={(documentId) => {
+                  void cowork.deleteDocument(documentId)
+                }}
+                onReloadLatest={() => {
+                  void cowork.reloadLatest()
+                }}
+              />
+            ) : null}
+            {sourcesPanelSources && !(cowork.open && cowork.document) ? (
               <SourcesPanel
                 sources={sourcesPanelSources}
                 title={t("chat_sources")}
@@ -3182,6 +3355,7 @@ export const ChatPage = () => {
                 }}
               />
             ) : null}
+          </div>
           </div>
         )}
         <Dialog

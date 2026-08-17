@@ -30,6 +30,7 @@ from app.models import (
     Agent,
     AgentAccess,
     Chat,
+    ChatCoworkDocument,
     ChatGenerationEvent,
     ChatGenerationTask,
     ChatMessage,
@@ -85,6 +86,22 @@ from app.services.tools.web_tools import (
     download_attachments,
     web_scrape,
     web_search,
+)
+from app.services.tools.cowork_tools import (
+    CoworkToolContext,
+    activate_document,
+    apply_user_patch,
+    cowork_append,
+    cowork_read,
+    cowork_str_replace,
+    cowork_write,
+    delete_document,
+    document_payload,
+    get_active_document,
+    get_document,
+    list_documents,
+    mime_for_document,
+    start_coworking,
 )
 from app.services.mcp import register_mcp_tools
 from app.services.generation_event_bus import iter_generation_notifications
@@ -283,6 +300,62 @@ def _prepend_tool_guidance(
                 "content": (
                     "For code_execution, available third-party imports are: "
                     f"{ALLOWED_IMPORTS_HINT}."
+                ),
+            }
+        )
+    if "code_execution" in enabled and "start_coworking" in enabled:
+        system_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Co-editing documents are available inside code_execution at "
+                    "/workspace/cowork/ (paths listed in the tool result as cowork_files, "
+                    "and in /workspace/cowork/manifest.json). You may read and overwrite "
+                    "those files; changes sync back to the shared editor. Use code_execution "
+                    "for analysis, CSV/Excel transforms, plotting from cowork data, and other "
+                    "programmatic edits; keep using cowork_str_replace for small textual patches."
+                ),
+            }
+        )
+    if "start_coworking" in enabled:
+        system_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "When the user asks you to write code, a document, report, presentation, "
+                    "or other editable artifact, call start_coworking to open a shared editor, then "
+                    "edit it with cowork tools. "
+                    "Editing policy (strict): after the document exists, default to small "
+                    "cowork_str_replace patches (or cowork_append for new material at the end). "
+                    "Call cowork_read first when you need the exact current text. "
+                    "Each old_str must be a unique snippet with enough surrounding context. "
+                    "Make several small replacements instead of one giant rewrite. "
+                    "Do NOT call cowork_write to re-send the whole file for routine edits, "
+                    "typo fixes, wording changes, or single-section updates — only use "
+                    "cowork_write for a brand-new empty doc or a true full-structure rewrite "
+                    "the user explicitly asked for. "
+                    "For slide decks / presentations, use format=presentation and Marp markdown "
+                    "(separate slides with a line containing only ---). "
+                    "Marp quality rules (important — slides are a fixed 16:9 box): "
+                    "always start with YAML front matter using theme: gaia (or uncover), "
+                    "paginate: true, size: 16:9; prefer short headlines + ≤5 bullets per slide; "
+                    "never cram wide comparison tables onto one slide — split by topic, use "
+                    "short phrases, or two-column lists instead; leave breathing room "
+                    "(generous whitespace); do not stack title + dense table + long footer "
+                    "on the same slide (footers collide with content); one idea per slide; "
+                    "use <!-- fit --> only on short title slides. "
+                    "When editing presentations, replace one slide or one HTML/card block at a "
+                    "time with cowork_str_replace — never rewrite the whole deck unless asked. "
+                    "For charts/diagrams in slides, use a mermaid fenced block "
+                    "(```mermaid … ```) — e.g. xychart-beta, flowchart, pie — so the preview "
+                    "can render them; do not leave chart DSL as a plain ```xychart-beta fence "
+                    "unless necessary (that still works in preview, but ```mermaid is preferred). "
+                    "The co-editing document opens in the chat UI side panel (Document tab on "
+                    "mobile). Never invent URLs, markdown links, /chat/... paths, or download "
+                    "links for the document or its file_name — those are not real pages. Refer "
+                    "to the document by title as plain text; the user downloads via the panel "
+                    "Download button (presentations export as PDF or PPTX; other formats "
+                    "download as the real source file)."
                 ),
             }
         )
@@ -599,10 +672,16 @@ def _build_tool_registry(
                     "When this chat belongs to a project, project source files are also available "
                     "as read-only under /inputs/project/ (original uploads when present, otherwise "
                     "extracted text). Filenames are <source_id>_<sanitized_name>."
+                    "Co-editing documents for this chat are mounted read/write under /workspace/cowork/ "
+                    "(see cowork_files in the tool result and /workspace/cowork/manifest.json). "
+                    "Read/analyze/transform them with pandas/openpyxl/etc., then overwrite the same "
+                    "path to update the live document in the UI. Prefer this for spreadsheet math, "
+                    "CSV transforms, chart data prep; use cowork_str_replace for small text edits."
                     "Write any output files to /outputs to return them to the user (images, resulting csv etc.)."
                     "YOu dont need to tell user where the file was created, it will be sent together with your response to them."
                     "You can call this tool multiple times. Chat attachment filenames are <attachment_id>_<sanitized_name>."
-                    "Calls do not reuse same sandbox, so any created files will be lost after the call."
+                    "Calls do not reuse same sandbox, so any created files will be lost after the call "
+                    "(except cowork files you overwrite under /workspace/cowork/, which sync back)."
                     f"Allowed third-party imports: {ALLOWED_IMPORTS_HINT}."
                 ),
                 parameters={
@@ -853,6 +932,208 @@ def _build_tool_registry(
                 },
             ),
             _read_project_source_handler,
+        )
+
+    if chat_id:
+        cowork_ctx = CoworkToolContext(session=session, chat_id=chat_id)
+
+        async def _start_coworking_handler(args: dict) -> object:
+            return await start_coworking(
+                cowork_ctx,
+                title=args.get("title"),
+                file_name=args.get("file_name"),
+                format=args.get("format"),
+                language=args.get("language"),
+                content=args.get("content"),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="start_coworking",
+                description=(
+                    "Open a shared co-editing document in the chat UI (right panel on "
+                    "desktop, Document tab on mobile). Use when writing code, markdown "
+                    "reports, presentations/slide decks, JSON/CSV, or other text artifacts "
+                    "the user should edit with you. Creates a new active document and "
+                    "deactivates any previous one. "
+                    "For presentations use format=presentation with Marp markdown. "
+                    "Start with front matter like: ---\\nmarp: true\\ntheme: gaia\\n"
+                    "paginate: true\\nsize: 16:9\\n--- then slides separated by a line "
+                    "with only ---. Keep each slide sparse (headline + ≤5 short bullets); "
+                    "never put large multi-column tables or long footers that overflow the "
+                    "slide; split comparisons across slides. "
+                    "After starting, put the first full draft in start_coworking's content "
+                    "(or one cowork_write if the doc was empty). For every later change, "
+                    "prefer cowork_str_replace / cowork_append — not full-file cowork_write. "
+                    "Re-read with cowork_read when needed. "
+                    "Do not invent URLs or markdown links to the file_name — it is not a "
+                    "web path; the panel is the only UI for viewing/downloading."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Short display title for the document",
+                        },
+                        "file_name": {
+                            "type": "string",
+                            "description": (
+                                "Suggested download filename with extension only "
+                                "(e.g. report.md, deck.md, app.py). Not a URL or chat path."
+                            ),
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": [
+                                "markdown",
+                                "code",
+                                "text",
+                                "json",
+                                "csv",
+                                "presentation",
+                            ],
+                            "description": (
+                                "Document format for editor + download MIME. "
+                                "Use presentation for Marp slide decks."
+                            ),
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "Language hint when format is code (python, ts, …)",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Optional initial content",
+                        },
+                    },
+                },
+            ),
+            _start_coworking_handler,
+        )
+
+        async def _cowork_read_handler(args: dict) -> object:
+            return await cowork_read(
+                cowork_ctx,
+                offset=args.get("offset"),
+                limit=args.get("limit"),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="cowork_read",
+                description=(
+                    "Read the active coworking document. Optionally pass line offset/limit "
+                    "for large files (0-based line offset)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "offset": {
+                            "type": "integer",
+                            "description": "0-based line offset (default 0)",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max lines to return (default all, max 2000)",
+                        },
+                    },
+                },
+            ),
+            _cowork_read_handler,
+        )
+
+        async def _cowork_str_replace_handler(args: dict) -> object:
+            return await cowork_str_replace(
+                cowork_ctx,
+                old_str=args.get("old_str", ""),
+                new_str=args.get("new_str", ""),
+                replace_all=bool(args.get("replace_all", False)),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="cowork_str_replace",
+                description=(
+                    "PREFERRED edit tool. Exact search/replace in the active coworking "
+                    "document for small, targeted changes (one slide, one function, one "
+                    "paragraph, one HTML card, etc.). old_str must match exactly once "
+                    "unless replace_all=true — include unique surrounding context. "
+                    "Call cowork_read first if unsure. Prefer multiple str_replace calls "
+                    "over cowork_write. Fails if not found or ambiguous."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "old_str": {
+                            "type": "string",
+                            "description": "Exact text to find",
+                        },
+                        "new_str": {
+                            "type": "string",
+                            "description": "Replacement text",
+                        },
+                        "replace_all": {
+                            "type": "boolean",
+                            "description": "Replace every match (default false)",
+                        },
+                    },
+                    "required": ["old_str", "new_str"],
+                },
+            ),
+            _cowork_str_replace_handler,
+        )
+
+        async def _cowork_append_handler(args: dict) -> object:
+            return await cowork_append(cowork_ctx, text=args.get("text", ""))
+
+        registry.register(
+            ToolSpec(
+                name="cowork_append",
+                description=(
+                    "Append text to the end of the active coworking document. Prefer this "
+                    "over cowork_write when adding a new slide, section, or trailing content."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Text to append",
+                        },
+                    },
+                    "required": ["text"],
+                },
+            ),
+            _cowork_append_handler,
+        )
+
+        async def _cowork_write_handler(args: dict) -> object:
+            return await cowork_write(cowork_ctx, content=args.get("content", ""))
+
+        registry.register(
+            ToolSpec(
+                name="cowork_write",
+                description=(
+                    "LAST RESORT: replace the entire active coworking document. "
+                    "Do not use for normal edits. Prefer cowork_str_replace (or "
+                    "cowork_append) for any change that touches only part of the file. "
+                    "Allowed only when (1) the document is empty / you are creating the "
+                    "first full draft and did not pass content to start_coworking, or "
+                    "(2) the user explicitly asked for a full rewrite / restructure."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "Full new document content",
+                        },
+                    },
+                    "required": ["content"],
+                },
+            ),
+            _cowork_write_handler,
         )
 
     register_mcp_tools(registry)
@@ -1322,30 +1603,41 @@ async def _normalize_sources(
     return _limit_sources(await _resolve_source_urls(url_items))
 
 
+_PLACEHOLDER_CHAT_TITLES = frozenset(
+    {
+        "new chat",
+        "untitled",
+        "untitled chat",
+        "jauns čats",
+        "bez nosaukuma",
+        "新しいチャット",
+        "無題",
+    }
+)
+
+
 async def _maybe_update_chat_title(
     *,
     session: Session,
     chat: Chat,
-    provider,
     model: ChatModel,
     history: list[ChatMessage],
-) -> None:
-    message_count = len(history)
-    if message_count != 2:
-        return
+) -> str | None:
+    session.refresh(chat)
+    existing_title = (chat.title or "").strip()
+    if existing_title and existing_title.casefold() not in _PLACEHOLDER_CHAT_TITLES:
+        return None
     user_message = next(
         (item for item in history if item.role == "user"),
         None,
     )
     if user_message is None:
-        return
+        return None
     title_prompt = (user_message.content or "").strip()
     if not title_prompt:
         title_prompt = "[image attached]"
 
     title_model = model
-    title_provider = provider
-
     # Image-output models can't do text chat. Find the nearest chat model from
     # the same provider (same org) and use that for title generation instead.
     if _is_image_output_model(model):
@@ -1359,37 +1651,39 @@ async def _maybe_update_chat_title(
             )
             .limit(1)
         ).first()
-        if fallback:
-            try:
-                provider_config = require_provider_enabled(
-                    session, chat.org_id, fallback.provider
-                )
-                config = None
-                if provider_config and provider_config.config_json:
-                    try:
-                        config = json.loads(provider_config.config_json)
-                    except json.JSONDecodeError:
-                        pass
-                title_provider = get_provider(
-                    fallback.provider,
-                    api_key=provider_config.api_key_override if provider_config else None,
-                    base_url=provider_config.base_url_override if provider_config else None,
-                    endpoint=provider_config.endpoint_override if provider_config else None,
-                    prefer_responses_api=fallback.uses_responses_api is True,
-                    config=config,
-                    openrouter_endpoint=fallback.openrouter_endpoint,
-                )
-                title_model = fallback
-            except Exception:
-                logger.warning(
-                    "Could not build fallback title provider for chat_id=%s", chat.id
-                )
-                return
-        else:
+        if not fallback:
             logger.warning(
                 "No chat model found for title generation (provider=%s)", model.provider
             )
-            return
+            return None
+        title_model = fallback
+
+    try:
+        provider_config = require_provider_enabled(
+            session, chat.org_id, title_model.provider
+        )
+        config = None
+        if provider_config and provider_config.config_json:
+            try:
+                config = json.loads(provider_config.config_json)
+            except json.JSONDecodeError:
+                pass
+        # Fresh client: not the reply stream, no reasoning, no chat prompt cache.
+        title_provider = get_provider(
+            title_model.provider,
+            api_key=provider_config.api_key_override if provider_config else None,
+            base_url=provider_config.base_url_override if provider_config else None,
+            endpoint=provider_config.endpoint_override if provider_config else None,
+            prefer_responses_api=title_model.uses_responses_api is True,
+            config=config,
+            openrouter_endpoint=title_model.openrouter_endpoint,
+            prompt_cache_enabled=False,
+        )
+    except Exception:
+        logger.warning(
+            "Could not build title provider for chat_id=%s", chat.id, exc_info=True
+        )
+        return None
 
     title_messages = [
         {
@@ -1432,6 +1726,7 @@ async def _maybe_update_chat_title(
         session.add(chat)
         session.commit()
         persist_responses_api_discovery(session, title_model, title_provider)
+        return title or None
     except Exception:
         logger.warning(
             "Failed to generate chat title for chat_id=%s model=%s",
@@ -1439,6 +1734,7 @@ async def _maybe_update_chat_title(
             title_model.model_name,
             exc_info=True,
         )
+        return None
 
 
 def _extract_ws_token(websocket: WebSocket) -> str | None:
@@ -1554,7 +1850,12 @@ def _attach_stream_action_attachments(
 
 
 def _is_specialized_tool_event(payload: dict[str, Any]) -> bool:
-    return payload.get("type") in {"code_execution", "url_attachments", "context_summary"}
+    return payload.get("type") in {
+        "code_execution",
+        "url_attachments",
+        "context_summary",
+        "coworking",
+    }
 
 
 def _tool_event_action_label(payload: dict[str, Any]) -> str:
@@ -1583,6 +1884,15 @@ def _tool_event_action_label(payload: dict[str, Any]) -> str:
         return "Downloading attachments"
     if event_type == "context_summary":
         return "Summarizing context"
+    if event_type == "coworking":
+        action = payload.get("action")
+        if action == "open":
+            return "Opening co-editing"
+        if action == "update":
+            return "Updating document"
+        if action == "close":
+            return "Closing co-editing"
+        return "Co-editing"
     return "Running tool"
 
 
@@ -1610,6 +1920,12 @@ def _action_label_matches_tool_event(label: str, payload: dict[str, Any]) -> boo
         return label == "Downloading attachments"
     if event_type == "context_summary":
         return label == "Summarizing context" or "summar" in label.lower()
+    if event_type == "coworking":
+        return (
+            label in {"Opening co-editing", "Updating document", "Closing co-editing", "Co-editing"}
+            or "co-edit" in label.lower()
+            or "cowork" in label.lower()
+        )
     return False
 
 
@@ -2562,6 +2878,32 @@ class ChatUploadRead(BaseModel):
     content_type: str
     size_bytes: int
     created_at: datetime
+
+
+class CoworkDocumentRead(BaseModel):
+    document_id: str
+    chat_id: str
+    title: str
+    file_name: str
+    format: str
+    language: str | None = None
+    content: str | None = None
+    version: int
+    is_active: bool
+    last_assistant_version: int
+    user_edited: bool
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class CoworkDocumentPatchRequest(BaseModel):
+    content: str
+    base_version: int
+
+
+class CoworkDocumentConflictRead(BaseModel):
+    detail: str = "version_conflict"
+    document: CoworkDocumentRead
 
 
 class ChatMessageAttachmentRead(BaseModel):
@@ -3640,6 +3982,186 @@ def upload_chat_attachment(
     )
 
 
+def _require_chat_for_cowork(
+    session: Session, chat_id: str, current_user: User
+) -> Chat:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id and not current_user.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    return chat
+
+
+def _cowork_read_model(doc: ChatCoworkDocument, *, include_content: bool = True) -> CoworkDocumentRead:
+    payload = document_payload(doc, include_content=include_content)
+    return CoworkDocumentRead(**payload)
+
+
+@router.get("/{chat_id}/cowork", response_model=list[CoworkDocumentRead])
+def list_cowork_documents(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[CoworkDocumentRead]:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    docs = list_documents(session, chat.id)
+    return [_cowork_read_model(doc, include_content=False) for doc in docs]
+
+
+@router.get("/{chat_id}/cowork/active", response_model=CoworkDocumentRead | None)
+def get_active_cowork_document(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CoworkDocumentRead | None:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    doc = get_active_document(session, chat.id)
+    if not doc:
+        return None
+    return _cowork_read_model(doc, include_content=True)
+
+
+@router.get("/{chat_id}/cowork/{doc_id}", response_model=CoworkDocumentRead)
+def get_cowork_document(
+    chat_id: str,
+    doc_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CoworkDocumentRead:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    try:
+        document_id = UUID(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document id"
+        ) from exc
+    doc = get_document(session, chat.id, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return _cowork_read_model(doc, include_content=True)
+
+
+@router.post("/{chat_id}/cowork/{doc_id}/activate", response_model=CoworkDocumentRead)
+def activate_cowork_document(
+    chat_id: str,
+    doc_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CoworkDocumentRead:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    try:
+        document_id = UUID(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document id"
+        ) from exc
+    doc = activate_document(session, chat.id, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return _cowork_read_model(doc, include_content=True)
+
+
+@router.patch("/{chat_id}/cowork/{doc_id}", response_model=CoworkDocumentRead)
+def patch_cowork_document(
+    chat_id: str,
+    doc_id: str,
+    payload: CoworkDocumentPatchRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CoworkDocumentRead:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    try:
+        document_id = UUID(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document id"
+        ) from exc
+    doc = get_document(session, chat.id, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    updated, latest = apply_user_patch(
+        session,
+        doc,
+        content=payload.content,
+        base_version=payload.base_version,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": "version_conflict",
+                "document": document_payload(latest, include_content=True),
+            },
+        )
+    return _cowork_read_model(updated, include_content=True)
+
+
+@router.delete("/{chat_id}/cowork/{doc_id}", response_model=CoworkDocumentRead | None)
+def delete_cowork_document(
+    chat_id: str,
+    doc_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CoworkDocumentRead | None:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    try:
+        document_id = UUID(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document id"
+        ) from exc
+    try:
+        active = delete_document(session, chat.id, document_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        ) from exc
+    if not active:
+        return None
+    return _cowork_read_model(active, include_content=True)
+
+
+@router.get("/{chat_id}/cowork/{doc_id}/download")
+def download_cowork_document(
+    chat_id: str,
+    doc_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    try:
+        document_id = UUID(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document id"
+        ) from exc
+    doc = get_document(session, chat.id, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    data = (doc.content or "").encode("utf-8")
+    safe_name = doc.file_name.replace('"', "")
+    return Response(
+        content=data,
+        media_type=mime_for_document(doc),
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+        },
+    )
+
+
 @router.get("/{chat_id}/generation", response_model=list[ChatGenerationTaskRead])
 def list_generation_tasks(
     chat_id: str,
@@ -4346,7 +4868,6 @@ async def create_message(
             await _maybe_update_chat_title(
                 session=session,
                 chat=chat,
-                provider=provider,
                 model=model,
                 history=history + [assistant_message],
             )
@@ -4404,7 +4925,6 @@ async def create_message(
         await _maybe_update_chat_title(
             session=session,
             chat=chat,
-            provider=provider,
             model=model,
             history=history + [assistant_message],
         )
@@ -4482,7 +5002,6 @@ async def create_message(
                 await _maybe_update_chat_title(
                     session=session,
                     chat=chat,
-                    provider=provider,
                     model=model,
                     history=history + [assistant_message],
                 )
@@ -4566,7 +5085,6 @@ async def create_message(
                 await _maybe_update_chat_title(
                     session=session,
                     chat=chat,
-                    provider=provider,
                     model=model,
                     history=history + [assistant_message],
                 )
@@ -4610,7 +5128,6 @@ async def create_message(
             await _maybe_update_chat_title(
                 session=session,
                 chat=chat,
-                provider=provider,
                 model=model,
                 history=history + [assistant_message],
             )
@@ -4686,7 +5203,6 @@ async def create_message(
     await _maybe_update_chat_title(
         session=session,
         chat=chat,
-        provider=provider,
         model=model,
         history=history + [assistant_message],
     )

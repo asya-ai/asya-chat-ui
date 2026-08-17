@@ -62,6 +62,12 @@ def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None)
             ),
             "",
         )
+        question = str(args.get("question") or "").strip()
+        if question:
+            truncated = f"{question[:120]}…" if len(question) > 120 else question
+            if target:
+                return f"Exploring {target}: {truncated}"
+            return f"Exploring web: {truncated}"
         return f"Exploring {target}" if target else "Exploring web"
     if name == "code_execution":
         purpose = str(args.get("purpose") or "").strip()
@@ -85,6 +91,17 @@ def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None)
     if name == "search_past_chats":
         query = str(args.get("query") or "").strip()
         return f"Searching past chats: {query}" if query else "Searching past chats"
+    if name == "start_coworking":
+        title = str(args.get("title") or args.get("file_name") or "").strip()
+        return f"Opening co-editing: {title}" if title else "Opening co-editing"
+    if name == "cowork_read":
+        return "Reading document"
+    if name == "cowork_write":
+        return "Writing document"
+    if name == "cowork_str_replace":
+        return "Editing document"
+    if name == "cowork_append":
+        return "Appending to document"
     if name == "get_current_time":
         return "Checking the time"
     label = (name or "tool").replace("_", " ").strip() or "tool"

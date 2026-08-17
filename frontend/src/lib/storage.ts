@@ -7,6 +7,21 @@ const WEB_SEARCH_ENABLED_KEY = "chatui_web_search_enabled"
 const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
 const ACTION_INFO_LEVEL_KEY = "chatui_toolcall_logs_visible"
 const SIDEBAR_SECTIONS_KEY = "chatui_sidebar_sections"
+const COWORK_PANEL_WIDTH_KEY = "chatui_cowork_panel_width_pct"
+
+const DEFAULT_COWORK_PANEL_WIDTH_PCT = 50
+const MIN_COWORK_PANEL_WIDTH_PCT = 24
+const MAX_COWORK_PANEL_WIDTH_PCT = 76
+
+const parseCoworkPanelWidthPct = (raw: string | null): number => {
+  if (raw == null) return DEFAULT_COWORK_PANEL_WIDTH_PCT
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return DEFAULT_COWORK_PANEL_WIDTH_PCT
+  return Math.min(
+    MAX_COWORK_PANEL_WIDTH_PCT,
+    Math.max(MIN_COWORK_PANEL_WIDTH_PCT, value)
+  )
+}
 
 export type ActionInfoLevel = "none" | "short" | "detailed"
 
@@ -105,4 +120,17 @@ export const sidebarSectionsStore = {
   set: (state: SidebarSectionsState) =>
     localStorage.setItem(SIDEBAR_SECTIONS_KEY, JSON.stringify(state)),
   clear: () => localStorage.removeItem(SIDEBAR_SECTIONS_KEY),
+}
+
+export const coworkPanelWidthStore = {
+  default: DEFAULT_COWORK_PANEL_WIDTH_PCT,
+  min: MIN_COWORK_PANEL_WIDTH_PCT,
+  max: MAX_COWORK_PANEL_WIDTH_PCT,
+  get: (): number => parseCoworkPanelWidthPct(localStorage.getItem(COWORK_PANEL_WIDTH_KEY)),
+  set: (pct: number) =>
+    localStorage.setItem(
+      COWORK_PANEL_WIDTH_KEY,
+      String(parseCoworkPanelWidthPct(String(pct)))
+    ),
+  clear: () => localStorage.removeItem(COWORK_PANEL_WIDTH_KEY),
 }

@@ -255,11 +255,52 @@ export type ToolCallToolEvent = {
   } | null
 }
 
+export type CoworkFormat = "markdown" | "code" | "text" | "json" | "csv" | "presentation"
+
+export type CoworkDocument = {
+  document_id: string
+  chat_id: string
+  title: string
+  file_name: string
+  format: CoworkFormat | string
+  language?: string | null
+  content?: string | null
+  version: number
+  is_active: boolean
+  last_assistant_version: number
+  user_edited: boolean
+  updated_at?: string | null
+  created_at?: string | null
+}
+
+export type CoworkingToolEvent = {
+  type: "coworking"
+  id?: string
+  action?: "open" | "update" | "close" | "writing" | string
+  document_id?: string
+  title?: string | null
+  file_name?: string | null
+  format?: string | null
+  language?: string | null
+  version?: number | null
+  last_assistant_version?: number | null
+  user_edited?: boolean | null
+  content?: string | null
+  append_text?: string | null
+  output?: {
+    status?: "ok" | "error" | "writing" | string
+    error?: string | null
+    tool_name?: string | null
+    synced?: boolean | null
+  } | null
+}
+
 export type ToolEvent =
   | CodeExecutionToolEvent
   | ContextSummaryToolEvent
   | UrlAttachmentsToolEvent
   | ToolCallToolEvent
+  | CoworkingToolEvent
 
 export type GenerationStatus =
   | "queued"

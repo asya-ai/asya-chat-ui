@@ -99,7 +99,7 @@ export const ChatComposer = ({
   }
 
   const canSend = !readOnly && Boolean(message.trim() || pendingAttachments.length > 0)
-  const toolsDisabled = loading || readOnly
+  const toolsDisabled = readOnly
 
   const toolToggle = (
     label: string,
@@ -159,7 +159,7 @@ export const ChatComposer = ({
             if (!shouldSubmitOnEnter(event)) return
 
             event.preventDefault()
-            if (!loading && canSend) {
+            if (canSend) {
               onSend()
             }
           }}
@@ -174,7 +174,7 @@ export const ChatComposer = ({
             "placeholder:text-muted-foreground",
             "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
           )}
-          disabled={loading || readOnly}
+          disabled={readOnly}
         />
         {attachmentError ? (
           <p className="px-1.5 text-destructive text-sm" role="alert">
@@ -234,7 +234,7 @@ export const ChatComposer = ({
               multiple
               className="hidden"
               onChange={handleFilesSelected}
-              disabled={loading || readOnly}
+              disabled={readOnly}
             />
             {hasPrompts && onInsertPromptRequest ? (
               <DropdownMenu modal={false}>
@@ -243,7 +243,7 @@ export const ChatComposer = ({
                     variant="ghost"
                     size="icon"
                     className="size-9 shrink-0 text-muted-foreground"
-                    disabled={loading || readOnly}
+                    disabled={readOnly}
                     aria-label={t("chat_add_files")}
                   >
                     <Plus aria-hidden="true" className="size-4" />
@@ -270,7 +270,7 @@ export const ChatComposer = ({
                 size="icon"
                 className="size-9 shrink-0 text-muted-foreground"
                 onClick={handlePickFiles}
-                disabled={loading || readOnly}
+                disabled={readOnly}
                 aria-label={t("chat_add_files")}
               >
                 <Plus aria-hidden="true" className="size-4" />
@@ -345,10 +345,10 @@ export const ChatComposer = ({
             </DropdownMenu>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            {showModelSelect && modelSelect && !loading ? (
+            {showModelSelect && modelSelect && !(loading && !canSend) ? (
               <div className="hidden md:block">{modelSelect}</div>
             ) : null}
-            {loading ? (
+            {loading && !canSend ? (
               <Button
                 variant="destructive"
                 size="icon"

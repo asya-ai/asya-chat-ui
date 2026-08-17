@@ -55,6 +55,11 @@ from app.models.entities import (
     User,
     UserMemory,
 )
+from app.services.tools.cowork_tools import (
+    build_user_edit_context_message,
+    get_active_document,
+    mark_assistant_synced,
+)
 from app.services.org_service import require_provider_enabled
 from app.services.team_service import allowed_model_ids
 from app.services.file_storage import delete_file
@@ -303,6 +308,47 @@ def _append_event(
     payload: dict | None,
 ) -> None:
     _persist_generation_event(session, task_id, sequence_ref, event_type, payload)
+
+
+async def _run_chat_title_job(
+    *,
+    chat_id: UUID,
+    model_id: UUID,
+    task_id: UUID,
+    sequence_ref: list[int],
+    assistant_message_id: UUID | None,
+) -> None:
+    with Session(engine) as session:
+        chat = session.get(Chat, chat_id)
+        model = session.get(ChatModel, model_id)
+        if not chat or chat.is_deleted or not model:
+            return
+        history = session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.chat_id == chat.id)
+            .where(ChatMessage.is_current.is_(True))
+            .order_by(ChatMessage.created_at)
+        ).all()
+        if assistant_message_id:
+            history = [msg for msg in history if msg.id != assistant_message_id]
+            assistant = session.get(ChatMessage, assistant_message_id)
+            if assistant:
+                history = [*history, assistant]
+        title = await _maybe_update_chat_title(
+            session=session,
+            chat=chat,
+            model=model,
+            history=history,
+        )
+        if not title:
+            return
+        _append_event(
+            session,
+            task_id,
+            sequence_ref,
+            "chat_title",
+            {"chat_title": title, "chat_id": str(chat.id)},
+        )
 
 
 def _aggregated_message_usage_payload(
@@ -691,7 +737,17 @@ async def _run_generation(task_id: UUID) -> None:
             ).all()
             if mem_rows:
                 user_memories = [{"id": str(m.id), "content": m.content} for m in mem_rows]
+        title_task: asyncio.Task[None] | None = None
         try:
+            title_task = asyncio.create_task(
+                _run_chat_title_job(
+                    chat_id=chat.id,
+                    model_id=model.id,
+                    task_id=task.id,
+                    sequence_ref=sequence_ref,
+                    assistant_message_id=assistant_message.id,
+                )
+            )
             messages = _build_provider_messages(
                 history=history,
                 attachments_by_message=attachments_by_message,
@@ -701,6 +757,11 @@ async def _run_generation(task_id: UUID) -> None:
                 enabled_tool_names=[spec.name for spec in tool_registry.list_specs()],
                 memories=user_memories,
             )
+            active_cowork = get_active_document(session, chat.id)
+            if active_cowork:
+                edit_note = build_user_edit_context_message(active_cowork)
+                if edit_note:
+                    messages.append({"role": "system", "content": edit_note})
             agent_sources: list[dict[str, Any]] = []
             if chat.agent_id:
                 agent = session.get(Agent, chat.agent_id)
@@ -945,13 +1006,11 @@ async def _run_generation(task_id: UUID) -> None:
                 )
                 session.add(usage_event)
                 session.commit()
-                await _maybe_update_chat_title(
-                    session=session,
-                    chat=chat,
-                    provider=provider,
-                    model=model,
-                    history=history + [assistant_message],
-                )
+                if title_task is not None:
+                    try:
+                        await title_task
+                    except Exception:
+                        logger.debug("Chat title job failed", exc_info=True)
                 if image_result.attachments:
                     _append_event(
                         session,
@@ -1151,13 +1210,11 @@ async def _run_generation(task_id: UUID) -> None:
                     )
                 session.commit()
 
-            await _maybe_update_chat_title(
-                session=session,
-                chat=chat,
-                provider=provider,
-                model=model,
-                history=history + [assistant_message],
-            )
+            if title_task is not None:
+                try:
+                    await title_task
+                except Exception:
+                    logger.debug("Chat title job failed", exc_info=True)
 
             _append_event(
                 session,
@@ -1183,6 +1240,34 @@ async def _run_generation(task_id: UUID) -> None:
             task.status = GenerationStatus.completed
             task.completed_at = datetime.utcnow()
             session.commit()
+            synced_doc = mark_assistant_synced(session, chat.id)
+            if synced_doc:
+                _append_event(
+                    session,
+                    task.id,
+                    sequence_ref,
+                    "tool_event",
+                    {
+                        "type": "coworking",
+                        "action": "update",
+                        "document_id": str(synced_doc.id),
+                        "title": synced_doc.title,
+                        "file_name": synced_doc.file_name,
+                        "format": (
+                            synced_doc.format.value
+                            if hasattr(synced_doc.format, "value")
+                            else synced_doc.format
+                        ),
+                        "language": synced_doc.language,
+                        "version": synced_doc.version,
+                        "last_assistant_version": synced_doc.last_assistant_version,
+                        "user_edited": False,
+                        "content": synced_doc.content
+                        if len(synced_doc.content or "") <= 50_000
+                        else None,
+                        "output": {"status": "ok", "synced": True},
+                    },
+                )
             _queue_space_chat_index(session, chat)
         except GenerationCancelledError:
             logger.info("Generation cancelled for task=%s", task_id)
@@ -1209,6 +1294,11 @@ async def _run_generation(task_id: UUID) -> None:
             task.status = GenerationStatus.failed
             task.error = error_text
             session.commit()
+            if title_task is not None:
+                try:
+                    await title_task
+                except Exception:
+                    logger.debug("Chat title job failed", exc_info=True)
             _append_event(
                 session,
                 task.id,
@@ -1217,6 +1307,11 @@ async def _run_generation(task_id: UUID) -> None:
                 {"error": error_text},
             )
         finally:
+            if title_task is not None and not title_task.done():
+                try:
+                    await title_task
+                except Exception:
+                    logger.debug("Chat title job failed", exc_info=True)
             try:
                 persist_responses_api_discovery(session, model, provider)
             except Exception:

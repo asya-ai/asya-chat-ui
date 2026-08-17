@@ -6,11 +6,15 @@ import stat
 from uuid import UUID, uuid4
 
 from app.models import AgentSource, AgentSourceKind, AgentSourceStatus, ChatMessageAttachment
+from app.models.entities import ChatCoworkDocument, CoworkFormat
 from app.services.tools.code_execution import (
     _collect_outputs,
+    _sync_cowork_workspace,
     _validate_imports,
+    _write_cowork_workspace,
     _write_inputs,
     _write_project_inputs,
+    cowork_exec_path,
     project_source_exec_path,
 )
 
@@ -251,3 +255,79 @@ def test_collect_outputs_rejects_fifo(tmp_path) -> None:
     attachments, _output_items = _collect_outputs(tmp_path)
 
     assert [item["file_name"] for item in attachments] == ["ok.txt"]
+
+
+def test_write_and_sync_cowork_workspace(tmp_path) -> None:
+    from sqlmodel import Session, SQLModel, create_engine
+    from sqlalchemy.pool import StaticPool
+
+    from app.models.entities import Chat, Org, User
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        org = Org(name="Org")
+        session.add(org)
+        session.commit()
+        session.refresh(org)
+        user = User(email="code-cowork@example.com", hashed_password="x")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        chat = Chat(org_id=org.id, user_id=user.id, title="C")
+        session.add(chat)
+        session.commit()
+        session.refresh(chat)
+
+        doc = ChatCoworkDocument(
+            chat_id=chat.id,
+            title="Sales",
+            file_name="sales.csv",
+            format=CoworkFormat.csv,
+            content="a,b\n1,2\n",
+            version=1,
+            last_assistant_version=1,
+            content_at_assistant_version="a,b\n1,2\n",
+            is_active=True,
+        )
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+
+        listing, path_to_id, snapshots = _write_cowork_workspace([doc], tmp_path)
+        assert listing[0]["path"] == "/workspace/cowork/sales.csv"
+        assert cowork_exec_path(doc) == "/workspace/cowork/sales.csv"
+        assert (tmp_path / "cowork" / "sales.csv").read_text(encoding="utf-8") == "a,b\n1,2\n"
+        assert (tmp_path / "cowork" / "manifest.json").is_file()
+
+        # Unchanged content → no sync
+        assert (
+            _sync_cowork_workspace(
+                session,
+                chat.id,
+                tmp_path,
+                path_to_id=path_to_id,
+                snapshots=snapshots,
+            )
+            == []
+        )
+
+        (tmp_path / "cowork" / "sales.csv").write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+        updated = _sync_cowork_workspace(
+            session,
+            chat.id,
+            tmp_path,
+            path_to_id=path_to_id,
+            snapshots=snapshots,
+        )
+        assert len(updated) == 1
+        assert updated[0]["synced_path"] == "/workspace/cowork/sales.csv"
+        assert updated[0]["content"] == "a,b\n1,2\n3,4\n"
+        assert updated[0]["version"] == 2
+        session.refresh(doc)
+        assert doc.content == "a,b\n1,2\n3,4\n"
+        assert doc.version == 2

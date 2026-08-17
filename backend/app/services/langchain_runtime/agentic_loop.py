@@ -329,6 +329,42 @@ async def run_agentic_loop_langchain(
                             "output": {},
                         }
                     )
+                elif call.name == "start_coworking":
+                    await _emit_tool_event(
+                        {
+                            "type": "coworking",
+                            "id": call.id,
+                            "action": "open",
+                            "title": call_arguments.get("title"),
+                            "file_name": call_arguments.get("file_name"),
+                            "format": call_arguments.get("format"),
+                            "language": call_arguments.get("language"),
+                            "content": call_arguments.get("content"),
+                            "output": {"status": "writing", "tool_name": call.name},
+                        }
+                    )
+                elif call.name in {
+                    "cowork_write",
+                    "cowork_str_replace",
+                    "cowork_append",
+                }:
+                    preview_content = None
+                    if call.name == "cowork_write":
+                        preview_content = call_arguments.get("content")
+                    await _emit_tool_event(
+                        {
+                            "type": "coworking",
+                            "id": call.id,
+                            "action": "writing",
+                            "content": preview_content,
+                            "append_text": (
+                                call_arguments.get("text")
+                                if call.name == "cowork_append"
+                                else None
+                            ),
+                            "output": {"status": "writing", "tool_name": call.name},
+                        }
+                    )
                 await _emit_tool_event(
                     {
                         "type": "tool_call",
@@ -361,7 +397,7 @@ async def run_agentic_loop_langchain(
                     else result.output
                 )
                 if isinstance(raw_output, dict):
-                    tool_output = raw_output
+                    tool_output = dict(raw_output)
                 else:
                     tool_output = {
                         "error": "Tool returned non-object output",
@@ -382,6 +418,31 @@ async def run_agentic_loop_langchain(
                 tool_output = {"error": f"{type(exc).__name__}: {exc}"}
                 result = ToolResult(name=call.name, output=tool_output)
 
+            cowork_updated_payloads: list[dict[str, Any]] = []
+            if isinstance(tool_output, dict):
+                raw_payloads = tool_output.pop("_cowork_updated_payloads", None)
+                if isinstance(raw_payloads, list):
+                    cowork_updated_payloads = [
+                        item for item in raw_payloads if isinstance(item, dict)
+                    ]
+                if isinstance(tool_output.get("cowork_updated"), list):
+                    tool_output["cowork_updated"] = [
+                        {
+                            "document_id": item.get("document_id"),
+                            "file_name": item.get("file_name"),
+                            "version": item.get("version"),
+                            "synced_path": item.get("synced_path"),
+                        }
+                        for item in tool_output["cowork_updated"]
+                        if isinstance(item, dict)
+                    ]
+                # Keep ToolResult in sync with model-facing output (strip internal fields).
+                result = ToolResult(
+                    name=result.name or call.name,
+                    output=tool_output,
+                    attachments=result.attachments,
+                )
+
             error_text = tool_output.get("error")
             if error_text is None and tool_output.get("is_error"):
                 error_text = "Tool reported an error"
@@ -401,6 +462,30 @@ async def run_agentic_loop_langchain(
                             "output": tool_output,
                         }
                     )
+                    for payload in cowork_updated_payloads:
+                        await _emit_tool_event(
+                            {
+                                "type": "coworking",
+                                "id": call.id,
+                                "action": payload.get("action") or "update",
+                                "document_id": payload.get("document_id"),
+                                "title": payload.get("title"),
+                                "file_name": payload.get("file_name"),
+                                "format": payload.get("format"),
+                                "language": payload.get("language"),
+                                "version": payload.get("version"),
+                                "last_assistant_version": payload.get(
+                                    "last_assistant_version"
+                                ),
+                                "user_edited": payload.get("user_edited"),
+                                "content": payload.get("content"),
+                                "output": {
+                                    "status": "ok",
+                                    "tool_name": "code_execution",
+                                    "synced": True,
+                                },
+                            }
+                        )
                 elif call.name == "download_attachments":
                     urls = call_arguments.get("urls") or call_arguments.get("url")
                     if isinstance(urls, str):
@@ -413,6 +498,48 @@ async def run_agentic_loop_langchain(
                             "output": tool_output,
                         }
                     )
+                elif call.name in {
+                    "start_coworking",
+                    "cowork_write",
+                    "cowork_str_replace",
+                    "cowork_append",
+                }:
+                    action = "open" if call.name == "start_coworking" else "update"
+                    if isinstance(tool_output, dict) and not tool_output.get("error"):
+                        event = {
+                            "type": "coworking",
+                            "id": call.id,
+                            "action": tool_output.get("action") or action,
+                            "document_id": tool_output.get("document_id"),
+                            "title": tool_output.get("title"),
+                            "file_name": tool_output.get("file_name"),
+                            "format": tool_output.get("format"),
+                            "language": tool_output.get("language"),
+                            "version": tool_output.get("version"),
+                            "last_assistant_version": tool_output.get(
+                                "last_assistant_version"
+                            ),
+                            "user_edited": tool_output.get("user_edited"),
+                            "content": tool_output.get("content"),
+                            "output": {
+                                "status": "ok",
+                                "tool_name": call.name,
+                            },
+                        }
+                        await _emit_tool_event(event)
+                    elif isinstance(tool_output, dict) and tool_output.get("error"):
+                        await _emit_tool_event(
+                            {
+                                "type": "coworking",
+                                "id": call.id,
+                                "action": action,
+                                "output": {
+                                    "status": "error",
+                                    "error": tool_output.get("error"),
+                                    "tool_name": call.name,
+                                },
+                            }
+                        )
                 await _emit_tool_event(
                     {
                         "type": "tool_call",

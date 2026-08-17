@@ -245,6 +245,46 @@ const downloadBlob = (blob: Blob, fileName: string) => {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+const CHAT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const COWORK_FILE_EXT_RE =
+  /\.(md|markdown|txt|json|csv|py|ts|tsx|js|jsx|html|css|sql)$/i
+
+/** Models invent cowork file_name links (relative or /chat/<file>) — those are not real routes. */
+const isFakeCoworkDocumentHref = (href: string | undefined | null): boolean => {
+  if (!href) return false
+  const trimmed = href.trim()
+  if (!trimmed || trimmed.startsWith("#") || /^(mailto|tel):/i.test(trimmed)) {
+    return false
+  }
+
+  const isHttpUrl = /^https?:\/\//i.test(trimmed)
+  try {
+    // Resolve relative hrefs the same way the browser does (from /chat/<id> → /chat/file.md).
+    const url = new URL(trimmed, window.location.href)
+    const segment = decodeURIComponent(
+      url.pathname.split("/").filter(Boolean).pop() || ""
+    )
+    if (!segment || !COWORK_FILE_EXT_RE.test(segment) || CHAT_UUID_RE.test(segment)) {
+      return false
+    }
+
+    // Relative / scheme-less: "deck.md", "./deck.md"
+    if (!isHttpUrl && !/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return true
+
+    // Same-origin absolute that landed on a file-like /chat/<name.ext> or /<name.ext>
+    if (url.origin === window.location.origin) {
+      return (
+        /^\/chat\/[^/]+\/?$/.test(url.pathname) || /^\/[^/]+\/?$/.test(url.pathname)
+      )
+    }
+
+    return false
+  } catch {
+    return COWORK_FILE_EXT_RE.test(trimmed.split(/[\\/]/).pop() || "")
+  }
+}
+
 const answerFileStem = (msg: ChatMessage) => {
   const stamp = msg.created_at ? msg.created_at.slice(0, 10) : "answer"
   return `chat-answer-${stamp}`
@@ -1063,11 +1103,15 @@ const MessageBubbleComponent = ({
           </li>
         )
       },
-      a({ children, node, ...rest }: any) {
+      a({ children, node, href, ...rest }: any) {
         void node
+        if (isFakeCoworkDocumentHref(href)) {
+          return <span className="font-medium">{children}</span>
+        }
         return (
           <a
             {...rest}
+            href={href}
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2 break-all"
