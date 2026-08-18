@@ -89,7 +89,6 @@ type MessageBubbleProps = {
   actionsEnabled: boolean
   isEditing: boolean
   isEditDragActive: boolean
-  editingContent: string
   editingAttachments: ChatMessageAttachmentInput[]
   editAttachmentError?: string | null
   codeTheme: Record<string, CSSProperties>
@@ -101,9 +100,8 @@ type MessageBubbleProps = {
   onRetryMessage: (msg: ChatMessage) => void
   onShareMessage?: (msg: ChatMessage) => void
   onSaveAsPrompt?: (msg: ChatMessage) => void
-  onSaveEditedMessage: (msg: ChatMessage) => void
+  onSaveEditedMessage: (msg: ChatMessage, content: string) => void
   onCancelEdit: () => void
-  onEditContentChange: (value: string) => void
   onEditPasteAttachments: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void
   onEditFilesSelected: (files: File[]) => void
   onEditDragEnter: (event: React.DragEvent<HTMLDivElement>) => void
@@ -1010,7 +1008,6 @@ const MessageBubbleComponent = ({
   actionsEnabled,
   isEditing,
   isEditDragActive,
-  editingContent,
   editingAttachments,
   editAttachmentError,
   codeTheme,
@@ -1024,7 +1021,6 @@ const MessageBubbleComponent = ({
   onSaveAsPrompt,
   onSaveEditedMessage,
   onCancelEdit,
-  onEditContentChange,
   onEditPasteAttachments,
   onEditFilesSelected,
   onEditDragEnter,
@@ -1035,6 +1031,13 @@ const MessageBubbleComponent = ({
   onPreviewAttachment,
 }: MessageBubbleProps) => {
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [hasEditText, setHasEditText] = useState(() => Boolean(msg.content.trim()))
+
+  useEffect(() => {
+    if (!isEditing) return
+    setHasEditText(Boolean(msg.content.trim()))
+  }, [isEditing, msg.id, msg.content])
   const isContextSummaryEvent = msg.tool_event?.type === "context_summary"
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
   const toolCallEvent = msg.tool_event?.type === "tool_call" ? msg.tool_event : null
@@ -1336,7 +1339,10 @@ const MessageBubbleComponent = ({
     onEditFilesSelected(files)
     event.target.value = ""
   }
-  const canSaveEdit = Boolean(editingContent.trim() || editingAttachments.length > 0)
+  const canSaveEdit = hasEditText || editingAttachments.length > 0
+  const saveEdited = () => {
+    onSaveEditedMessage(msg, editTextareaRef.current?.value ?? msg.content)
+  }
   const showUserSideActions =
     isUser && !isEditing && (canCopyMessage || actionsEnabled)
   const showAssistantFooter =
@@ -1491,14 +1497,26 @@ const MessageBubbleComponent = ({
               onDrop={onEditDrop}
             >
               <Textarea
-                value={editingContent}
-                onChange={(event) => onEditContentChange(event.target.value)}
-                onPaste={onEditPasteAttachments}
+                key={`${msg.id}-edit`}
+                ref={editTextareaRef}
+                defaultValue={msg.content}
+                onChange={(event) => {
+                  const nextHasText = event.target.value.trim().length > 0
+                  setHasEditText((prev) => (prev === nextHasText ? prev : nextHasText))
+                }}
+                onPaste={(event) => {
+                  onEditPasteAttachments(event)
+                  requestAnimationFrame(() => {
+                    const nextHasText =
+                      (editTextareaRef.current?.value ?? "").trim().length > 0
+                    setHasEditText((prev) => (prev === nextHasText ? prev : nextHasText))
+                  })
+                }}
                 onKeyDown={(event) => {
                   if (!shouldSubmitOnEnter(event)) return
                   event.preventDefault()
                   if (canSaveEdit) {
-                    onSaveEditedMessage(msg)
+                    saveEdited()
                   }
                 }}
                 rows={3}
@@ -1569,7 +1587,7 @@ const MessageBubbleComponent = ({
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => onSaveEditedMessage(msg)} disabled={!canSaveEdit}>
+                <Button size="sm" onClick={saveEdited} disabled={!canSaveEdit}>
                   {t("chat_resend")}
                 </Button>
                 <Button size="sm" variant="outline" onClick={onCancelEdit}>
@@ -2166,7 +2184,6 @@ export const MessageBubble = memo(
     // Editing-only props should trigger rerender only for edited message bubble.
     if (next.isEditing) {
       if (prev.isEditDragActive !== next.isEditDragActive) return false
-      if (prev.editingContent !== next.editingContent) return false
       if (prev.editingAttachments !== next.editingAttachments) return false
       if (prev.editAttachmentError !== next.editAttachmentError) return false
     }

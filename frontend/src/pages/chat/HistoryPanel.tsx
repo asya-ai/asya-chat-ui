@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 
 import type { Chat } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -26,13 +26,13 @@ type HistoryGroup = {
 
 type HistoryPanelProps = {
   groups: HistoryGroup[]
-  query: string
   leadingAction: ReactNode
   trailingAction?: ReactNode
   labels: {
     title: string
     search: string
     empty: string
+    emptySearch: string
     untitled: string
     delete: string
     share: string
@@ -47,7 +47,6 @@ type HistoryPanelProps = {
 
 export const HistoryPanel = ({
   groups,
-  query,
   leadingAction,
   trailingAction,
   labels,
@@ -56,7 +55,15 @@ export const HistoryPanel = ({
   onDeleteChat,
   onToggleShareChat,
 }: HistoryPanelProps) => {
+  const [query, setQuery] = useState("")
   const hasRows = groups.some((group) => group.rows.length > 0)
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      onQueryChange(query.trim())
+    }, 250)
+    return () => window.clearTimeout(timerId)
+  }, [query, onQueryChange])
 
   return (
     <>
@@ -78,7 +85,7 @@ export const HistoryPanel = ({
           />
           <Input
             value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
+            onChange={(event) => setQuery(event.target.value)}
             placeholder={labels.search}
             className="pl-9"
           />
@@ -170,7 +177,9 @@ export const HistoryPanel = ({
               )}
             </div>
           ) : (
-            <p className="p-8 text-center text-sm text-muted-foreground">{labels.empty}</p>
+            <p className="p-8 text-center text-sm text-muted-foreground">
+              {query.trim() ? labels.emptySearch : labels.empty}
+            </p>
           )}
         </ScrollArea>
       </div>

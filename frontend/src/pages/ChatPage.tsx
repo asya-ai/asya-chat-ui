@@ -42,7 +42,7 @@ import { CoworkPanel } from "@/pages/chat/CoworkPanel"
 import { useCoworkDocument } from "@/pages/chat/useCoworkDocument"
 import { useIsMobile } from "@/hooks/use-mobile"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
-import { ChatComposer } from "@/pages/chat/ChatComposer"
+import { ChatComposer, type ChatComposerHandle } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
 import { MessageBubble, getFinalAnswerText } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
@@ -293,6 +293,78 @@ const mergeMessageAttachments = (
   return merged
 }
 
+type InsertPromptPickerProps = {
+  open: boolean
+  prompts: Prompt[]
+  title: string
+  description: string
+  searchPlaceholder: string
+  onOpenChange: (open: boolean) => void
+  onSelect: (body: string) => void
+}
+
+const InsertPromptPicker = ({
+  open,
+  prompts,
+  title,
+  description,
+  searchPlaceholder,
+  onOpenChange,
+  onSelect,
+}: InsertPromptPickerProps) => {
+  const [query, setQuery] = useState("")
+
+  useEffect(() => {
+    if (!open) setQuery("")
+  }, [open])
+
+  const needle = query.trim().toLowerCase()
+  const filtered = needle
+    ? prompts.filter(
+        (prompt) =>
+          prompt.name.toLowerCase().includes(needle) ||
+          (prompt.description ?? "").toLowerCase().includes(needle)
+      )
+    : prompts
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={searchPlaceholder}
+        />
+        <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+          {filtered.map((prompt) => (
+            <Button
+              key={prompt.id}
+              type="button"
+              variant="ghost"
+              className="flex h-auto min-h-10 w-full flex-col items-start gap-0.5 px-3 py-2 text-left"
+              onClick={() => {
+                onSelect(prompt.body)
+                onOpenChange(false)
+              }}
+            >
+              <span className="w-full truncate text-sm font-medium">{prompt.name}</span>
+              {prompt.description ? (
+                <span className="w-full truncate text-xs text-muted-foreground">
+                  {prompt.description}
+                </span>
+              ) : null}
+            </Button>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export const ChatPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -309,11 +381,10 @@ export const ChatPage = () => {
   const isMobile = useIsMobile()
   const coworkHandleRef = useRef(cowork.handleCoworkingEvent)
   coworkHandleRef.current = cowork.handleCoworkingEvent
-  const [message, setMessage] = useState("")
+  const composerRef = useRef<ChatComposerHandle>(null)
   const [promptCount, setPromptCount] = useState(0)
   const [insertPromptOpen, setInsertPromptOpen] = useState(false)
   const [insertPrompts, setInsertPrompts] = useState<Prompt[]>([])
-  const [insertPromptQuery, setInsertPromptQuery] = useState("")
   const [savePromptOpen, setSavePromptOpen] = useState(false)
   const [savePromptBody, setSavePromptBody] = useState("")
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
@@ -339,7 +410,6 @@ export const ChatPage = () => {
     []
   )
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
-  const [editingContent, setEditingContent] = useState("")
   const [editingAttachments, setEditingAttachments] = useState<
     ChatMessageAttachmentInput[]
   >([])
@@ -378,7 +448,6 @@ export const ChatPage = () => {
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true)
-  const [chatSearchQuery, setChatSearchQuery] = useState("")
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
@@ -439,11 +508,9 @@ export const ChatPage = () => {
   }, [orgId])
 
   useEffect(() => {
-    const timerId = window.setTimeout(() => {
-      setChatSearchDebounced(chatSearchQuery.trim())
-    }, 250)
-    return () => window.clearTimeout(timerId)
-  }, [chatSearchQuery])
+    if (isHistoryView) return
+    setChatSearchDebounced("")
+  }, [isHistoryView])
 
   const appendToolEvent = useCallback((
     event: NonNullable<ChatMessage["tool_event"]>,
@@ -1752,7 +1819,7 @@ export const ChatPage = () => {
   const startNewChat = () => {
     replaceCurrentChatMessages([])
     setToolEvents([])
-    setMessage("")
+    composerRef.current?.setValue("")
     setPendingAttachments([])
     setAttachmentError(null)
     navigate(
@@ -1907,7 +1974,7 @@ export const ChatPage = () => {
 
   const sendMessage = async () => {
     if (composerBusyRef.current) return
-    const trimmed = message.trim()
+    const trimmed = (composerRef.current?.getValue() ?? "").trim()
     if (!trimmed && pendingAttachments.length === 0) return
     if (chatId && loadingByChat[chatId]) {
       stopGeneration()
@@ -1967,7 +2034,7 @@ export const ChatPage = () => {
         generation_status: "queued",
       }
       updateMessages((prev) => [...prev, userMessage, assistantMessage])
-      setMessage("")
+      composerRef.current?.setValue("")
       setPendingAttachments([])
       const { promise, cancel } = chatApi.sendMessageStream(
         chat.id,
@@ -2193,25 +2260,23 @@ export const ChatPage = () => {
     return current.slice(0, start) + insert + current.slice(end)
   }
 
-  const insertPromptIntoComposer = useCallback(
-    (body: string) => {
-      const input = composerInputRef.current
-      const start = input?.selectionStart ?? message.length
-      const end = input?.selectionEnd ?? message.length
-      const spacer =
-        start > 0 && !/\s$/.test(message.slice(0, start)) && body.length > 0 ? "\n\n" : ""
-      const nextValue = insertAtCursor(message, `${spacer}${body}`, start, end)
-      setMessage(nextValue)
-      requestAnimationFrame(() => {
-        const el = composerInputRef.current
-        if (!el) return
-        const cursor = start + spacer.length + body.length
-        el.focus()
-        el.setSelectionRange(cursor, cursor)
-      })
-    },
-    [message]
-  )
+  const insertPromptIntoComposer = useCallback((body: string) => {
+    const input = composerInputRef.current
+    const current = composerRef.current?.getValue() ?? input?.value ?? ""
+    const start = input?.selectionStart ?? current.length
+    const end = input?.selectionEnd ?? current.length
+    const spacer =
+      start > 0 && !/\s$/.test(current.slice(0, start)) && body.length > 0 ? "\n\n" : ""
+    const nextValue = insertAtCursor(current, `${spacer}${body}`, start, end)
+    composerRef.current?.setValue(nextValue)
+    requestAnimationFrame(() => {
+      const el = composerInputRef.current
+      if (!el) return
+      const cursor = start + spacer.length + body.length
+      el.focus()
+      el.setSelectionRange(cursor, cursor)
+    })
+  }, [])
 
   const openInsertPromptPicker = useCallback(async () => {
     try {
@@ -2219,7 +2284,6 @@ export const ChatPage = () => {
         context_agent_id: activeAgentId ?? null,
       })
       setInsertPrompts(items)
-      setInsertPromptQuery("")
       setInsertPromptOpen(true)
       setPromptCount(items.length)
     } catch {
@@ -2292,16 +2356,17 @@ export const ChatPage = () => {
     if (!text || !isLikelyCode(text)) return
 
     const input = composerInputRef.current
-    const start = input?.selectionStart ?? message.length
-    if (isInsideMarkdownCodeFence(message, start)) {
+    const current = composerRef.current?.getValue() ?? input?.value ?? ""
+    const start = input?.selectionStart ?? current.length
+    if (isInsideMarkdownCodeFence(current, start)) {
       return
     }
 
     event.preventDefault()
-    const end = input?.selectionEnd ?? message.length
+    const end = input?.selectionEnd ?? current.length
     const wrapped = wrapInCodeFence(text)
-    const nextValue = insertAtCursor(message, wrapped, start, end)
-    setMessage(nextValue)
+    const nextValue = insertAtCursor(current, wrapped, start, end)
+    composerRef.current?.setValue(nextValue)
     requestAnimationFrame(() => {
       if (!input) return
       const nextPos = start + wrapped.length
@@ -2485,22 +2550,24 @@ export const ChatPage = () => {
 
     if (!text || !isLikelyCode(text)) return
 
-    const start = textarea.selectionStart ?? editingContent.length
-    if (isInsideMarkdownCodeFence(editingContent, start)) {
+    const current = textarea.value
+    const start = textarea.selectionStart ?? current.length
+    if (isInsideMarkdownCodeFence(current, start)) {
       return
     }
 
     event.preventDefault()
-    const end = textarea.selectionEnd ?? editingContent.length
+    const end = textarea.selectionEnd ?? current.length
     const wrapped = wrapInCodeFence(text)
-    const nextValue = insertAtCursor(editingContent, wrapped, start, end)
-    setEditingContent(nextValue)
+    const nextValue = insertAtCursor(current, wrapped, start, end)
+    textarea.value = nextValue
+    textarea.dispatchEvent(new Event("input", { bubbles: true }))
     requestAnimationFrame(() => {
       if (!document.contains(textarea)) return
       textarea.selectionStart = start + wrapped.length
       textarea.selectionEnd = start + wrapped.length
     })
-  }, [editingAttachments, editingContent, t])
+  }, [editingAttachments, t])
 
   const handleEditDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     if (!event.dataTransfer.types.includes("Files")) return
@@ -2536,7 +2603,6 @@ export const ChatPage = () => {
 
   const startEditMessage = useCallback((msg: ChatMessage) => {
     setEditingMessageId(msg.id)
-    setEditingContent(msg.content)
     setEditingAttachmentError(null)
     setIsEditDragActive(false)
     setEditingAttachments(
@@ -2554,16 +2620,15 @@ export const ChatPage = () => {
 
   const cancelEditMessage = useCallback(() => {
     setEditingMessageId(null)
-    setEditingContent("")
     setEditingAttachments([])
     setEditingAttachmentError(null)
     setIsEditDragActive(false)
   }, [])
 
-  const saveEditedMessage = useCallback(async (msg: ChatMessage) => {
+  const saveEditedMessage = useCallback(async (msg: ChatMessage, content: string) => {
     if (!activeChat) return
     if (msg.id.startsWith("temp-")) return
-    const trimmed = editingContent.trim()
+    const trimmed = content.trim()
     if (!trimmed && editingAttachments.length === 0) return
     let uploadedEditingAttachments: ChatMessageAttachmentInput[] = []
     try {
@@ -2664,7 +2729,6 @@ export const ChatPage = () => {
     }
   }, [
     activeChat,
-    editingContent,
     editingAttachments,
     uploadAttachmentsForChat,
     stopGeneration,
@@ -2878,7 +2942,6 @@ export const ChatPage = () => {
           actionsEnabled={!isSharedView}
           isEditing={isEditing}
           isEditDragActive={isEditing && isEditDragActive}
-          editingContent={isEditing ? editingContent : ""}
           editingAttachments={isEditing ? editingAttachments : []}
           editAttachmentError={isEditing ? editingAttachmentError : null}
           codeTheme={codeTheme}
@@ -2892,7 +2955,6 @@ export const ChatPage = () => {
           onSaveAsPrompt={saveMessageAsPrompt}
           onSaveEditedMessage={saveEditedMessage}
           onCancelEdit={cancelEditMessage}
-          onEditContentChange={setEditingContent}
           onEditPasteAttachments={handleEditPasteAttachments}
           onEditFilesSelected={handleEditFilesSelected}
           onEditDragEnter={handleEditDragEnter}
@@ -2909,7 +2971,6 @@ export const ChatPage = () => {
       t,
       isTerminalStatus,
       editingMessageId,
-      editingContent,
       editingAttachments,
       editingAttachmentError,
       isEditDragActive,
@@ -3099,7 +3160,6 @@ export const ChatPage = () => {
         {isHistoryView ? (
           <HistoryPanel
             groups={historyGroups}
-            query={chatSearchQuery}
             leadingAction={
               <>
                 {mobileSidebar}
@@ -3115,16 +3175,15 @@ export const ChatPage = () => {
             labels={{
               title: t("chat_history"),
               search: t("chat_search_placeholder"),
-              empty: chatSearchQuery
-                ? t("chat_search_no_results")
-                : t("chat_history_empty"),
+              empty: t("chat_history_empty"),
+              emptySearch: t("chat_search_no_results"),
               untitled: t("chat_untitled"),
               delete: t("chat_delete"),
               share: t("chat_share"),
               unshare: t("chat_unshare"),
               actions: t("chat_history_actions"),
             }}
-            onQueryChange={setChatSearchQuery}
+            onQueryChange={setChatSearchDebounced}
             onSelectChat={(chat) => handleSelectChat(chat)}
             onDeleteChat={setDeleteConfirmChat}
             onToggleShareChat={toggleShareChat}
@@ -3238,7 +3297,7 @@ export const ChatPage = () => {
                 renderMessage={renderMessage}
               />
               <ChatComposer
-                message={message}
+                ref={composerRef}
                 placeholder={
                   isAgentMode
                     ? t("project_message_placeholder")
@@ -3257,7 +3316,7 @@ export const ChatPage = () => {
                 modelSelect={
                   <Select value={selectedModel} onValueChange={setSelectedModel}>
                     <SelectTrigger
-                      className="bg-transparent shadow-none border-0 w-auto max-w-54 h-9"
+                      className="h-9 w-auto min-w-0 max-w-full overflow-hidden bg-transparent shadow-none border-0 [&_[data-slot=select-value]]:min-w-0"
                       aria-label={t("chat_select_model")}
                     >
                       <SelectValue placeholder={t("chat_best_available_model")} />
@@ -3275,17 +3334,17 @@ export const ChatPage = () => {
                             value={model.id}
                             disabled={model.is_available === false}
                           >
-                            <span className="inline-flex items-center gap-2">
+                            <span className="inline-flex min-w-0 items-center gap-2">
                               {hasProviderIcon ? (
                                 <ProviderIcon
                                   provider={model.provider}
                                   modelName={model.model_name}
-                                  className="size-5"
+                                  className="size-5 shrink-0"
                                 />
                               ) : isImageOutputModel(model) ? (
                                 <ImageIcon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                               ) : null}
-                              <span>{model.display_name}</span>
+                              <span className="truncate">{model.display_name}</span>
                             </span>
                           </SelectItem>
                         )
@@ -3293,7 +3352,6 @@ export const ChatPage = () => {
                     </SelectContent>
                   </Select>
                 }
-                onMessageChange={setMessage}
                 onSend={sendMessage}
                 onStop={stopGeneration}
                 onFilesSelected={handleFilesSelected}
@@ -3454,52 +3512,15 @@ export const ChatPage = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog
+        <InsertPromptPicker
           open={insertPromptOpen}
+          prompts={insertPrompts}
+          title={t("prompt_insert")}
+          description={t("prompt_insert_description")}
+          searchPlaceholder={t("prompt_search_placeholder")}
           onOpenChange={setInsertPromptOpen}
-        >
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>{t("prompt_insert")}</DialogTitle>
-              <DialogDescription>{t("prompt_insert_description")}</DialogDescription>
-            </DialogHeader>
-            <Input
-              value={insertPromptQuery}
-              onChange={(event) => setInsertPromptQuery(event.target.value)}
-              placeholder={t("prompt_search_placeholder")}
-            />
-            <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
-              {insertPrompts
-                .filter((prompt) => {
-                  const q = insertPromptQuery.trim().toLowerCase()
-                  if (!q) return true
-                  return (
-                    prompt.name.toLowerCase().includes(q) ||
-                    (prompt.description ?? "").toLowerCase().includes(q)
-                  )
-                })
-                .map((prompt) => (
-                  <Button
-                    key={prompt.id}
-                    type="button"
-                    variant="ghost"
-                    className="flex-col items-start gap-0.5 px-3 py-2 w-full h-auto min-h-10 text-left"
-                    onClick={() => {
-                      insertPromptIntoComposer(prompt.body)
-                      setInsertPromptOpen(false)
-                    }}
-                  >
-                    <span className="w-full font-medium text-sm truncate">{prompt.name}</span>
-                    {prompt.description ? (
-                      <span className="w-full text-muted-foreground text-xs truncate">
-                        {prompt.description}
-                      </span>
-                    ) : null}
-                  </Button>
-                ))}
-            </div>
-          </DialogContent>
-        </Dialog>
+          onSelect={insertPromptIntoComposer}
+        />
         <PromptFormDialog
           open={savePromptOpen}
           onOpenChange={setSavePromptOpen}

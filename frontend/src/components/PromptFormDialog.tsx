@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Trash2 } from "lucide-react"
 
 import { orgApi, promptApi } from "@/lib/api"
@@ -69,9 +69,9 @@ export const PromptFormDialog = ({
   onSaved,
 }: PromptFormDialogProps) => {
   const { t } = useI18n()
-  const [name, setName] = useState("")
-  const [desc, setDesc] = useState("")
-  const [body, setBody] = useState("")
+  const nameRef = useRef<HTMLInputElement | null>(null)
+  const descRef = useRef<HTMLInputElement | null>(null)
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null)
   const [visibility, setVisibility] = useState<PromptVisibility>("private")
   const [teamIds, setTeamIds] = useState<string[]>([])
   const [selectedUsers, setSelectedUsers] = useState<PromptSharedUser[]>([])
@@ -83,12 +83,12 @@ export const PromptFormDialog = ({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return
     const agentId = initial?.agent_id ?? null
-    setName(initial?.name ?? "")
-    setDesc(initial?.description ?? "")
-    setBody(initial?.body ?? "")
+    if (nameRef.current) nameRef.current.value = initial?.name ?? ""
+    if (descRef.current) descRef.current.value = initial?.description ?? ""
+    if (bodyRef.current) bodyRef.current.value = initial?.body ?? ""
     setVisibility(defaultVisibility(agentId, initial?.visibility))
     setTeamIds(initial?.team_ids ?? [])
     setSelectedUsers(initial?.users ?? [])
@@ -97,7 +97,10 @@ export const PromptFormDialog = ({
     setSuggestionsOpen(false)
     setLocation(agentId ?? PROFILE_LOCATION)
     setError(null)
-  }, [open, initial])
+    // Hydrate when the dialog opens or the edited prompt changes.
+    // Do not depend on `initial` itself — callers pass a new object each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initial?.id])
 
   useEffect(() => {
     if (!open || !orgId) {
@@ -180,8 +183,8 @@ export const PromptFormDialog = ({
   }
 
   const handleSave = async () => {
-    const trimmedName = name.trim()
-    const trimmedBody = body.trim()
+    const trimmedName = nameRef.current?.value.trim() ?? ""
+    const trimmedBody = bodyRef.current?.value.trim() ?? ""
     if (!trimmedName) {
       setError(t("prompt_name_required"))
       return
@@ -208,7 +211,7 @@ export const PromptFormDialog = ({
       setError(null)
       const payload = {
         name: trimmedName,
-        description: desc.trim() || null,
+        description: descRef.current?.value.trim() || null,
         body: trimmedBody,
         visibility,
         team_ids: visibility === "team" ? teamIds : [],
@@ -244,8 +247,8 @@ export const PromptFormDialog = ({
             </label>
             <Input
               id="prompt-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
+              ref={nameRef}
+              defaultValue=""
               maxLength={120}
             />
           </div>
@@ -255,8 +258,8 @@ export const PromptFormDialog = ({
             </label>
             <Input
               id="prompt-description"
-              value={desc}
-              onChange={(event) => setDesc(event.target.value)}
+              ref={descRef}
+              defaultValue=""
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -265,8 +268,8 @@ export const PromptFormDialog = ({
             </label>
             <Textarea
               id="prompt-body"
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
+              ref={bodyRef}
+              defaultValue=""
               rows={8}
               className="min-h-32"
             />

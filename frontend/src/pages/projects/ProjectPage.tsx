@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams } from "react-router"
 import {
   ArrowLeft,
@@ -97,9 +97,9 @@ export const ProjectPage = () => {
   const [success, setSuccess] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const [instrName, setInstrName] = useState("")
-  const [instrDescription, setInstrDescription] = useState("")
-  const [instrPrompt, setInstrPrompt] = useState("")
+  const instrNameRef = useRef<HTMLInputElement | null>(null)
+  const instrDescriptionRef = useRef<HTMLInputElement | null>(null)
+  const instrPromptRef = useRef<HTMLTextAreaElement | null>(null)
   const [instrModelId, setInstrModelId] = useState("")
 
   const [sourceFiles, setSourceFiles] = useState<File[]>([])
@@ -125,9 +125,11 @@ export const ProjectPage = () => {
     const found = items.find((item) => item.id === projectId) ?? null
     setProject(found)
     if (found) {
-      setInstrName(found.name)
-      setInstrDescription(found.description ?? "")
-      setInstrPrompt(found.master_prompt ?? "")
+      if (instrNameRef.current) instrNameRef.current.value = found.name
+      if (instrDescriptionRef.current) {
+        instrDescriptionRef.current.value = found.description ?? ""
+      }
+      if (instrPromptRef.current) instrPromptRef.current.value = found.master_prompt ?? ""
       setInstrModelId(found.preferred_model_id ?? "")
     }
     return found
@@ -234,14 +236,14 @@ export const ProjectPage = () => {
   const handleSaveInstructions = () =>
     withBusy(async () => {
       if (!project) return
-      if (!instrName.trim()) {
+      if (!(instrNameRef.current?.value.trim() ?? "")) {
         setError(t("project_name_required"))
         return
       }
       await agentApi.update(project.id, {
-        name: instrName.trim(),
-        description: instrDescription.trim() || null,
-        master_prompt: instrPrompt.trim() || null,
+        name: instrNameRef.current?.value.trim() ?? "",
+        description: instrDescriptionRef.current?.value.trim() || null,
+        master_prompt: instrPromptRef.current?.value.trim() || null,
         preferred_model_id: instrModelId || null,
       })
       await loadProject()
@@ -659,21 +661,20 @@ export const ProjectPage = () => {
         </div>
       ) : null}
 
-      {tab === "instructions" ? (
-        <div className="max-w-2xl space-y-4">
+      <div className={tab === "instructions" ? "max-w-2xl space-y-4" : "hidden"}>
           <div className="space-y-2">
             <label className="text-sm font-medium">{t("project_name_label")}</label>
             <Input
-              value={instrName}
-              onChange={(event) => setInstrName(event.target.value)}
+              ref={instrNameRef}
+              defaultValue={project.name}
               disabled={!canEdit}
             />
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">{t("project_description_label")}</label>
             <Input
-              value={instrDescription}
-              onChange={(event) => setInstrDescription(event.target.value)}
+              ref={instrDescriptionRef}
+              defaultValue={project.description ?? ""}
               placeholder={t("project_description_placeholder")}
               disabled={!canEdit}
             />
@@ -685,9 +686,9 @@ export const ProjectPage = () => {
             </label>
             <p className="text-muted-foreground text-xs">{t("project_custom_instructions_help")}</p>
             <Textarea
+              ref={instrPromptRef}
               rows={8}
-              value={instrPrompt}
-              onChange={(event) => setInstrPrompt(event.target.value)}
+              defaultValue={project.master_prompt ?? ""}
               placeholder={t("project_custom_instructions_placeholder")}
               disabled={!canEdit}
             />
@@ -720,7 +721,6 @@ export const ProjectPage = () => {
             <p className="text-muted-foreground text-sm">{t("project_view_only")}</p>
           )}
         </div>
-      ) : null}
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

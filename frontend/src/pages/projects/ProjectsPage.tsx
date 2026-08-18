@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router"
 import { FolderOpen, Plus, Search } from "lucide-react"
 
@@ -28,8 +28,9 @@ export const ProjectsPage = () => {
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [newName, setNewName] = useState("")
-  const [newInstructions, setNewInstructions] = useState("")
+  const [hasNewName, setHasNewName] = useState(false)
+  const newNameRef = useRef<HTMLInputElement | null>(null)
+  const newInstructionsRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     void (async () => {
@@ -56,7 +57,7 @@ export const ProjectsPage = () => {
   }, [projects, query])
 
   const handleCreate = async () => {
-    const name = newName.trim()
+    const name = newNameRef.current?.value.trim() ?? ""
     if (!name) {
       setError(t("project_name_required"))
       return
@@ -66,11 +67,10 @@ export const ProjectsPage = () => {
       setError(null)
       const created = await agentApi.create({
         name,
-        master_prompt: newInstructions.trim() || null,
+        master_prompt: newInstructionsRef.current?.value.trim() || null,
       })
       setCreateOpen(false)
-      setNewName("")
-      setNewInstructions("")
+      setHasNewName(false)
       navigate(`/projects/${created.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : t("project_create_failed"))
@@ -177,17 +177,28 @@ export const ProjectsPage = () => {
         </div>
       )}
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open)
+          if (!open) setHasNewName(false)
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("project_create_title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <Input
+              key={String(createOpen)}
+              ref={newNameRef}
               autoFocus
               placeholder={t("project_name_placeholder")}
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
+              defaultValue=""
+              onChange={(event) => {
+                const next = event.target.value.trim().length > 0
+                setHasNewName((prev) => (prev === next ? prev : next))
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault()
@@ -196,17 +207,18 @@ export const ProjectsPage = () => {
               }}
             />
             <Textarea
+              key={`instr-${String(createOpen)}`}
+              ref={newInstructionsRef}
               rows={4}
               placeholder={t("project_instructions_placeholder")}
-              value={newInstructions}
-              onChange={(event) => setNewInstructions(event.target.value)}
+              defaultValue=""
             />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               {t("common_cancel")}
             </Button>
-            <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
+            <Button onClick={handleCreate} disabled={creating || !hasNewName}>
               {t("project_create_action")}
             </Button>
           </DialogFooter>

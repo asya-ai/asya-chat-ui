@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import { ChevronDown, ChevronRight, FileText, Loader2, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
@@ -71,6 +71,36 @@ const parseChatDate = (value: string) => {
   return new Date(hasTimezone ? value : `${value}Z`)
 }
 
+const SessionSearchInput = ({
+  placeholder,
+  className,
+  onDebouncedChange,
+}: {
+  placeholder: string
+  className?: string
+  onDebouncedChange: (value: string) => void
+}) => {
+  const [query, setQuery] = useState("")
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      onDebouncedChange(query.trim())
+    }, 250)
+    return () => window.clearTimeout(timerId)
+  }, [query, onDebouncedChange])
+
+  return (
+    <Input
+      value={query}
+      onChange={(event) => setQuery(event.target.value)}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      className={className}
+      onClick={(event) => event.stopPropagation()}
+    />
+  )
+}
+
 export const ChatSidebar = ({
   title,
   labels,
@@ -98,19 +128,19 @@ export const ChatSidebar = ({
   const [agents, setAgents] = useState<Agent[]>([])
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [sectionsOpen, setSectionsOpen] = useState(() => sidebarSectionsStore.get())
-  const [sessionQuery, setSessionQuery] = useState("")
   const [sessionQueryDebounced, setSessionQueryDebounced] = useState("")
   const [renameChat, setRenameChat] = useState<Chat | null>(null)
   const [renameValue, setRenameValue] = useState("")
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [hasNewName, setHasNewName] = useState(false)
+  const newNameRef = useRef<HTMLInputElement | null>(null)
+  const newInstructionsRef = useRef<HTMLTextAreaElement | null>(null)
   const [promptFormOpen, setPromptFormOpen] = useState(false)
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null)
   const [deletePromptTarget, setDeletePromptTarget] = useState<Prompt | null>(null)
   const [deletingPrompt, setDeletingPrompt] = useState(false)
-  const [newName, setNewName] = useState("")
-  const [newInstructions, setNewInstructions] = useState("")
   const [createError, setCreateError] = useState<string | null>(null)
   const { data: searchedChats = [] } = useChatSearch(orgId, sessionQueryDebounced)
   const currentChatId = activeChatId ?? routeChatId ?? null
@@ -150,12 +180,9 @@ export const ChatSidebar = ({
     return null
   }
 
-  useEffect(() => {
-    const timerId = window.setTimeout(() => {
-      setSessionQueryDebounced(sessionQuery.trim())
-    }, 250)
-    return () => window.clearTimeout(timerId)
-  }, [sessionQuery])
+  const handleSessionQueryChange = useCallback((value: string) => {
+    setSessionQueryDebounced(value)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -335,7 +362,7 @@ export const ChatSidebar = ({
   }
 
   const handleCreateSpace = async () => {
-    const name = newName.trim()
+    const name = newNameRef.current?.value.trim() ?? ""
     if (!name) {
       setCreateError(t("project_name_required"))
       return
@@ -345,12 +372,11 @@ export const ChatSidebar = ({
       setCreateError(null)
       const created = await agentApi.create({
         name,
-        master_prompt: newInstructions.trim() || null,
+        master_prompt: newInstructionsRef.current?.value.trim() || null,
       })
       setAgents((prev) => [created, ...prev])
       setCreateOpen(false)
-      setNewName("")
-      setNewInstructions("")
+      setHasNewName(false)
       onRequestClose?.()
       navigate(`/projects/${created.id}`)
     } catch (err) {
@@ -684,7 +710,10 @@ export const ChatSidebar = ({
                     </p>
                   ) : (
                     prompts.map((prompt) => (
-                      <div key={prompt.id} className="group/prompt-item relative">
+                      <div
+                        key={prompt.id}
+                        className="group/prompt-item relative flex h-8 w-full min-w-0 items-center"
+                      >
                         <Button
                           type="button"
                           variant="ghost"
@@ -702,7 +731,7 @@ export const ChatSidebar = ({
                               <Button
                                 type="button"
                                 variant="ghost"
-                                className="absolute right-1 hidden size-6 rounded-md bg-sidebar p-0 hover:bg-sidebar group-hover/prompt-item:flex data-[state=open]:flex"
+                                className="absolute top-1/2 right-1 hidden size-6 -translate-y-1/2 rounded-md bg-sidebar p-0 hover:bg-sidebar group-hover/prompt-item:flex data-[state=open]:flex"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <MoreVertical className="size-4" />
@@ -786,13 +815,10 @@ export const ChatSidebar = ({
                       aria-hidden="true"
                       className="pointer-events-none absolute left-4 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
                     />
-                    <Input
-                      value={sessionQuery}
-                      onChange={(event) => setSessionQuery(event.target.value)}
+                    <SessionSearchInput
                       placeholder={t("chat_search_placeholder")}
-                      aria-label={t("chat_search_placeholder")}
                       className="h-8 bg-background pl-8 text-sm"
-                      onClick={(event) => event.stopPropagation()}
+                      onDebouncedChange={handleSessionQueryChange}
                     />
                   </div>
                   {sessionGroups.length === 0 ? (
@@ -914,8 +940,7 @@ export const ChatSidebar = ({
           setCreateOpen(open)
           if (!open) {
             setCreateError(null)
-            setNewName("")
-            setNewInstructions("")
+            setHasNewName(false)
           }
         }}
       >
@@ -925,10 +950,15 @@ export const ChatSidebar = ({
           </DialogHeader>
           <div className="space-y-3">
             <Input
+              key={String(createOpen)}
+              ref={newNameRef}
               autoFocus
               placeholder={t("project_name_placeholder")}
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
+              defaultValue=""
+              onChange={(event) => {
+                const next = event.target.value.trim().length > 0
+                setHasNewName((prev) => (prev === next ? prev : next))
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault()
@@ -937,10 +967,11 @@ export const ChatSidebar = ({
               }}
             />
             <Textarea
+              key={`instr-${String(createOpen)}`}
+              ref={newInstructionsRef}
               rows={4}
               placeholder={t("project_instructions_placeholder")}
-              value={newInstructions}
-              onChange={(event) => setNewInstructions(event.target.value)}
+              defaultValue=""
             />
             {createError ? (
               <p className="text-destructive text-sm">{createError}</p>
@@ -952,7 +983,7 @@ export const ChatSidebar = ({
             </Button>
             <Button
               onClick={() => void handleCreateSpace()}
-              disabled={creating || !newName.trim()}
+              disabled={creating || !hasNewName}
             >
               {t("project_create_action")}
             </Button>
