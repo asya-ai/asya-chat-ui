@@ -1,14 +1,24 @@
 import { Fragment, useEffect, useMemo, useState, type SetStateAction } from "react"
 import { useLocation, useNavigate } from "react-router"
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { authApi, orgApi, usageApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
 import { SettingsShell } from "@/components/SettingsShell"
-import type { Org, UsageSlice } from "@/lib/types"
+import type { Org, UsageDailyPoint, UsageSlice } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
 const getCurrentMonth = () => {
@@ -25,13 +35,17 @@ export const UsagePage = () => {
   const [orgs, setOrgs] = useState<Org[]>([])
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [authChecked, setAuthChecked] = useState(false)
   const orgId = orgStore.get()
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(orgId)
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>("all")
   const [monthOptions, setMonthOptions] = useState<string[]>([])
   const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonth)
   const [expandedModels, setExpandedModels] = useState<Set<string>>(() => new Set())
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(() => new Set())
   const [expandedOrgs, setExpandedOrgs] = useState<Set<string>>(() => new Set())
+  const [dailyPoints, setDailyPoints] = useState<UsageDailyPoint[]>([])
+  const [rowDaily, setRowDaily] = useState<Record<string, UsageDailyPoint[]>>({})
+  const [rowDailyLoading, setRowDailyLoading] = useState<Set<string>>(() => new Set())
   const { t, locale } = useI18n()
 
   type SortKey =
@@ -60,7 +74,7 @@ export const UsagePage = () => {
 
   const scopeOptions = useMemo(() => {
     if (!isSuperAdmin) return []
-    return [{ id: "all", name: t("usage_all_orgs") }, ...orgs]
+    return [{ id: "all", name: t("usage_entire_instance") }, ...orgs]
   }, [isSuperAdmin, orgs, t])
 
   useEffect(() => {
@@ -71,6 +85,7 @@ export const UsagePage = () => {
         setIsAdmin(me.is_admin)
       })
       .catch(() => null)
+      .finally(() => setAuthChecked(true))
   }, [])
 
   useEffect(() => {
@@ -85,6 +100,7 @@ export const UsagePage = () => {
     : orgId
 
   useEffect(() => {
+    if (!authChecked) return
     if (!isSuperAdmin && !orgId) {
       navigate("/settings")
       return
@@ -104,18 +120,25 @@ export const UsagePage = () => {
       usageApi.summary(scopedOrgId ?? null, "model", month),
       usageApi.summary(scopedOrgId ?? null, "user", month),
       isSuperAdmin ? usageApi.summary(null, "org", month) : Promise.resolve([]),
+      usageApi.daily(scopedOrgId ?? null, month),
     ])
-      .then(([modelRows, userRows, orgRows]) => {
+      .then(([modelRows, userRows, orgRows, dailyRows]) => {
         setRowsByModel(modelRows ?? [])
         setRowsByUser(userRows ?? [])
         setRowsByOrg(orgRows ?? [])
+        setDailyPoints(dailyRows ?? [])
+        setRowDaily({})
+        setRowDailyLoading(new Set())
       })
       .catch(() => {
         setRowsByModel([])
         setRowsByUser([])
         setRowsByOrg([])
+        setDailyPoints([])
+        setRowDaily({})
+        setRowDailyLoading(new Set())
       })
-  }, [isSuperAdmin, navigate, orgId, scopedOrgId, selectedMonth])
+  }, [authChecked, isSuperAdmin, navigate, orgId, scopedOrgId, selectedMonth])
 
   const sortRows = (rows: UsageSlice[], sort: SortState) => {
     const sorted = [...rows]
@@ -176,6 +199,167 @@ export const UsagePage = () => {
     }).format(value)
   }
 
+  const formatCompact = (value: number) =>
+    new Intl.NumberFormat(locale ?? "en", {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(value)
+
+  const formatDay = (value: string) => {
+    const parsed = new Date(`${value}T00:00:00Z`)
+    if (Number.isNaN(parsed.getTime())) return value
+    return parsed.toLocaleDateString(locale ?? "en", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    })
+  }
+
+  const tokenChartConfig = {
+    input_tokens: { label: t("usage_input"), color: "var(--chart-1)" },
+    output_tokens: { label: t("usage_output"), color: "var(--chart-2)" },
+    cached_tokens: { label: t("usage_cached"), color: "var(--chart-3)" },
+    thinking_tokens: { label: t("usage_thinking"), color: "var(--chart-4)" },
+  } satisfies ChartConfig
+
+  const costChartConfig = {
+    cost_usd: { label: t("usage_cost"), color: "var(--chart-5)" },
+  } satisfies ChartConfig
+
+  const monthParam = selectedMonth === "all" ? undefined : selectedMonth
+
+  const rowDailyCacheKey = (kind: "model" | "user" | "org", row: UsageSlice) => {
+    const orgId = kind === "org" ? row.id : scopedOrgId
+    return `${kind}:${row.id ?? row.key}:${orgId ?? "all"}:${monthParam ?? "all"}`
+  }
+
+  const ensureRowDaily = (kind: "model" | "user" | "org", row: UsageSlice) => {
+    if (!row.id) return
+    const cacheKey = rowDailyCacheKey(kind, row)
+    if (cacheKey in rowDaily || rowDailyLoading.has(cacheKey)) return
+    const orgId = kind === "org" ? row.id : scopedOrgId ?? null
+    setRowDailyLoading((current) => {
+      const next = new Set(current)
+      next.add(cacheKey)
+      return next
+    })
+    usageApi
+      .daily(orgId, monthParam, {
+        userId: kind === "user" ? row.id : undefined,
+        modelId: kind === "model" ? row.id : undefined,
+      })
+      .then((points) => {
+        setRowDaily((current) => ({ ...current, [cacheKey]: points ?? [] }))
+      })
+      .catch(() => {
+        setRowDaily((current) => ({ ...current, [cacheKey]: [] }))
+      })
+      .finally(() => {
+        setRowDailyLoading((current) => {
+          const next = new Set(current)
+          next.delete(cacheKey)
+          return next
+        })
+      })
+  }
+
+  const renderDailyCharts = (points: UsageDailyPoint[] | undefined, compact = false) => {
+    if (points === undefined) {
+      return <Skeleton className={compact ? "h-56 w-full" : "h-70 w-full"} />
+    }
+    if (points.length === 0) {
+      return <p className="text-muted-foreground">{t("usage_no_daily_data")}</p>
+    }
+    const chartClassName = compact ? "aspect-auto h-56 w-full" : "aspect-auto h-70 w-full"
+    return (
+      <div className={compact ? "grid gap-4 xl:grid-cols-2" : "grid gap-6 xl:grid-cols-2"}>
+        <div className="flex flex-col gap-2">
+          <div className="text-muted-foreground">{t("usage_chart_tokens")}</div>
+          <ChartContainer config={tokenChartConfig} className={chartClassName}>
+            <BarChart accessibilityLayer data={points}>
+              <CartesianGrid vertical={false} />
+              <XAxis
+                dataKey="date"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={24}
+                tickFormatter={formatDay}
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                width={48}
+                tickFormatter={formatCompact}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(_, payload) => {
+                      const day = payload?.[0]?.payload?.date
+                      return typeof day === "string" ? formatDay(day) : ""
+                    }}
+                  />
+                }
+              />
+              <ChartLegend content={<ChartLegendContent />} />
+              <Bar dataKey="input_tokens" stackId="tokens" fill="var(--color-input_tokens)" />
+              <Bar dataKey="output_tokens" stackId="tokens" fill="var(--color-output_tokens)" />
+              <Bar dataKey="cached_tokens" stackId="tokens" fill="var(--color-cached_tokens)" />
+              <Bar
+                dataKey="thinking_tokens"
+                stackId="tokens"
+                fill="var(--color-thinking_tokens)"
+                radius={[4, 4, 0, 0]}
+              />
+            </BarChart>
+          </ChartContainer>
+        </div>
+        <div className="flex flex-col gap-2">
+          <div className="text-muted-foreground">{t("usage_chart_cost")}</div>
+          <ChartContainer config={costChartConfig} className={chartClassName}>
+            <BarChart accessibilityLayer data={points}>
+              <CartesianGrid vertical={false} />
+              <XAxis
+                dataKey="date"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={24}
+                tickFormatter={formatDay}
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                width={48}
+                tickFormatter={(value) => formatCost(Number(value))}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(_, payload) => {
+                      const day = payload?.[0]?.payload?.date
+                      return typeof day === "string" ? formatDay(day) : ""
+                    }}
+                    formatter={(value) => (
+                      <div className="flex flex-1 items-center justify-between gap-8">
+                        <span className="text-muted-foreground">{t("usage_cost")}</span>
+                        <span className="font-mono font-medium text-foreground tabular-nums">
+                          {typeof value === "number" ? formatCost(value) : "—"}
+                        </span>
+                      </div>
+                    )}
+                  />
+                }
+              />
+              <Bar dataKey="cost_usd" fill="var(--color-cost_usd)" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        </div>
+      </div>
+    )
+  }
+
   const toggleExpanded = (
     key: string,
     setExpandedRows: (value: SetStateAction<Set<string>>) => void
@@ -200,6 +384,7 @@ export const UsagePage = () => {
       showCost?: boolean
       expandedRows?: Set<string>
       setExpandedRows?: (value: SetStateAction<Set<string>>) => void
+      dailyKind?: "model" | "user" | "org"
     }
   ) => (
     <Card>
@@ -237,11 +422,17 @@ export const UsagePage = () => {
             {sortRows(rows, sort).map((row) => {
               const breakdown = row.breakdown ?? []
               const setExpandedRows = options?.setExpandedRows
-              const isExpandable = Boolean(setExpandedRows && breakdown.length)
-              const isExpanded = Boolean(options?.expandedRows?.has(row.key))
+              const rowIdentity = row.id ?? row.key
+              const canShowDaily = Boolean(options?.dailyKind && row.id)
+              const isExpandable = Boolean(setExpandedRows && (breakdown.length || canShowDaily))
+              const isExpanded = Boolean(options?.expandedRows?.has(rowIdentity))
+              const dailyCacheKey = options?.dailyKind
+                ? rowDailyCacheKey(options.dailyKind, row)
+                : ""
+              const colSpan = options?.showCost ? 7 : 6
               return (
-                <Fragment key={row.key}>
-                  <TableRow key={row.key}>
+                <Fragment key={rowIdentity}>
+                  <TableRow>
                     <TableCell>
                       {isExpandable ? (
                         <Button
@@ -250,7 +441,11 @@ export const UsagePage = () => {
                           size="sm"
                           className="h-auto justify-start gap-2 px-0"
                           onClick={() => {
-                            if (setExpandedRows) toggleExpanded(row.key, setExpandedRows)
+                            if (!setExpandedRows) return
+                            if (!isExpanded && options?.dailyKind) {
+                              ensureRowDaily(options.dailyKind, row)
+                            }
+                            toggleExpanded(rowIdentity, setExpandedRows)
                           }}
                         >
                           <span className="text-muted-foreground">
@@ -269,9 +464,17 @@ export const UsagePage = () => {
                     <TableCell>{formatTokens(row.total_tokens)}</TableCell>
                     {options?.showCost ? <TableCell>{formatCost(row.cost_usd)}</TableCell> : null}
                   </TableRow>
-                  {isExpanded
-                    ? sortRows(breakdown, sort).map((child, index) => (
-                        <TableRow key={`${row.key}-${child.key}-${index}`}>
+                  {isExpanded ? (
+                    <>
+                      {canShowDaily ? (
+                        <TableRow>
+                          <TableCell colSpan={colSpan}>
+                            {renderDailyCharts(rowDaily[dailyCacheKey], true)}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                      {sortRows(breakdown, sort).map((child, index) => (
+                        <TableRow key={`${rowIdentity}-${child.key}-${index}`}>
                           <TableCell className="pl-8 text-muted-foreground">
                             {child.key}
                           </TableCell>
@@ -284,8 +487,9 @@ export const UsagePage = () => {
                             <TableCell>{formatCost(child.cost_usd)}</TableCell>
                           ) : null}
                         </TableRow>
-                      ))
-                    : null}
+                      ))}
+                    </>
+                  ) : null}
                 </Fragment>
               )
             })}
@@ -340,7 +544,7 @@ export const UsagePage = () => {
       title={t("usage_title")}
       items={navItems}
       actions={
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {isSuperAdmin ? (
             <Select
               value={selectedOrgId ?? "all"}
@@ -387,21 +591,34 @@ export const UsagePage = () => {
       }
     >
       <div className="flex flex-col gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {scopedOrgId
+                ? orgs.find((org) => org.id === scopedOrgId)?.name ?? t("usage_entire_org")
+                : t("usage_entire_instance")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>{renderDailyCharts(dailyPoints)}</CardContent>
+        </Card>
         {renderTable(t("usage_block_models"), rowsByModel, sortModel, setSortModel, {
           showCost: true,
           expandedRows: expandedModels,
           setExpandedRows: setExpandedModels,
+          dailyKind: "model",
         })}
         {renderTable(t("usage_block_users"), rowsByUser, sortUser, setSortUser, {
           showCost: true,
           expandedRows: expandedUsers,
           setExpandedRows: setExpandedUsers,
+          dailyKind: "user",
         })}
         {isSuperAdmin ? (
           renderTable(t("usage_block_orgs"), rowsByOrg, sortOrg, setSortOrg, {
             showCost: true,
             expandedRows: expandedOrgs,
             setExpandedRows: setExpandedOrgs,
+            dailyKind: "org",
           })
         ) : null}
       </div>

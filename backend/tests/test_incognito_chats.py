@@ -55,6 +55,7 @@ def test_incognito_deletion_detaches_usage_event_links() -> None:
     statements = "\n".join(str(statement) for statement in session.statements)
     assert "UPDATE usage_events SET chat_id=:chat_id" in statements
     assert "UPDATE usage_events SET message_id=:message_id" in statements
+    assert "DELETE FROM chat_cowork_documents" in statements
     assert session.deleted == [chat]
 
 

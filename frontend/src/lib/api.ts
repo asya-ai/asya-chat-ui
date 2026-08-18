@@ -22,6 +22,8 @@ import type {
   OrgAuthSettings,
   OrgAuthSettingsUpdate,
   UsageSlice,
+  UsageDailyPoint,
+  UsageUserOption,
   SystemDiagnosis,
   ApiKey,
   UserMemory,
@@ -482,11 +484,12 @@ export const orgApi = {
 }
 
 export const usageApi = {
-  summary: (orgId: string | null, groupBy: string, month?: string) => {
+  summary: (orgId: string | null, groupBy: string, month?: string, userId?: string) => {
     const params = new URLSearchParams()
     if (orgId) params.set("org_id", orgId)
     if (groupBy) params.set("group_by", groupBy)
     if (month) params.set("month", month)
+    if (userId) params.set("user_id", userId)
     const query = params.toString()
     return apiFetch<UsageSlice[]>(`/usage${query ? `?${query}` : ""}`)
   },
@@ -495,6 +498,25 @@ export const usageApi = {
     if (orgId) params.set("org_id", orgId)
     const query = params.toString()
     return apiFetch<string[]>(`/usage/months${query ? `?${query}` : ""}`)
+  },
+  users: (orgId: string | null) => {
+    const params = new URLSearchParams()
+    if (orgId) params.set("org_id", orgId)
+    const query = params.toString()
+    return apiFetch<UsageUserOption[]>(`/usage/users${query ? `?${query}` : ""}`)
+  },
+  daily: (
+    orgId: string | null,
+    month?: string,
+    filters?: { userId?: string; modelId?: string }
+  ) => {
+    const params = new URLSearchParams()
+    if (orgId) params.set("org_id", orgId)
+    if (month) params.set("month", month)
+    if (filters?.userId) params.set("user_id", filters.userId)
+    if (filters?.modelId) params.set("model_id", filters.modelId)
+    const query = params.toString()
+    return apiFetch<UsageDailyPoint[]>(`/usage/daily${query ? `?${query}` : ""}`)
   },
 }
 

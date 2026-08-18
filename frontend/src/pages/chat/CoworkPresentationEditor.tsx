@@ -99,21 +99,30 @@ div.marpit {
   margin: 0 !important;
   padding: 0 !important;
 }
-.cowork-marp-host .marpit > svg[data-marpit-svg],
-div.marpit > svg[data-marpit-svg] {
-  display: block !important;
-  width: 100% !important;
-  max-width: 52rem !important;
-  height: auto !important;
-  max-height: none !important;
-  margin: 0 auto !important;
+/* Card chrome lives on HTML, not the Marp SVG. A white SVG backdrop plus
+   border-radius leaks a 1px seam on dark slides (subpixel + anti-alias). */
+.cowork-marp-slide {
+  display: block;
+  width: 100%;
+  max-width: 52rem;
+  margin: 0 auto;
+  overflow: hidden;
   border-radius: 0.5rem;
+  line-height: 0;
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.06),
     0 8px 24px rgb(0 0 0 / 0.08);
-  background: #fff;
+}
+.cowork-marp-host .marpit > .cowork-marp-slide > svg[data-marpit-svg],
+div.marpit > .cowork-marp-slide > svg[data-marpit-svg] {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: none !important;
+  margin: 0 !important;
+  background: transparent !important;
   overflow: hidden;
-  aspect-ratio: 16 / 9;
 }
 .cowork-marp-mermaid {
   display: flex;
@@ -254,6 +263,8 @@ export const CoworkPresentationEditor = ({
       new Marp({
         html: true,
         script: false,
+        // App owns SVG chrome (radius/shadow); don't let theme ::backdrop paint it.
+        inlineSVG: { backdropSelector: false },
       }),
     []
   )
@@ -287,6 +298,15 @@ export const CoworkPresentationEditor = ({
       `<style>${SHADOW_RESET_CSS}\n${rendered.css}\n${PREVIEW_LAYOUT_CSS}</style>`,
       `<div class="cowork-marp-host">${rendered.html}</div>`,
     ].join("")
+
+    for (const svg of shadow.querySelectorAll(
+      ".cowork-marp-host .marpit > svg[data-marpit-svg]"
+    )) {
+      const wrap = document.createElement("div")
+      wrap.className = "cowork-marp-slide"
+      svg.replaceWith(wrap)
+      wrap.appendChild(svg)
+    }
 
     let cancelled = false
     void (async () => {

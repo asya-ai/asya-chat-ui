@@ -42,6 +42,7 @@ from app.models.entities import (
     AgentSource,
     AgentSourceStatus,
     Chat,
+    ChatCoworkDocument,
     ChatGenerationEvent,
     ChatGenerationTask,
     ChatMessage,
@@ -1463,6 +1464,9 @@ def _delete_expired_chat(session: Session, chat: Chat) -> None:
         )
     session.exec(delete(ChatGenerationTask).where(ChatGenerationTask.chat_id == chat.id))
     session.exec(delete(ChatViewEvent).where(ChatViewEvent.chat_id == chat.id))
+    session.exec(
+        delete(ChatCoworkDocument).where(ChatCoworkDocument.chat_id == chat.id)
+    )
     if message_ids:
         session.exec(
             update(ChatMessage)

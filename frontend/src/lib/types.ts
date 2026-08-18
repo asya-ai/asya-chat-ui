@@ -363,6 +363,7 @@ export type AssistantStreamPart =
 
 export type UsageSlice = {
   key: string
+  id?: string | null
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
@@ -372,6 +373,23 @@ export type UsageSlice = {
   thinking_tokens: number
   cost_usd?: number | null
   breakdown?: UsageSlice[]
+}
+
+export type UsageDailyPoint = {
+  date: string
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  input_tokens: number
+  output_tokens: number
+  cached_tokens: number
+  thinking_tokens: number
+  cost_usd?: number | null
+}
+
+export type UsageUserOption = {
+  user_id: string
+  name: string
 }
 
 export type EnvKeyDiagnosis = {
