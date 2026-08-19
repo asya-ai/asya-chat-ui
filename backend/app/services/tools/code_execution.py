@@ -78,6 +78,32 @@ DEFAULT_ALLOWLIST = {
     "polars",
 }
 ALLOWED_IMPORTS_HINT = ", ".join(sorted(DEFAULT_ALLOWLIST))
+BLOCKED_IMPORTS = frozenset({"subprocess"})
+
+# Container entrypoint: stub blocked stdlib, put cowork on path, then run user code.
+_EXEC_BOOTSTRAP = f"""\
+import runpy
+import sys
+import types
+
+_COWORK_PATH = "/workspace/cowork"
+if _COWORK_PATH not in sys.path:
+    sys.path.append(_COWORK_PATH)
+
+
+class _BlockedModule(types.ModuleType):
+    def __getattr__(self, name):
+        return self
+
+    def __call__(self, *args, **kwargs):
+        raise RuntimeError(f"{{self.__name__}} is not allowed in the sandbox")
+
+
+for _name in {set(BLOCKED_IMPORTS)!r}:
+    sys.modules[_name] = _BlockedModule(_name)
+
+runpy.run_path("/workspace/main.py", run_name="__main__")
+"""
 
 # Docker replaces its default MaskedPaths when this is set — keep defaults + harden.
 _EXEC_MASKED_PATHS = (
@@ -166,12 +192,32 @@ def _auto_display_last_expr(code: str) -> str:
     return "\n".join(lines[:start]) + "\n" + replacement + "\n" + "\n".join(lines[end:])
 
 
-def _validate_imports(code: str) -> None:
+def _cowork_module_names(docs: Iterable[ChatCoworkDocument]) -> set[str]:
+    """Importable module names for cowork ``*.py`` files staged under /workspace/cowork."""
+    names: set[str] = set()
+    used_names: set[str] = set()
+    for doc in docs:
+        safe = _sanitize_filename(doc.file_name or "document.txt")
+        if safe.lower() in used_names or safe.lower() == "manifest.json":
+            safe = f"{doc.id}_{safe}"
+        used_names.add(safe.lower())
+        if not safe.lower().endswith(".py"):
+            continue
+        stem = Path(safe).stem
+        if stem.isidentifier():
+            names.add(stem.lower())
+    return names
+
+
+def _validate_imports(code: str, extra_allowed: Iterable[str] | None = None) -> None:
     allowlist = {name.lower() for name in DEFAULT_ALLOWLIST}
+    extra = {name.lower() for name in (extra_allowed or ())}
     stdlib = {name.lower() for name in sys.stdlib_module_names}
     for module in _collect_imports(code):
         base = module.split(".")[0].lower()
-        if base in stdlib or base in allowlist:
+        if base in BLOCKED_IMPORTS:
+            raise ValueError(f"Import not allowed: {module}.")
+        if base in stdlib or base in allowlist or base in extra:
             continue
         raise ValueError(
             f"Import not allowed: {module}. "
@@ -747,7 +793,7 @@ def _run_container(
         host_config["MaskedPaths"] = list(_EXEC_MASKED_PATHS)
         resp = client.api.create_container(
             settings.exec_docker_image,
-            command=["python", "/workspace/main.py"],
+            command=["python", "/workspace/_sandbox_bootstrap.py"],
             working_dir="/workspace",
             user="65534:65534",
             labels=labels,
@@ -812,12 +858,14 @@ async def run_code_execution(
             name="code_execution",
             output={"error": "Code exceeds maximum length."},
         )
+
+    chat_uuid = UUID(context.chat_id)
+    cowork_docs = list_documents(context.session, chat_uuid)
     try:
-        _validate_imports(code)
+        _validate_imports(code, extra_allowed=_cowork_module_names(cowork_docs))
     except ValueError as exc:
         return ToolResult(name="code_execution", output={"error": str(exc)})
 
-    chat_uuid = UUID(context.chat_id)
     message_ids = context.session.exec(
         select(ChatMessage.id).where(ChatMessage.chat_id == chat_uuid)
     ).all()
@@ -872,13 +920,13 @@ async def run_code_execution(
             )
             inputs = inputs + project_inputs
 
-    cowork_docs = list_documents(context.session, chat_uuid)
     cowork_files, cowork_path_to_id, cowork_snapshots = _write_cowork_workspace(
         cowork_docs, work_dir
     )
 
     code_path = work_dir / "main.py"
     code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
+    (work_dir / "_sandbox_bootstrap.py").write_text(_EXEC_BOOTSTRAP, encoding="utf-8")
     def _runner():
         return _run_container(
             host_inputs_dir=host_inputs_dir,

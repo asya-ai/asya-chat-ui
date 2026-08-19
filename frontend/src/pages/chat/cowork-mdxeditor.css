@@ -246,3 +246,9 @@
 .cowork-md-editor table[class*="tableEditor"] th p {
   margin: 0;
 }
+
+/* Fallback code-block editors (unknown fence languages) */
+.cowork-mdxeditor .cm-editor {
+  background: var(--muted);
+  font-size: 0.8125rem;
+}

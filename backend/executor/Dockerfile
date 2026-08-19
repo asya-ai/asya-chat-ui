@@ -34,4 +34,4 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 RUN useradd -m -u 10001 runner
 USER runner
 
-CMD ["python", "/workspace/main.py"]
+CMD ["python", "/workspace/_sandbox_bootstrap.py"]

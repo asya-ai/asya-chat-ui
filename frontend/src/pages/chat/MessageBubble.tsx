@@ -178,6 +178,112 @@ const normalizeMathContent = (content: string) => {
   return output.join("\n").replace(/\\text\{([→\-–—]+)\}/g, (_, value) => value)
 }
 
+const OPEN_FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/
+
+const markdownEndsInsideFence = (markdown: string): boolean => {
+  const lines = markdown.split("\n")
+  let inFence = false
+  let fenceChar = ""
+  let fenceLen = 0
+  for (const line of lines) {
+    const match = line.match(OPEN_FENCE)
+    if (!inFence) {
+      if (match) {
+        inFence = true
+        fenceChar = match[2][0] ?? "`"
+        fenceLen = match[2].length
+      }
+      continue
+    }
+    if (
+      match &&
+      (match[2][0] ?? "") === fenceChar &&
+      match[2].length >= fenceLen &&
+      match[3].trim() === ""
+    ) {
+      inFence = false
+    }
+  }
+  return inFence
+}
+
+const splitPipeCells = (line: string): string[] => {
+  const trimmed = line.trim()
+  const parts = trimmed.split("|")
+  if (trimmed.startsWith("|")) parts.shift()
+  if (trimmed.endsWith("|")) parts.pop()
+  return parts
+}
+
+const looksLikeDelimiterRow = (line: string): boolean => {
+  const cells = splitPipeCells(line)
+  if (cells.length === 0) return false
+  return (
+    cells.some((cell) => cell.includes("-")) &&
+    cells.every((cell) => /^[\s:-]*$/.test(cell))
+  )
+}
+
+const formatDelimiterCell = (cell: string): string => {
+  const trimmed = cell.trim()
+  const left = trimmed.startsWith(":")
+  const right = trimmed.endsWith(":")
+  return ` ${left ? ":" : ""}---${right ? ":" : ""} `
+}
+
+const pipeRow = (cells: string[]): string => `|${cells.join("|")}|`
+
+const padPipeRow = (line: string, columnCount: number): string => {
+  const cells = splitPipeCells(line)
+  while (cells.length < columnCount) cells.push(" ")
+  return pipeRow(cells)
+}
+
+const delimiterRow = (columnCount: number, source?: string): string => {
+  const cells = source ? splitPipeCells(source) : []
+  while (cells.length < columnCount) cells.push(" --- ")
+  return pipeRow(cells.slice(0, Math.max(columnCount, cells.length)).map(formatDelimiterCell))
+}
+
+/** Close a trailing GFM table so remark-gfm can render it while the model is still streaming. */
+const completeStreamingMarkdownTables = (markdown: string): string => {
+  if (!markdown.includes("|") || markdownEndsInsideFence(markdown)) return markdown
+
+  const lines = markdown.split("\n")
+  let end = lines.length
+  while (end > 0 && lines[end - 1].trim() === "") end--
+  if (end === 0) return markdown
+
+  const isPipeRow = (line: string) => /^\s*\|/.test(line)
+  let start = end
+  while (start > 0 && isPipeRow(lines[start - 1])) start--
+  if (start === end) return markdown
+
+  const table = lines.slice(start, end)
+  const headerCells = splitPipeCells(table[0])
+  if (headerCells.every((cell) => !cell.trim()) && table.length === 1) return markdown
+
+  const columnCount = Math.max(1, headerCells.length)
+  let delimiterIndex = table.findIndex((line, index) => index > 0 && looksLikeDelimiterRow(line))
+  table[0] = padPipeRow(table[0], columnCount)
+  if (delimiterIndex === -1) {
+    table.splice(1, 0, delimiterRow(columnCount))
+    delimiterIndex = 1
+  } else {
+    table[delimiterIndex] = delimiterRow(
+      Math.max(columnCount, splitPipeCells(table[delimiterIndex]).length),
+      table[delimiterIndex]
+    )
+  }
+
+  const lastIndex = table.length - 1
+  if (lastIndex > delimiterIndex) {
+    table[lastIndex] = padPipeRow(table[lastIndex], columnCount)
+  }
+
+  return [...lines.slice(0, start), ...table, ...lines.slice(end)].join("\n")
+}
+
 const toMermaidChart = (content: string, language?: string | null): string | null => {
   if (language?.toLowerCase() === "mermaid") {
     return content.trim()
@@ -891,17 +997,21 @@ const DeferredMarkdown = ({
   components: ComponentProps<typeof ReactMarkdown>["components"]
 }) => {
   const [ready, setReady] = useState(urgent)
-  const normalized = useMemo(() => normalizeMathContent(markdown), [markdown])
+  const normalized = useMemo(
+    () => completeStreamingMarkdownTables(normalizeMathContent(markdown)),
+    [markdown]
+  )
 
   useEffect(() => {
     if (urgent) {
       setReady(true)
       return
     }
-    setReady(false)
+    // Keep an already-rendered tree; flashing raw pipes after stream-end looks broken.
+    if (ready) return
     const cancel = scheduleIdle(() => setReady(true), 64)
     return cancel
-  }, [markdown, urgent])
+  }, [markdown, urgent, ready])
 
   if (!ready) {
     return (

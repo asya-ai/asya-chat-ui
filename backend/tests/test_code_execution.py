@@ -8,7 +8,9 @@ from uuid import UUID, uuid4
 from app.models import AgentSource, AgentSourceKind, AgentSourceStatus, ChatMessageAttachment
 from app.models.entities import ChatCoworkDocument, CoworkFormat
 from app.services.tools.code_execution import (
+    _EXEC_BOOTSTRAP,
     _collect_outputs,
+    _cowork_module_names,
     _sync_cowork_workspace,
     _validate_imports,
     _write_cowork_workspace,
@@ -109,6 +111,101 @@ def test_validate_imports_blocks_network_and_host_introspection() -> None:
             assert "Import not allowed" in str(exc)
         else:
             raise AssertionError(f"Expected import rejection for: {code}")
+
+
+def test_validate_imports_blocks_subprocess() -> None:
+    for code in (
+        "import subprocess",
+        "import subprocess as sp",
+        "from subprocess import run",
+        "from subprocess import Popen, PIPE",
+    ):
+        try:
+            _validate_imports(code)
+        except ValueError as exc:
+            assert "subprocess" in str(exc).lower()
+        else:
+            raise AssertionError(f"Expected import rejection for: {code}")
+    try:
+        _validate_imports("import subprocess", extra_allowed={"subprocess"})
+    except ValueError as exc:
+        assert "subprocess" in str(exc).lower()
+    else:
+        raise AssertionError("subprocess must stay blocked even if extra_allowed")
+
+
+def test_validate_imports_allows_cowork_modules() -> None:
+    _validate_imports(
+        "import process_trs\nfrom process_trs import process_file_pair\nimport pandas as pd",
+        extra_allowed={"process_trs"},
+    )
+
+
+def test_validate_imports_rejects_unknown_local_module() -> None:
+    try:
+        _validate_imports("import process_trs")
+    except ValueError as exc:
+        assert "Import not allowed" in str(exc)
+    else:
+        raise AssertionError("Expected import rejection for process_trs")
+
+
+def test_cowork_module_names_from_py_files() -> None:
+    py_doc = ChatCoworkDocument(
+        chat_id=uuid4(),
+        title="TRS",
+        file_name="process_trs.py",
+        format=CoworkFormat.code,
+        content="def process_file_pair():\n    return True\n",
+    )
+    csv_doc = ChatCoworkDocument(
+        chat_id=uuid4(),
+        title="Sales",
+        file_name="sales.csv",
+        format=CoworkFormat.csv,
+        content="a,b\n1,2\n",
+    )
+    assert _cowork_module_names([py_doc, csv_doc]) == {"process_trs"}
+
+
+def test_exec_bootstrap_blocks_subprocess_and_adds_cowork_path(tmp_path) -> None:
+    import subprocess as host_subprocess
+    import sys
+
+    cowork_dir = tmp_path / "cowork"
+    cowork_dir.mkdir()
+    (cowork_dir / "process_trs.py").write_text(
+        "import subprocess\nVALUE = 42\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text(
+        "import process_trs\n"
+        "print('cowork', process_trs.VALUE)\n"
+        "try:\n"
+        "    import subprocess\n"
+        "    subprocess.run(['true'])\n"
+        "except RuntimeError:\n"
+        "    print('blocked')\n"
+        "else:\n"
+        "    raise SystemExit('subprocess.run succeeded')\n",
+        encoding="utf-8",
+    )
+    bootstrap = (
+        _EXEC_BOOTSTRAP.replace("/workspace/cowork", str(cowork_dir)).replace(
+            "/workspace/main.py", str(tmp_path / "main.py")
+        )
+    )
+    (tmp_path / "_sandbox_bootstrap.py").write_text(bootstrap, encoding="utf-8")
+    result = host_subprocess.run(
+        [sys.executable, str(tmp_path / "_sandbox_bootstrap.py")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "cowork 42" in result.stdout
+    assert "blocked" in result.stdout
 
 
 def test_write_inputs_stages_raw_attachments_without_preprocessing(tmp_path) -> None:

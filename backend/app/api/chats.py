@@ -310,10 +310,12 @@ def _prepend_tool_guidance(
                 "content": (
                     "Co-editing documents are available inside code_execution at "
                     "/workspace/cowork/ (paths listed in the tool result as cowork_files, "
-                    "and in /workspace/cowork/manifest.json). You may read and overwrite "
-                    "those files; changes sync back to the shared editor. Use code_execution "
-                    "for analysis, CSV/Excel transforms, plotting from cowork data, and other "
-                    "programmatic edits; keep using cowork_str_replace for small textual patches."
+                    "and in /workspace/cowork/manifest.json). That directory is on sys.path, "
+                    "so .py cowork files can be imported by module name. subprocess is not "
+                    "available. You may read and overwrite those files; changes sync back to "
+                    "the shared editor. Use code_execution for analysis, CSV/Excel transforms, "
+                    "plotting from cowork data, and other programmatic edits; keep using "
+                    "cowork_str_replace for small textual patches."
                 ),
             }
         )
@@ -322,9 +324,16 @@ def _prepend_tool_guidance(
             {
                 "role": "system",
                 "content": (
-                    "When the user asks you to write code, a document, report, presentation, "
-                    "or other editable artifact, call start_coworking to open a shared editor, then "
-                    "edit it with cowork tools. "
+                    "Do not open a co-editing document by default. Answer in the chat for "
+                    "questions, comparisons, explanations, research, short snippets, and analysis. "
+                    "Call start_coworking only when the user clearly wants a shared, editable, or "
+                    "downloadable artifact — for example they ask you to write/create a file, "
+                    "report, spreadsheet, slide deck, or substantial code they will keep editing. "
+                    "Never use coworking as a scratchpad for your own notes or as a place to dump "
+                    "an answer that belongs in the chat. "
+                    "If a coworking document is already open and the user is iterating on it, keep "
+                    "editing that document. "
+                    "When you do use coworking, edit it with cowork tools. "
                     "Editing policy (strict): after the document exists, default to small "
                     "cowork_str_replace patches (or cowork_append for new material at the end). "
                     "Call cowork_read first when you need the exact current text. "
@@ -674,6 +683,8 @@ def _build_tool_registry(
                     "extracted text). Filenames are <source_id>_<sanitized_name>."
                     "Co-editing documents for this chat are mounted read/write under /workspace/cowork/ "
                     "(see cowork_files in the tool result and /workspace/cowork/manifest.json). "
+                    "That directory is on sys.path, so .py cowork files can be imported by module name "
+                    "(import process_trs). subprocess is not available in the sandbox. "
                     "Read/analyze/transform them with pandas/openpyxl/etc., then overwrite the same "
                     "path to update the live document in the UI. Prefer this for spreadsheet math, "
                     "CSV transforms, chart data prep; use cowork_str_replace for small text edits."
@@ -952,10 +963,11 @@ def _build_tool_registry(
                 name="start_coworking",
                 description=(
                     "Open a shared co-editing document in the chat UI (right panel on "
-                    "desktop, Document tab on mobile). Use when writing code, markdown "
-                    "reports, presentations/slide decks, JSON/CSV, or other text artifacts "
-                    "the user should edit with you. Creates a new active document and "
-                    "deactivates any previous one. "
+                    "desktop, Document tab on mobile). Use sparingly: only when the user "
+                    "wants a persistent editable or downloadable artifact (a file, report, "
+                    "presentation, spreadsheet, or substantial code). Do not use for ordinary "
+                    "Q&A, comparisons, explanations, or scratch notes — those belong in the "
+                    "chat. Creates a new active document and deactivates any previous one. "
                     "For presentations use format=presentation with Marp markdown. "
                     "Start with front matter like: ---\\nmarp: true\\ntheme: gaia\\n"
                     "paginate: true\\nsize: 16:9\\n--- then slides separated by a line "

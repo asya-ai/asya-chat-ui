@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   BlockTypeSelect,
   BoldItalicUnderlineToggles,
+  CodeMirrorEditor,
   CreateLink,
   DiffSourceToggleWrapper,
   InsertTable,
@@ -11,6 +12,7 @@ import {
   StrikeThroughSupSubToggles,
   UndoRedo,
   codeBlockPlugin,
+  codeMirrorPlugin,
   diffSourcePlugin,
   headingsPlugin,
   linkDialogPlugin,
@@ -38,6 +40,15 @@ type CoworkMarkdownEditorProps = {
   onChange: (value: string) => void
 }
 
+type ViewMode = "rich-text" | "source"
+
+type RecoveryState = {
+  nonce: number
+  viewMode: ViewMode
+  suppressHtml: boolean
+  markdownOverride: string | null
+}
+
 /** MDX requires JSX void tags (`<br />`); Marp/models often emit HTML (`<br>`). */
 const MDX_VOID_TAGS = [
   "area",
@@ -56,17 +67,89 @@ const MDX_VOID_TAGS = [
   "wbr",
 ] as const
 
-const normalizeMarkdownForMdx = (markdown: string): string => {
-  const fences: string[] = []
-  let next = markdown.replace(/```[\s\S]*?```/g, (block) => {
-    fences.push(block)
-    return `\0FENCE${fences.length - 1}\0`
-  })
+const OPEN_FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/
 
+const CODE_BLOCK_LANGUAGES: Record<string, string> = {
+  "": "Plain text",
+  text: "Plain text",
+  txt: "Plain text",
+  markdown: "Markdown",
+  md: "Markdown",
+  mermaid: "Mermaid",
+  json: "JSON",
+  jsonc: "JSON",
+  yaml: "YAML",
+  yml: "YAML",
+  python: "Python",
+  py: "Python",
+  javascript: "JavaScript",
+  js: "JavaScript",
+  typescript: "TypeScript",
+  ts: "TypeScript",
+  tsx: "TSX",
+  jsx: "JSX",
+  html: "HTML",
+  css: "CSS",
+  sql: "SQL",
+  bash: "Bash",
+  sh: "Shell",
+  shell: "Shell",
+  csv: "CSV",
+}
+
+type MarkdownSegment = { kind: "body" | "fence"; text: string }
+
+const splitMarkdownFences = (markdown: string): MarkdownSegment[] => {
+  const lines = markdown.split("\n")
+  const segments: MarkdownSegment[] = []
+  let bodyLines: string[] = []
+  let fenceLines: string[] | null = null
+  let fenceChar = ""
+  let fenceLen = 0
+
+  const flushBody = () => {
+    if (bodyLines.length === 0) return
+    segments.push({ kind: "body", text: bodyLines.join("\n") })
+    bodyLines = []
+  }
+
+  for (const line of lines) {
+    const match = line.match(OPEN_FENCE)
+    if (fenceLines === null) {
+      if (match) {
+        flushBody()
+        fenceLines = [line]
+        fenceChar = match[2][0] ?? "`"
+        fenceLen = match[2].length
+      } else {
+        bodyLines.push(line)
+      }
+      continue
+    }
+    fenceLines.push(line)
+    if (
+      match &&
+      (match[2][0] ?? "") === fenceChar &&
+      match[2].length >= fenceLen &&
+      match[3].trim() === ""
+    ) {
+      segments.push({ kind: "fence", text: fenceLines.join("\n") })
+      fenceLines = null
+    }
+  }
+
+  if (fenceLines) {
+    fenceLines.push(fenceChar.repeat(fenceLen))
+    segments.push({ kind: "fence", text: fenceLines.join("\n") })
+  }
+  flushBody()
+  return segments
+}
+
+const applyVoidTags = (markdown: string): string => {
+  let next = markdown
   for (const tag of MDX_VOID_TAGS) {
-    // <br> / <br >
     next = next.replace(new RegExp(`<${tag}\\s*>`, "gi"), `<${tag} />`)
-    // <img src="..."> (not already self-closing)
     next = next.replace(
       new RegExp(`<${tag}(\\s+[^>]*?)\\s*>`, "gi"),
       (match, attrs: string) => {
@@ -75,9 +158,36 @@ const normalizeMarkdownForMdx = (markdown: string): string => {
       }
     )
   }
-
-  return next.replace(/\0FENCE(\d+)\0/g, (_, index) => fences[Number(index)] ?? "")
+  return next
 }
+
+const escapeMdxBody = (body: string): string => {
+  const inlineCode = /(`+)([\s\S]*?)\1/g
+  let last = 0
+  let result = ""
+  let match: RegExpExecArray | null
+  while ((match = inlineCode.exec(body))) {
+    result += escapeMdxText(body.slice(last, match.index))
+    result += match[0]
+    last = match.index + match[0].length
+  }
+  result += escapeMdxText(body.slice(last))
+  return result
+}
+
+const escapeMdxText = (text: string): string => {
+  const withAutolinks = text.replace(/<(https?:\/\/[^>\s]+)>/gi, "$1")
+  return applyVoidTags(withAutolinks)
+    .replace(/(?<!\\)\{/g, "\\{")
+    .replace(/(?<!\\)\}/g, "\\}")
+}
+
+const normalizeMarkdownForMdx = (markdown: string): string =>
+  splitMarkdownFences(markdown)
+    .map((segment) =>
+      segment.kind === "fence" ? segment.text : escapeMdxBody(segment.text)
+    )
+    .join("\n")
 
 const useAppTheme = (): ThemeMode => {
   const [theme, setTheme] = useState<ThemeMode>(() => getTheme())
@@ -102,9 +212,17 @@ export const CoworkMarkdownEditor = ({
 }: CoworkMarkdownEditorProps) => {
   const editorRef = useRef<MDXEditorMethods>(null)
   const lastEmittedRef = useRef(value)
+  const recoveryRef = useRef({ triedFix: false })
+  const [recovery, setRecovery] = useState<RecoveryState>({
+    nonce: 0,
+    viewMode: "rich-text",
+    suppressHtml: false,
+    markdownOverride: null,
+  })
   const theme = useAppTheme()
   const isDark = theme === "dark"
-  const markdownForEditor = useMemo(() => normalizeMarkdownForMdx(value), [value])
+  const normalizedValue = useMemo(() => normalizeMarkdownForMdx(value), [value])
+  const markdownForEditor = recovery.markdownOverride ?? normalizedValue
 
   const plugins = useMemo(
     () => [
@@ -115,9 +233,15 @@ export const CoworkMarkdownEditor = ({
       linkPlugin(),
       linkDialogPlugin(),
       tablePlugin(),
-      codeBlockPlugin({ defaultCodeBlockLanguage: "text" }),
+      codeBlockPlugin({
+        defaultCodeBlockLanguage: "text",
+        codeBlockEditorDescriptors: [
+          { priority: -10, match: () => true, Editor: CodeMirrorEditor },
+        ],
+      }),
+      codeMirrorPlugin({ codeBlockLanguages: CODE_BLOCK_LANGUAGES }),
       markdownShortcutPlugin(),
-      diffSourcePlugin({ viewMode: "rich-text", diffMarkdown: "" }),
+      diffSourcePlugin({ viewMode: recovery.viewMode, diffMarkdown: "" }),
       toolbarPlugin({
         toolbarClassName: "cowork-mdx-toolbar",
         toolbarContents: () =>
@@ -138,16 +262,24 @@ export const CoworkMarkdownEditor = ({
           ),
       }),
     ],
-    [allowThematicBreak, readOnly]
+    [allowThematicBreak, readOnly, recovery.viewMode]
   )
 
   useEffect(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    if (markdownForEditor === lastEmittedRef.current) return
-    editor.setMarkdown(markdownForEditor)
-    lastEmittedRef.current = markdownForEditor
-  }, [markdownForEditor])
+    if (normalizedValue === lastEmittedRef.current) return
+    lastEmittedRef.current = normalizedValue
+    recoveryRef.current.triedFix = false
+    setRecovery((prev) => ({
+      nonce:
+        prev.viewMode === "rich-text" && !prev.suppressHtml && !prev.markdownOverride
+          ? prev.nonce
+          : prev.nonce + 1,
+      viewMode: "rich-text",
+      suppressHtml: false,
+      markdownOverride: null,
+    }))
+    editorRef.current?.setMarkdown(normalizedValue)
+  }, [normalizedValue])
 
   // Popup portal lives outside the panel; keep its theme class in sync.
   useEffect(() => {
@@ -164,12 +296,55 @@ export const CoworkMarkdownEditor = ({
     return () => observer.disconnect()
   }, [isDark])
 
+  const handleParseError = useCallback(
+    ({ source }: { error: string; source: string }) => {
+      const fixed = normalizeMarkdownForMdx(source)
+      if (!recoveryRef.current.triedFix && fixed !== source) {
+        recoveryRef.current.triedFix = true
+        lastEmittedRef.current = fixed
+        if (!readOnly) onChange(fixed)
+        setRecovery((prev) => ({
+          nonce: prev.nonce + 1,
+          viewMode: "rich-text",
+          suppressHtml: false,
+          markdownOverride: fixed,
+        }))
+        return
+      }
+      recoveryRef.current.triedFix = true
+      setRecovery((prev) => {
+        const markdownOverride = prev.markdownOverride ?? fixed
+        if (!prev.suppressHtml) {
+          return {
+            nonce: prev.nonce + 1,
+            viewMode: "rich-text",
+            suppressHtml: true,
+            markdownOverride,
+          }
+        }
+        if (prev.viewMode !== "source") {
+          return {
+            nonce: prev.nonce + 1,
+            viewMode: "source",
+            suppressHtml: true,
+            markdownOverride,
+          }
+        }
+        return prev
+      })
+    },
+    [onChange, readOnly]
+  )
+
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden bg-background", className)}>
       <MDXEditor
+        key={recovery.nonce}
         ref={editorRef}
         markdown={markdownForEditor}
         readOnly={readOnly}
+        suppressHtmlProcessing={recovery.suppressHtml}
+        onError={handleParseError}
         onChange={(markdown, initialNormalize) => {
           if (initialNormalize) {
             lastEmittedRef.current = markdown
