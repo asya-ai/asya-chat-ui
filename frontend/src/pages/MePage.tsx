@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router"
 
 import { apiKeyApi, authApi, memoryApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
-import { useI18n } from "@/lib/i18n-context"
+import { useI18n, type TranslationKey } from "@/lib/i18n-context"
 import { isValidPassword } from "@/lib/password"
 import { LanguageSelect } from "@/components/LanguageSelect"
 import { SettingsShell } from "@/components/SettingsShell"
@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { getTheme, toggleTheme } from "@/lib/theme"
+import { usePwaInstall } from "@/lib/use-pwa-install"
 import type { ApiKey, UserMemory } from "@/lib/types"
 import { Pencil, Trash2, X, Check } from "lucide-react"
 import {
@@ -40,7 +41,16 @@ export const MePage = () => {
   const location = useLocation()
   const { clearToken } = useAuth()
   const { t } = useI18n()
+  const {
+    installed: pwaInstalled,
+    canPromptInstall,
+    platform,
+    needsHttps,
+    install: installPwa,
+  } = usePwaInstall()
   const [theme, setTheme] = useState(getTheme())
+  const [installingPwa, setInstallingPwa] = useState(false)
+  const [installHelpOpen, setInstallHelpOpen] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
@@ -215,6 +225,29 @@ export const MePage = () => {
     }
   }
 
+  const installHintKey: TranslationKey = needsHttps
+    ? "me_install_app_https"
+    : platform === "ios"
+      ? "me_install_app_ios"
+      : platform === "android"
+        ? "me_install_app_android"
+        : platform === "desktop-chromium"
+          ? "me_install_app_desktop_chrome"
+          : platform === "desktop-safari"
+            ? "me_install_app_desktop_safari"
+            : "me_install_app_other"
+  const showInstallSection =
+    !pwaInstalled && (canPromptInstall || needsHttps || platform !== "other")
+
+  const onInstallApp = () => {
+    if (canPromptInstall) {
+      setInstallingPwa(true)
+      void installPwa().finally(() => setInstallingPwa(false))
+      return
+    }
+    setInstallHelpOpen(true)
+  }
+
   const navItems = [
     { label: t("me_settings"), href: "/settings/me", active: true },
     {
@@ -279,6 +312,38 @@ export const MePage = () => {
                 })}
               </Button>
             </div>
+            {showInstallSection ? (
+              <>
+                <div className="pt-1 border-t">
+                  <div className="flex justify-between items-start gap-4 py-2">
+                    <div className="space-y-1">
+                      <p className="font-medium text-sm leading-5">
+                        {t("me_install_app")}
+                      </p>
+                      <p className="text-muted-foreground text-xs leading-5">
+                        {t("me_install_app_desc")}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={installingPwa}
+                      onClick={onInstallApp}
+                    >
+                      {canPromptInstall ? t("me_install_app") : t("me_install_app_help")}
+                    </Button>
+                  </div>
+                </div>
+                <Dialog open={installHelpOpen} onOpenChange={setInstallHelpOpen}>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>{t("me_install_app_help_title")}</DialogTitle>
+                    </DialogHeader>
+                    <p className="text-sm leading-6 text-muted-foreground">{t(installHintKey)}</p>
+                  </DialogContent>
+                </Dialog>
+              </>
+            ) : null}
             <div className="pt-1 border-t">
               <div className="flex justify-between items-start gap-4 py-2">
                 <div className="space-y-1">

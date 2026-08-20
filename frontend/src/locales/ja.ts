@@ -33,6 +33,22 @@ export const ja = {
   theme_label: "テーマ: {theme}",
   theme_dark: "ダーク",
   theme_light: "ライト",
+  me_install_app: "アプリをインストール",
+  me_install_app_desc: "ホーム画面に追加して、Chat UIにすばやくアクセスできます。",
+  me_install_app_done: "このデバイスにアプリとしてインストール済みです。",
+  me_install_app_help: "インストール方法",
+  me_install_app_help_title: "Chat UI をインストール",
+  me_install_app_https:
+    "ブラウザは安全な接続が必要です。アドレスバーで https:// の URL を開いてから、もう一度お試しください。",
+  me_install_app_ios:
+    "iPhone / iPad: Safari で共有ボタンをタップし、「ホーム画面に追加」を選びます。",
+  me_install_app_android:
+    "Chrome: メニュー (⋮) を開き、「アプリをインストール」または「ホーム画面に追加」をタップします。",
+  me_install_app_desktop_chrome:
+    "Chrome / Edge: アドレスバーのインストールアイコンをクリックするか、メニュー (⋮) から「アプリをインストール」を選びます。",
+  me_install_app_desktop_safari: "Mac の Safari: ファイル → Dock に追加 を選びます。",
+  me_install_app_other:
+    "ブラウザのメニューから、このサイトをホーム画面に追加するか、アプリとしてインストールしてください。",
   auth_sign_in: "サインイン",
   auth_sign_in_loading: "サインイン中...",
   auth_continue: "続行",
@@ -331,6 +347,7 @@ export const ja = {
   org_teams_oidc_none: "OIDC グループなし",
   org_users_remove_member: "メンバーを削除",
   org_users_invited: "招待済み",
+  org_users_expired: "期限切れ",
   org_users_copy_link: "リンクをコピー",
   org_users_resend: "再送信",
   org_users_no_members: "メンバーが見つかりません。",

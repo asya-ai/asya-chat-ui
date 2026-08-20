@@ -33,6 +33,22 @@ export const lv = {
   theme_label: "Tēma: {theme}",
   theme_dark: "Tumša",
   theme_light: "Gaiša",
+  me_install_app: "Instalēt lietotni",
+  me_install_app_desc: "Pievienojiet Chat UI sākuma ekrānam ātrākai piekļuvei.",
+  me_install_app_done: "Instalēta kā lietotne šajā ierīcē.",
+  me_install_app_help: "Kā instalēt",
+  me_install_app_help_title: "Instalēt Chat UI",
+  me_install_app_https:
+    "Pārlūkprogrammai nepieciešams drošs savienojums. Atveriet šo vietni ar https:// adresē, tad mēģiniet vēlreiz.",
+  me_install_app_ios:
+    "iPhone vai iPad: Safari pieskarieties Share, tad izvēlieties Add to Home Screen.",
+  me_install_app_android:
+    "Chrome: atveriet izvēlni (⋮), tad pieskarieties Install app vai Add to Home screen.",
+  me_install_app_desktop_chrome:
+    "Chrome vai Edge: adreses joslā noklikšķiniet uz instalēšanas ikonas vai izvēlnē (⋮) izvēlieties Install app.",
+  me_install_app_desktop_safari: "Safari Mac: izvēlieties File → Add to Dock.",
+  me_install_app_other:
+    "Izmantojiet pārlūkprogrammas izvēlni, lai pievienotu šo vietni sākuma ekrānam vai instalētu kā lietotni.",
   auth_sign_in: "Pierakstīties",
   auth_sign_in_loading: "Pierakstās...",
   auth_continue: "Turpināt",
@@ -331,6 +347,7 @@ export const lv = {
   org_teams_oidc_none: "Bez OIDC grupas",
   org_users_remove_member: "Noņemt dalībnieku",
   org_users_invited: "Ielūgts",
+  org_users_expired: "Beidzies",
   org_users_copy_link: "Kopēt saiti",
   org_users_resend: "Sūtīt atkārtoti",
   org_users_no_members: "Dalībnieki nav atrasti.",

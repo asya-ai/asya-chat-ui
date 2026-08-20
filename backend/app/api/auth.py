@@ -1185,7 +1185,9 @@ def list_invites(
         require_org_admin(session, org.id, current_user.id)
 
     invites = session.exec(
-        select(Invite).where(Invite.org_id == org_uuid, Invite.accepted_at == None)
+        select(Invite)
+        .where(Invite.org_id == org_uuid, Invite.accepted_at == None)
+        .order_by(Invite.email)
     ).all()
     return [_invite_to_read(invite) for invite in invites]
 

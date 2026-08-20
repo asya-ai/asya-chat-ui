@@ -22,6 +22,11 @@ export const setTheme = (mode: ThemeMode) => {
 
 export const applyTheme = (mode: ThemeMode) => {
   document.documentElement.classList.toggle("dark", mode === "dark")
+  const themeColor = mode === "dark" ? "#261715" : "#f5f3f2"
+  const meta = document.querySelector('meta[name="theme-color"]')
+  if (meta) {
+    meta.setAttribute("content", themeColor)
+  }
 }
 
 export const toggleTheme = (): ThemeMode => {

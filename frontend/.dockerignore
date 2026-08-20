@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+test-results
+tests
+playwright.config.ts
+playwright-report
+.turbo
+.vite
+*.log
+.git
+.DS_Store
+README.md

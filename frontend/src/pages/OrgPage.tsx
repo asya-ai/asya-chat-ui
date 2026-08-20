@@ -538,9 +538,10 @@ export const OrgPage = () => {
 
   const resendInvite = async (inviteId: string) => {
     if (!usersOrgId) return
-    await authApi.resendInvite(inviteId)
-    const updated = await authApi.invites(usersOrgId)
-    setInvites(updated)
+    const updated = await authApi.resendInvite(inviteId)
+    setInvites((prev) =>
+      prev.map((item) => (item.id === updated.id ? updated : item))
+    )
   }
 
   const cancelInvite = async (inviteId: string) => {
@@ -1614,13 +1615,24 @@ export const OrgPage = () => {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {invites.map((invite) => (
+                  {invites.map((invite) => {
+                    const isExpired =
+                      new Date(invite.expires_at).getTime() < Date.now()
+                    return (
                     <TableRow key={invite.id}>
                       <TableCell>
                         <div className="flex flex-col">
                           <span>{invite.email}</span>
-                          <span className="text-muted-foreground text-xs">
-                            {t("org_users_invited")}
+                          <span
+                            className={
+                              isExpired
+                                ? "text-destructive text-xs"
+                                : "text-muted-foreground text-xs"
+                            }
+                          >
+                            {isExpired
+                              ? t("org_users_expired")
+                              : t("org_users_invited")}
                           </span>
                         </div>
                       </TableCell>
@@ -1674,7 +1686,8 @@ export const OrgPage = () => {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    )
+                  })}
                   {members.length === 0 && invites.length === 0 ? (
                     <TableRow>
                       <TableCell

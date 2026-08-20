@@ -31,6 +31,22 @@ export const en = {
   theme_label: "Theme: {theme}",
   theme_dark: "Dark",
   theme_light: "Light",
+  me_install_app: "Install app",
+  me_install_app_desc: "Add Chat UI to your home screen for quicker access.",
+  me_install_app_done: "Installed as an app on this device.",
+  me_install_app_help: "How to install",
+  me_install_app_help_title: "Install Chat UI",
+  me_install_app_https:
+    "Your browser requires a secure connection. Open this site with https:// in the address bar, then try again.",
+  me_install_app_ios:
+    "On iPhone or iPad: tap the Share button in Safari, then choose Add to Home Screen.",
+  me_install_app_android:
+    "In Chrome: open the menu (⋮), then tap Install app or Add to Home screen.",
+  me_install_app_desktop_chrome:
+    "In Chrome or Edge: click the install icon in the address bar, or open the browser menu (⋮) and choose Install app.",
+  me_install_app_desktop_safari: "In Safari on Mac: choose File → Add to Dock.",
+  me_install_app_other:
+    "Use your browser menu to add this site to your home screen or install it as an app.",
   auth_sign_in: "Sign in",
   auth_sign_in_loading: "Signing in...",
   auth_continue: "Continue",
@@ -329,6 +345,7 @@ export const en = {
   org_teams_oidc_none: "No OIDC group",
   org_users_remove_member: "Remove member",
   org_users_invited: "Invited",
+  org_users_expired: "Expired",
   org_users_copy_link: "Copy link",
   org_users_resend: "Resend",
   org_users_no_members: "No members found.",

@@ -36,6 +36,15 @@ git pull
 docker compose up --build -d
 ```
 
+Frontend / nginx config only (fast path — does not rebuild backend or recreate the stack):
+
+```bash
+make rebuild-nginx
+# or: docker compose up -d --build --force-recreate --no-deps nginx
+```
+
+Nginx re-resolves `backend` via Docker DNS, so recreating backend alone no longer requires recreating nginx.
+
 ### Production update
 
 ```bash

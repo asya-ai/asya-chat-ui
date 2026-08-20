@@ -157,8 +157,11 @@ services:
 
   nginx:
     build:
-      context: .
-      dockerfile: nginx/Dockerfile
+      # Frontend-only context (not repo root) — avoids shipping backend/scraper into the build.
+      context: ./frontend
+      dockerfile: ../nginx/Dockerfile
+      additional_contexts:
+        nginx_cfg: ./nginx
     ports:
       - "127.0.0.1:8085:80"
     depends_on:

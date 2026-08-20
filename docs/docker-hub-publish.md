@@ -7,7 +7,7 @@ This guide covers building and pushing the four Asya Chat UI images to Docker Hu
 | Image | Dockerfile | Context | Purpose |
 | --- | --- | --- | --- |
 | `asyaai/asya-chat-ui-backend` | `backend/Dockerfile` | `backend/` | API, migrate, worker, beat |
-| `asyaai/asya-chat-ui-web` | `nginx/Dockerfile` | repo root | nginx + production frontend |
+| `asyaai/asya-chat-ui-web` | `nginx/Dockerfile` | `frontend/` (+ `nginx/` additional context) | nginx + production frontend |
 | `asyaai/asya-chat-ui-scraper` | `scraper/Dockerfile` | `scraper/` | Puppeteer scrape service |
 | `asyaai/asya-chat-ui-executor` | `backend/executor/Dockerfile` | `backend/executor/` | Python code-execution sandbox |
 
@@ -85,9 +85,10 @@ docker buildx build \
   --builder chatui-publisher \
   --platform linux/amd64,linux/arm64 \
   -f nginx/Dockerfile \
+  --build-context nginx_cfg=nginx \
   -t asyaai/asya-chat-ui-web:$VERSION \
   -t asyaai/asya-chat-ui-web:latest \
-  --sbom=true --provenance=mode=max --push .
+  --sbom=true --provenance=mode=max --push frontend
 
 docker buildx build \
   --builder chatui-publisher \
