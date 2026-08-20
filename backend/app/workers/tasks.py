@@ -66,8 +66,8 @@ from app.services.team_service import allowed_model_ids
 from app.services.file_storage import delete_file
 from app.services.agents.runtime import reindex_source
 from app.services.agents.chat_index import (
-    enqueue_space_chat_index,
-    upsert_space_chat_source,
+    enqueue_project_chat_index,
+    upsert_project_chat_source,
 )
 from app.services.tools.code_execution import project_source_exec_path
 from app.services.langchain_runtime import (
@@ -91,17 +91,17 @@ class GenerationCancelledError(Exception):
     pass
 
 
-def _queue_space_chat_index(session: Session, chat: Chat) -> None:
-    """Refresh semantic index for a space chat after a successful turn."""
+def _queue_project_chat_index(session: Session, chat: Chat) -> None:
+    """Refresh semantic index for a project chat after a successful turn."""
     if not chat.agent_id or chat.is_incognito or chat.is_deleted:
         return
     try:
-        source = upsert_space_chat_source(session, chat)
+        source = upsert_project_chat_source(session, chat)
         session.commit()
         if source is not None:
-            enqueue_space_chat_index(chat.id)
+            enqueue_project_chat_index(chat.id)
     except Exception:
-        logger.exception("Failed to queue space chat index for chat_id=%s", chat.id)
+        logger.exception("Failed to queue project chat index for chat_id=%s", chat.id)
         try:
             session.rollback()
         except Exception:
@@ -1053,7 +1053,7 @@ async def _run_generation(task_id: UUID) -> None:
                 task.status = GenerationStatus.completed
                 task.completed_at = datetime.utcnow()
                 session.commit()
-                _queue_space_chat_index(session, chat)
+                _queue_project_chat_index(session, chat)
                 return
 
             grounding_enabled = _grounding_enabled(org, model.provider)
@@ -1269,7 +1269,7 @@ async def _run_generation(task_id: UUID) -> None:
                         "output": {"status": "ok", "synced": True},
                     },
                 )
-            _queue_space_chat_index(session, chat)
+            _queue_project_chat_index(session, chat)
         except GenerationCancelledError:
             logger.info("Generation cancelled for task=%s", task_id)
             return
@@ -1377,17 +1377,17 @@ def reindex_agent_source(source_id: str) -> None:
 
 
 @celery_app.task(
-    name="chatui.index_space_chat",
+    name="chatui.index_project_chat",
     queue="embedding",
     soft_time_limit=60 * 30,
     time_limit=60 * 35,
 )
-def index_space_chat(chat_id: str) -> None:
+def index_project_chat(chat_id: str) -> None:
     with Session(engine) as session:
         chat = session.get(Chat, UUID(chat_id))
         if not chat or chat.is_deleted or chat.is_incognito or not chat.agent_id:
             return
-        source = upsert_space_chat_source(session, chat)
+        source = upsert_project_chat_source(session, chat)
         if source is None:
             session.commit()
             return
@@ -1395,18 +1395,29 @@ def index_space_chat(chat_id: str) -> None:
         session.commit()
         if error:
             logger.error(
-                "Space chat index failed chat_id=%s source_id=%s error=%s",
+                "Project chat index failed chat_id=%s source_id=%s error=%s",
                 chat_id,
                 source.id,
                 error,
             )
-            raise RuntimeError(f"Space chat index failed: {error}")
+            raise RuntimeError(f"Project chat index failed: {error}")
         logger.info(
-            "Space chat index complete chat_id=%s source_id=%s chunks=%s",
+            "Project chat index complete chat_id=%s source_id=%s chunks=%s",
             chat_id,
             source.id,
             chunks_count,
         )
+
+
+# Legacy task name kept so in-flight/queued jobs from before the rename still run.
+@celery_app.task(
+    name="chatui.index_space_chat",
+    queue="embedding",
+    soft_time_limit=60 * 30,
+    time_limit=60 * 35,
+)
+def index_space_chat(chat_id: str) -> None:
+    return index_project_chat.run(chat_id)
 
 
 def _delete_chat_files(session: Session, chat_ids: list[UUID]) -> None:

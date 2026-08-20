@@ -212,14 +212,14 @@ def test_users_visibility_requires_user_ids():
             assert exc.status_code == 400
 
 
-def test_move_prompt_profile_to_space_and_back():
+def test_move_prompt_profile_to_project_and_back():
     with _session() as session:
         org, owner, _, _, _ = _seed(session)
         now = datetime.utcnow()
         agent = Agent(
             org_id=org.id,
             owner_user_id=owner.id,
-            name="Space",
+            name="Project",
             master_prompt="",
             visibility=AgentVisibility.private,
             created_at=now,
@@ -304,14 +304,14 @@ def test_list_my_teams_excludes_default():
         assert all(team.name != "Default" for team in teams)
 
 
-def _make_space(
+def _make_project(
     session: Session, org: Org, owner: User, *, member: User | None = None
 ) -> Agent:
     now = datetime.utcnow()
     agent = Agent(
         org_id=org.id,
         owner_user_id=owner.id,
-        name="Space",
+        name="Project",
         master_prompt="",
         visibility=AgentVisibility.private,
         created_at=now,
@@ -345,23 +345,23 @@ def _make_space(
     return agent
 
 
-def test_space_prompt_offered_only_in_that_space_context():
+def test_project_prompt_offered_only_in_that_project_context():
     with _session() as session:
         org, owner, member, _, _ = _seed(session)
-        space = _make_space(session, org, owner, member=member)
-        other = _make_space(session, org, owner)
+        project = _make_project(session, org, owner, member=member)
+        other = _make_project(session, org, owner)
 
         profile = create_prompt(
             PromptCreateRequest(name="Profile", body="p"),
             session=session,
             auth=_auth(owner, org),
         )
-        space_prompt = create_prompt(
+        project_prompt = create_prompt(
             PromptCreateRequest(
-                name="Space prompt",
+                name="Project prompt",
                 body="s",
-                visibility=PromptVisibility.space,
-                agent_id=str(space.id),
+                visibility=PromptVisibility.project,
+                agent_id=str(project.id),
             ),
             session=session,
             auth=_auth(owner, org),
@@ -369,14 +369,14 @@ def test_space_prompt_offered_only_in_that_space_context():
 
         personal = list_prompts(session=session, auth=_auth(owner, org))
         assert any(item.id == profile.id for item in personal)
-        assert all(item.id != space_prompt.id for item in personal)
+        assert all(item.id != project_prompt.id for item in personal)
 
-        in_space = list_prompts(
-            context_agent_id=str(space.id),
+        in_project = list_prompts(
+            context_agent_id=str(project.id),
             session=session,
             auth=_auth(owner, org),
         )
-        assert {item.id for item in in_space} >= {profile.id, space_prompt.id}
+        assert {item.id for item in in_project} >= {profile.id, project_prompt.id}
 
         in_other = list_prompts(
             context_agent_id=str(other.id),
@@ -384,25 +384,25 @@ def test_space_prompt_offered_only_in_that_space_context():
             auth=_auth(owner, org),
         )
         assert any(item.id == profile.id for item in in_other)
-        assert all(item.id != space_prompt.id for item in in_other)
+        assert all(item.id != project_prompt.id for item in in_other)
 
 
-def test_space_visibility_visible_to_space_members():
+def test_project_visibility_visible_to_project_members():
     with _session() as session:
         org, owner, member, _, _ = _seed(session)
-        space = _make_space(session, org, owner, member=member)
+        project = _make_project(session, org, owner, member=member)
         created = create_prompt(
             PromptCreateRequest(
-                name="Shared in space",
+                name="Shared in project",
                 body="hello",
-                visibility=PromptVisibility.space,
-                agent_id=str(space.id),
+                visibility=PromptVisibility.project,
+                agent_id=str(project.id),
             ),
             session=session,
             auth=_auth(owner, org),
         )
         member_list = list_prompts(
-            context_agent_id=str(space.id),
+            context_agent_id=str(project.id),
             session=session,
             auth=_auth(member, org),
         )
@@ -413,14 +413,14 @@ def test_space_visibility_visible_to_space_members():
         ).first()
         assert outsider is not None
         outsider_list = list_prompts(
-            context_agent_id=str(space.id),
+            context_agent_id=str(project.id),
             session=session,
             auth=_auth(outsider, org),
         )
         assert all(item.id != created.id for item in outsider_list)
 
 
-def test_space_visibility_requires_space_location():
+def test_project_visibility_requires_project_location():
     with _session() as session:
         org, owner, _, _, _ = _seed(session)
         try:
@@ -428,7 +428,7 @@ def test_space_visibility_requires_space_location():
                 PromptCreateRequest(
                     name="Bad",
                     body="x",
-                    visibility=PromptVisibility.space,
+                    visibility=PromptVisibility.project,
                 ),
                 session=session,
                 auth=_auth(owner, org),

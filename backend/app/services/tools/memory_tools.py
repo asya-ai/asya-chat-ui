@@ -18,8 +18,8 @@ class MemoryToolContext:
     session: Session
     user_id: UUID
     current_chat_id: UUID | None = None
-    # When set, past-chat search is limited to this space. When None, only
-    # non-space (personal) chats are searched so space context does not leak.
+    # When set, past-chat search is limited to this project. When None, only
+    # non-project (personal) chats are searched so project context does not leak.
     agent_id: UUID | None = None
 
 
@@ -147,13 +147,13 @@ async def search_past_chats(
         })
 
     if not results:
-        scope = "this space" if context.agent_id is not None else "your personal chats"
+        scope = "this project" if context.agent_id is not None else "your personal chats"
         return ToolResult(
             name="search_past_chats",
             output={
                 "results": [],
                 "message": f"No matching chats found in {scope}.",
-                "scope": "space" if context.agent_id is not None else "personal",
+                "scope": "project" if context.agent_id is not None else "personal",
             },
         )
 
@@ -161,6 +161,6 @@ async def search_past_chats(
         name="search_past_chats",
         output={
             "results": results,
-            "scope": "space" if context.agent_id is not None else "personal",
+            "scope": "project" if context.agent_id is not None else "personal",
         },
     )

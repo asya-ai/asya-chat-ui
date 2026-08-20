@@ -40,7 +40,7 @@ type PromptFormDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   orgId: string | null
-  spaces: Agent[]
+  projects: Agent[]
   initial?: Partial<PromptFormValues> & { id?: string }
   title: string
   description?: string
@@ -52,7 +52,7 @@ const defaultVisibility = (
   visibility?: PromptVisibility
 ): PromptVisibility => {
   if (visibility) return visibility
-  return agentId ? "space" : "private"
+  return agentId ? "project" : "private"
 }
 
 const userLabel = (user: PromptSharedUser) =>
@@ -62,7 +62,7 @@ export const PromptFormDialog = ({
   open,
   onOpenChange,
   orgId,
-  spaces,
+  projects,
   initial,
   title,
   description,
@@ -145,22 +145,22 @@ export const PromptFormDialog = ({
     }
   }, [open, visibility, userQuery, selectedUsers])
 
-  const editableSpaces = spaces.filter(
-    (space) => space.role === "owner" || space.role === "editor"
+  const editableProjects = projects.filter(
+    (project) => project.role === "owner" || project.role === "editor"
   )
-  const selectedSpace =
+  const selectedProject =
     location === PROFILE_LOCATION
       ? null
-      : spaces.find((space) => space.id === location) ?? null
+      : projects.find((project) => project.id === location) ?? null
 
   const handleLocationChange = (value: string) => {
     setLocation(value)
     if (value === PROFILE_LOCATION) {
-      if (visibility === "space") setVisibility("private")
+      if (visibility === "project") setVisibility("private")
       return
     }
-    if (!initial?.id || visibility === "private" || visibility === "space") {
-      setVisibility("space")
+    if (!initial?.id || visibility === "private" || visibility === "project") {
+      setVisibility("project")
     }
   }
 
@@ -201,8 +201,8 @@ export const PromptFormDialog = ({
       setError(t("prompt_users_required"))
       return
     }
-    if (visibility === "space" && location === PROFILE_LOCATION) {
-      setError(t("prompt_space_visibility_requires_space"))
+    if (visibility === "project" && location === PROFILE_LOCATION) {
+      setError(t("prompt_project_visibility_requires_project"))
       return
     }
     const agentId = location === PROFILE_LOCATION ? null : location
@@ -284,9 +284,9 @@ export const PromptFormDialog = ({
                 <SelectItem value={PROFILE_LOCATION}>
                   {t("prompt_location_profile")}
                 </SelectItem>
-                {editableSpaces.map((space) => (
-                  <SelectItem key={space.id} value={space.id}>
-                    {space.name}
+                {editableProjects.map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -303,9 +303,9 @@ export const PromptFormDialog = ({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="private">{t("prompt_visibility_private")}</SelectItem>
-                {selectedSpace ? (
-                  <SelectItem value="space">
-                    {t("prompt_visibility_space", { name: selectedSpace.name })}
+                {selectedProject ? (
+                  <SelectItem value="project">
+                    {t("prompt_visibility_project", { name: selectedProject.name })}
                   </SelectItem>
                 ) : null}
                 <SelectItem value="users">{t("prompt_visibility_users")}</SelectItem>

@@ -27,7 +27,7 @@ class AgentToolContext:
         """Visible sources for the project ordered by creation.
 
         Includes uploaded/url/text sources for everyone with access, plus this
-        user's indexed space chats (unless include_chats is False). Numbering is
+        user's indexed project chats (unless include_chats is False). Numbering is
         based on this stable filtered order.
         """
         sources = list(
@@ -143,7 +143,7 @@ async def list_project_sources(
             output={
                 "sources": [],
                 "include_chats": include_chats,
-                "message": f"This space has no indexed sources yet ({scope}).",
+                "message": f"This project has no indexed sources yet ({scope}).",
             },
         )
     return ToolResult(
@@ -191,7 +191,7 @@ async def search_project_sources(
         for chunk, source, score in matches
     ]
     if not results:
-        scope = "space files" if not include_chats else "space files or indexed chats"
+        scope = "project files" if not include_chats else "project files or indexed chats"
         return ToolResult(
             name="search_project_sources",
             output={
@@ -225,7 +225,7 @@ async def read_project_source(
     if not source:
         return ToolResult(
             name="read_project_source",
-            output={"error": f"Source {source_id!r} was not found in this space."},
+            output={"error": f"Source {source_id!r} was not found in this project."},
         )
     if source.status != AgentSourceStatus.ready:
         return ToolResult(

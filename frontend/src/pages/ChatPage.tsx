@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query"
 
 import { ApiError, agentApi, chatApi, configApi, promptApi } from "@/lib/api"
 import { chatGenerationIndicatorsStore, useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
+import { composerDraftStore } from "@/lib/composer-drafts"
 import {
   actionInfoLevelStore,
   codeExecutionEnabledStore,
@@ -413,6 +414,11 @@ export const ChatPage = () => {
   const coworkHandleRef = useRef(cowork.handleCoworkingEvent)
   coworkHandleRef.current = cowork.handleCoworkingEvent
   const composerRef = useRef<ChatComposerHandle>(null)
+  const pendingChatIdRef = useRef<string | null>(null)
+  const ensureChatPromiseRef = useRef<Promise<Chat | null> | null>(null)
+  const restoredDraftChatIdRef = useRef<string | null>(null)
+  const justCreatedChatIdRef = useRef<string | null>(null)
+  const skipDraftPersistRef = useRef(false)
   const [promptCount, setPromptCount] = useState(0)
   const [insertPromptOpen, setInsertPromptOpen] = useState(false)
   const [insertPrompts, setInsertPrompts] = useState<Prompt[]>([])
@@ -1940,8 +1946,30 @@ export const ChatPage = () => {
   const startNewChat = () => {
     // Do not clear the previous chat's message cache — generations may still be
     // streaming into it, and wiping leaves an empty shell when navigating back.
+    const leavingId = chatId ?? pendingChatIdRef.current
+    if (leavingId) {
+      const cachedMessages =
+        queryClient.getQueryData<ChatMessage[]>(["chatMessages", leavingId]) ?? []
+      const hasConversation = cachedMessages.some(
+        (msg) => msg.role === "user" || msg.role === "assistant"
+      )
+      const hasDraft = Boolean(composerDraftStore.get(leavingId).trim())
+      const hasPendingAttachments =
+        leavingId === (chatId ?? pendingChatIdRef.current) &&
+        pendingAttachments.length > 0
+      if (!hasConversation && !hasDraft && !hasPendingAttachments) {
+        composerDraftStore.clear(leavingId)
+        deleteChatMutation.mutate(leavingId)
+      }
+    }
+    pendingChatIdRef.current = null
+    ensureChatPromiseRef.current = null
+    restoredDraftChatIdRef.current = null
+    justCreatedChatIdRef.current = null
     setToolEvents([])
+    skipDraftPersistRef.current = true
     composerRef.current?.setValue("")
+    skipDraftPersistRef.current = false
     setPendingAttachments([])
     setAttachmentError(null)
     navigate(
@@ -1960,6 +1988,8 @@ export const ChatPage = () => {
       is_incognito: incognitoEnabled,
     })
     setSessionOwnedChatIds(rememberSessionOwnedChatId(chat.id))
+    pendingChatIdRef.current = chat.id
+    justCreatedChatIdRef.current = chat.id
     navigate(
       isAgentMode && activeAgentId
         ? `/chat/${chat.id}?agent=${encodeURIComponent(activeAgentId)}`
@@ -1970,6 +2000,87 @@ export const ChatPage = () => {
     refetchChats().catch(() => null)
     return chat
   }
+
+  const ensureChatCreated = async (): Promise<Chat | null> => {
+    const existingId = chatIdRef.current ?? pendingChatIdRef.current
+    if (existingId) {
+      const fromList = chats.find((item) => item.id === existingId)
+      if (fromList) return fromList
+      return {
+        id: existingId,
+        title: null,
+        model_id: selectedModel ?? null,
+        agent_id: isAgentMode && activeAgentId ? activeAgentId : null,
+        is_shared: false,
+        is_incognito: incognitoEnabled,
+        is_pinned: false,
+        created_at: new Date().toISOString(),
+        last_activity_at: new Date().toISOString(),
+      }
+    }
+    if (ensureChatPromiseRef.current) {
+      return ensureChatPromiseRef.current
+    }
+    const createPromise = createChat()
+    ensureChatPromiseRef.current = createPromise
+    try {
+      return await createPromise
+    } finally {
+      if (ensureChatPromiseRef.current === createPromise) {
+        ensureChatPromiseRef.current = null
+      }
+    }
+  }
+
+  const persistComposerDraft = (targetChatId: string, value: string) => {
+    if (value.trim()) {
+      composerDraftStore.set(targetChatId, value)
+    } else {
+      composerDraftStore.clear(targetChatId)
+    }
+  }
+
+  const handleComposerDraftChange = (value: string) => {
+    if (skipDraftPersistRef.current) return
+    const existingId = chatIdRef.current ?? pendingChatIdRef.current
+    if (existingId) {
+      persistComposerDraft(existingId, value)
+      return
+    }
+    if (!value.trim()) return
+    void ensureChatCreated().then((chat) => {
+      if (!chat) return
+      // Prefer live composer text in case more was typed during create.
+      const latest = composerRef.current?.getValue() ?? value
+      persistComposerDraft(chat.id, latest)
+    })
+  }
+
+  useEffect(() => {
+    if (!chatId) {
+      restoredDraftChatIdRef.current = null
+      return
+    }
+    pendingChatIdRef.current = chatId
+    if (restoredDraftChatIdRef.current === chatId) return
+    restoredDraftChatIdRef.current = chatId
+
+    const draft = composerDraftStore.get(chatId)
+    const current = composerRef.current?.getValue() ?? ""
+
+    // Keep live composer/attachments when this chat was just created from them.
+    if (justCreatedChatIdRef.current === chatId) {
+      justCreatedChatIdRef.current = null
+      if (current.trim()) persistComposerDraft(chatId, current)
+      return
+    }
+
+    skipDraftPersistRef.current = true
+    composerRef.current?.setValue(draft)
+    skipDraftPersistRef.current = false
+    setPendingAttachments([])
+    setAttachmentError(null)
+  }, [chatId])
 
   const uploadAttachmentsForChat = useCallback(async (
     targetChatId: string,
@@ -2010,6 +2121,7 @@ export const ChatPage = () => {
 
   const deleteChat = async (chatIdToDelete: string) => {
     await deleteChatMutation.mutateAsync(chatIdToDelete)
+    composerDraftStore.clear(chatIdToDelete)
     if (chatId === chatIdToDelete) {
       replaceCurrentChatMessages([])
       setToolEvents([])
@@ -2114,7 +2226,7 @@ export const ChatPage = () => {
         chat = null
       }
       if (!chat) {
-        chat = await createChat()
+        chat = await ensureChatCreated()
       }
       if (!chat) return
       requestChatId = chat.id
@@ -2157,7 +2269,10 @@ export const ChatPage = () => {
         generation_status: "queued",
       }
       updateMessages((prev) => [...prev, userMessage, assistantMessage])
+      composerDraftStore.clear(chat.id)
+      skipDraftPersistRef.current = true
       composerRef.current?.setValue("")
+      skipDraftPersistRef.current = false
       setPendingAttachments([])
       const { promise, cancel } = chatApi.sendMessageStream(
         chat.id,
@@ -2263,6 +2378,9 @@ export const ChatPage = () => {
     if (next.length === 0) return
     setAttachmentError(null)
     setPendingAttachments((prev) => [...prev, ...next])
+    if (!chatIdRef.current && !pendingChatIdRef.current) {
+      void ensureChatCreated()
+    }
   }
 
   const isLikelyCode = (text: string) => {
@@ -2476,6 +2594,9 @@ export const ChatPage = () => {
       event.preventDefault()
       setAttachmentError(null)
       setPendingAttachments((prev) => [...prev, ...next])
+      if (!chatIdRef.current && !pendingChatIdRef.current) {
+        void ensureChatCreated()
+      }
       return
     }
 
@@ -2624,6 +2745,9 @@ export const ChatPage = () => {
     if (next.length > 0) {
       setAttachmentError(null)
       setPendingAttachments((prev) => [...prev, ...next])
+      if (!chatIdRef.current && !pendingChatIdRef.current) {
+        void ensureChatCreated()
+      }
     }
   }
 
@@ -3448,6 +3572,7 @@ export const ChatPage = () => {
                 inputRef={composerInputRef}
                 showModelSelect
                 hasPrompts={promptCount > 0}
+                onDraftChange={handleComposerDraftChange}
                 modelSelect={
                   <Select value={selectedModel} onValueChange={setSelectedModel}>
                     <SelectTrigger
@@ -3699,7 +3824,7 @@ export const ChatPage = () => {
           open={savePromptOpen}
           onOpenChange={setSavePromptOpen}
           orgId={orgId}
-          spaces={agents}
+          projects={agents}
           initial={{
             body: savePromptBody,
             agent_id:

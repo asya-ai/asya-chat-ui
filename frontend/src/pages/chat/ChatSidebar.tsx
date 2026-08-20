@@ -4,6 +4,11 @@ import { ChevronDown, ChevronRight, FileText, Loader2, MoreVertical, Pin, Plus, 
 
 import { agentApi, promptApi } from "@/lib/api"
 import { useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
+import {
+  draftTitleFromText,
+  composerDraftStore,
+  useComposerDrafts,
+} from "@/lib/composer-drafts"
 import { useI18n } from "@/lib/i18n-context"
 import { orgStore, sidebarSectionsStore } from "@/lib/storage"
 import type { Agent, Chat, Prompt } from "@/lib/types"
@@ -145,6 +150,15 @@ export const ChatSidebar = ({
   const { data: searchedChats = [] } = useChatSearch(orgId, sessionQueryDebounced)
   const currentChatId = activeChatId ?? routeChatId ?? null
   const generationIndicators = useChatGenerationIndicators()
+  const composerDrafts = useComposerDrafts()
+
+  const chatDisplayTitle = (chat: Chat) => {
+    const serverTitle = (chat.title || "").trim()
+    if (serverTitle) return serverTitle
+    const draftTitle = draftTitleFromText(composerDrafts[chat.id] ?? "")
+    if (draftTitle) return draftTitle
+    return t("chat_new_title")
+  }
 
   const chatSessionStatus = (chatId: string) => {
     const status = generationIndicators[chatId] ?? null
@@ -355,13 +369,13 @@ export const ChatSidebar = ({
     navigate(`/projects/${encodeURIComponent(agent.id)}`)
   }
 
-  const openCreateSpace = () => {
+  const openCreateProject = () => {
     setCreateError(null)
     setCreateOpen(true)
-    if (!sectionsOpen.spaces) setSectionOpen("spaces", true)
+    if (!sectionsOpen.projects) setSectionOpen("projects", true)
   }
 
-  const handleCreateSpace = async () => {
+  const handleCreateProject = async () => {
     const name = newNameRef.current?.value.trim() ?? ""
     if (!name) {
       setCreateError(t("project_name_required"))
@@ -403,6 +417,7 @@ export const ChatSidebar = ({
     if (!deleteConfirmChat) return
     const chatIdToDelete = deleteConfirmChat.id
     await deleteChatMutation.mutateAsync(chatIdToDelete)
+    composerDraftStore.clear(chatIdToDelete)
     setDeleteConfirmChat(null)
     if (currentChatId === chatIdToDelete) {
       navigate("/chat", { replace: true })
@@ -502,7 +517,7 @@ export const ChatSidebar = ({
                             >
                               <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                 <span className="min-w-0 flex-1 truncate">
-                                  {chat.title || t("chat_new_title")}
+                                  {chatDisplayTitle(chat)}
                                 </span>
                               </Link>
                             </Button>
@@ -584,8 +599,8 @@ export const ChatSidebar = ({
                   variant="ghost"
                   className="h-9 min-w-0 flex-1 justify-start gap-0.5 p-0 data-[active=true]:bg-sidebar-accent"
                   data-active={activeSection === "projects"}
-                  aria-expanded={sectionsOpen.spaces}
-                  onClick={() => setSectionOpen("spaces", !sectionsOpen.spaces)}
+                  aria-expanded={sectionsOpen.projects}
+                  onClick={() => setSectionOpen("projects", !sectionsOpen.projects)}
                   onDoubleClick={(event) => {
                     event.preventDefault()
                     onOpenProjects()
@@ -595,7 +610,7 @@ export const ChatSidebar = ({
                     <span
                       aria-hidden="true"
                       className="figma-icon size-5"
-                      style={{ maskImage: "url('/icon-spaces.svg')" }}
+                      style={{ maskImage: "url('/icon-projects.svg')" }}
                     />
                   </span>
                   <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
@@ -608,7 +623,7 @@ export const ChatSidebar = ({
                   size="icon-sm"
                   className="shrink-0 text-muted-foreground"
                   aria-label={t("project_new")}
-                  onClick={openCreateSpace}
+                  onClick={openCreateProject}
                 >
                   <Plus aria-hidden="true" className="size-4" />
                 </Button>
@@ -618,20 +633,20 @@ export const ChatSidebar = ({
                   size="icon-sm"
                   className="mr-2 shrink-0 text-muted-foreground"
                   aria-label={
-                    sectionsOpen.spaces
-                      ? t("chat_collapse_spaces")
-                      : t("chat_expand_spaces")
+                    sectionsOpen.projects
+                      ? t("chat_collapse_projects")
+                      : t("chat_expand_projects")
                   }
-                  onClick={() => setSectionOpen("spaces", !sectionsOpen.spaces)}
+                  onClick={() => setSectionOpen("projects", !sectionsOpen.projects)}
                 >
-                  {sectionsOpen.spaces ? (
+                  {sectionsOpen.projects ? (
                     <ChevronDown aria-hidden="true" className="size-4" />
                   ) : (
                     <ChevronRight aria-hidden="true" className="size-4" />
                   )}
                 </Button>
               </div>
-              {sectionsOpen.spaces ? (
+              {sectionsOpen.projects ? (
                 <div className="mt-0.5 flex flex-col gap-0.5">
                   {agents.length === 0 ? (
                     <p className="px-3 py-2 text-xs text-muted-foreground">
@@ -852,7 +867,7 @@ export const ChatSidebar = ({
                                 >
                                   <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                     <span className="min-w-0 flex-1 truncate">
-                                      {chat.title || t("chat_new_title")}
+                                      {chatDisplayTitle(chat)}
                                     </span>
                                   </Link>
                                 </Button>
@@ -962,7 +977,7 @@ export const ChatSidebar = ({
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault()
-                  void handleCreateSpace()
+                  void handleCreateProject()
                 }
               }}
             />
@@ -982,7 +997,7 @@ export const ChatSidebar = ({
               {t("common_cancel")}
             </Button>
             <Button
-              onClick={() => void handleCreateSpace()}
+              onClick={() => void handleCreateProject()}
               disabled={creating || !hasNewName}
             >
               {t("project_create_action")}
@@ -1064,7 +1079,7 @@ export const ChatSidebar = ({
           if (!open) setEditingPrompt(null)
         }}
         orgId={orgId}
-        spaces={agents}
+        projects={agents}
         initial={
           editingPrompt
             ? {

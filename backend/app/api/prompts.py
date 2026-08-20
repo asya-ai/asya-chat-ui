@@ -95,17 +95,17 @@ def _get_agent_role(session: Session, agent_id: UUID, user_id: UUID) -> AgentAcc
     return access.role if access else None
 
 
-def _require_space_editor(session: Session, auth: AuthContext, agent_id: UUID) -> Agent:
+def _require_project_editor(session: Session, auth: AuthContext, agent_id: UUID) -> Agent:
     agent = session.exec(
         select(Agent).where(Agent.id == agent_id, Agent.org_id == auth.org_id)
     ).first()
     if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     role = _get_agent_role(session, agent.id, auth.user.id)
     if role is None or _ROLE_ORDER[role] < _ROLE_ORDER[AgentAccessRole.editor]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Space editor access required",
+            detail="Project editor access required",
         )
     return agent
 
@@ -300,7 +300,7 @@ def _can_see_prompt(
         return bool(shared_team_ids & user_team_ids)
     if prompt.visibility == PromptVisibility.users:
         return shared_with_user
-    if prompt.visibility == PromptVisibility.space:
+    if prompt.visibility == PromptVisibility.project:
         return (
             prompt.agent_id is not None and prompt.agent_id in accessible_agent_ids
         )
@@ -328,18 +328,18 @@ def _resolve_agent_id(
 ) -> UUID | None:
     if agent_id is None or agent_id == "":
         return None
-    parsed = _parse_uuid(agent_id, "Invalid space id")
-    _require_space_editor(session, auth, parsed)
+    parsed = _parse_uuid(agent_id, "Invalid project id")
+    _require_project_editor(session, auth, parsed)
     return parsed
 
 
 def _validate_visibility_location(
     visibility: PromptVisibility, agent_id: UUID | None
 ) -> None:
-    if visibility == PromptVisibility.space and agent_id is None:
+    if visibility == PromptVisibility.project and agent_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Space visibility requires a space location",
+            detail="Project visibility requires a project location",
         )
 
 
@@ -445,19 +445,19 @@ def list_prompts(
         if agent_id == "" or agent_id.lower() == "null":
             statement = statement.where(Prompt.agent_id.is_(None))
         else:
-            parsed_agent = _parse_uuid(agent_id, "Invalid space id")
+            parsed_agent = _parse_uuid(agent_id, "Invalid project id")
             statement = statement.where(Prompt.agent_id == parsed_agent)
     elif context_agent_id is not None:
-        # Offer profile prompts always; space prompts only in that space's chats
+        # Offer profile prompts always; project prompts only in that project's chats
         if context_agent_id == "" or context_agent_id.lower() == "null":
             statement = statement.where(Prompt.agent_id.is_(None))
         else:
-            parsed_context = _parse_uuid(context_agent_id, "Invalid space id")
+            parsed_context = _parse_uuid(context_agent_id, "Invalid project id")
             statement = statement.where(
                 or_(Prompt.agent_id.is_(None), Prompt.agent_id == parsed_context)
             )
     else:
-        # Default usable list outside a space: profile prompts only
+        # Default usable list outside a project: profile prompts only
         statement = statement.where(Prompt.agent_id.is_(None))
 
     clauses = [
@@ -480,7 +480,7 @@ def list_prompts(
     if accessible_agent_ids:
         clauses.append(
             and_(
-                Prompt.visibility == PromptVisibility.space,
+                Prompt.visibility == PromptVisibility.project,
                 Prompt.agent_id.in_(accessible_agent_ids),
             )
         )

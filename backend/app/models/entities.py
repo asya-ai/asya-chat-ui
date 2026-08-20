@@ -565,7 +565,7 @@ class PromptVisibility(str, Enum):
     private = "private"
     team = "team"
     users = "users"
-    space = "space"
+    project = "project"
     org = "org"
 
 

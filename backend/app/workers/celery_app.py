@@ -34,7 +34,8 @@ celery_app.conf.update(
     task_routes={
         "chatui.generate_chat_response": {"queue": QUEUE_GENERATION},
         "chatui.reindex_agent_source": {"queue": QUEUE_EMBEDDING},
-        "chatui.index_space_chat": {"queue": QUEUE_EMBEDDING},
+        "chatui.index_project_chat": {"queue": QUEUE_EMBEDDING},
+        "chatui.index_space_chat": {"queue": QUEUE_EMBEDDING},  # legacy alias
     },
     beat_schedule={
         "cleanup-incognito-chats": {

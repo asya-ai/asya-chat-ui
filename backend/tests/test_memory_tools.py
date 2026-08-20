@@ -55,7 +55,7 @@ async def test_search_past_chats_excludes_the_active_conversation():
 
 
 @pytest.mark.asyncio
-async def test_search_past_chats_scopes_to_space_when_agent_set():
+async def test_search_past_chats_scopes_to_project_when_agent_set():
     session = _RecordingSession()
     agent_id = uuid4()
 
@@ -69,7 +69,7 @@ async def test_search_past_chats_scopes_to_space_when_agent_set():
     )
 
     assert result.output["results"] == []
-    assert result.output.get("scope") == "space"
+    assert result.output.get("scope") == "project"
     assert session.statement is not None
     compiled = session.statement.compile(dialect=postgresql.dialect())
     assert agent_id in compiled.params.values()

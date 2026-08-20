@@ -90,7 +90,7 @@ def _delete_source_chunks(session: Session, source: AgentSource) -> None:
     session.delete(source)
 
 
-def delete_space_chat_source(session: Session, chat_id: UUID) -> None:
+def delete_project_chat_source(session: Session, chat_id: UUID) -> None:
     url = chat_source_url(chat_id)
     sources = session.exec(
         select(AgentSource).where(
@@ -102,7 +102,7 @@ def delete_space_chat_source(session: Session, chat_id: UUID) -> None:
         _delete_source_chunks(session, source)
 
 
-def upsert_space_chat_source(session: Session, chat: Chat) -> AgentSource | None:
+def upsert_project_chat_source(session: Session, chat: Chat) -> AgentSource | None:
     """Create/update a queued chat source for semantic indexing. Caller commits + enqueues."""
     if not chat.agent_id or chat.is_deleted or chat.is_incognito:
         return None
@@ -149,24 +149,24 @@ def upsert_space_chat_source(session: Session, chat: Chat) -> AgentSource | None
     return source
 
 
-def enqueue_space_chat_index(chat_id: UUID) -> None:
+def enqueue_project_chat_index(chat_id: UUID) -> None:
     from app.workers.celery_app import celery_app
 
     celery_app.send_task(
-        "chatui.index_space_chat",
+        "chatui.index_project_chat",
         args=[str(chat_id)],
         queue="embedding",
     )
 
 
-def enqueue_missing_space_chat_indexes(
+def enqueue_missing_project_chat_indexes(
     session: Session,
     *,
     agent_id: UUID,
     user_id: UUID,
     limit: int = 25,
 ) -> int:
-    """Queue indexing for this user's space chats that have no active source yet.
+    """Queue indexing for this user's project chats that have no active source yet.
 
     Creates/updates queued sources on the caller's session (no commit) so repeat
     requests in the same window do not spam duplicate Celery jobs.
@@ -206,10 +206,10 @@ def enqueue_missing_space_chat_indexes(
     for chat in chats:
         if chat_source_url(chat.id) in existing_urls:
             continue
-        source = upsert_space_chat_source(session, chat)
+        source = upsert_project_chat_source(session, chat)
         if source is None:
             continue
-        enqueue_space_chat_index(chat.id)
+        enqueue_project_chat_index(chat.id)
         queued += 1
         if queued >= limit:
             break

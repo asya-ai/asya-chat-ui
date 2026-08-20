@@ -783,17 +783,17 @@ def _build_tool_registry(
                 mem_ctx, query=args.get("query", ""), limit=args.get("limit", 10)
             )
 
-        space_scope = (
-            "Scoped to chats in the current space only. "
+        project_scope = (
+            "Scoped to chats in the current project only. "
             if agent_id
-            else "Scoped to personal chats outside spaces. "
+            else "Scoped to personal chats outside projects. "
         )
         registry.register(
             ToolSpec(
                 name="search_past_chats",
                 description=(
                     "Search the user's past chat conversations by keyword. "
-                    f"{space_scope}"
+                    f"{project_scope}"
                     "Call this when prior context may matter instead of guessing. "
                     "Returns matching chat titles, chat IDs, created_at, last_activity_at "
                     "(last message / last modified), and message previews. "
@@ -825,14 +825,14 @@ def _build_tool_registry(
         )
 
         try:
-            from app.services.agents.chat_index import enqueue_missing_space_chat_indexes
+            from app.services.agents.chat_index import enqueue_missing_project_chat_indexes
 
             if user_id:
-                enqueue_missing_space_chat_indexes(
+                enqueue_missing_project_chat_indexes(
                     session, agent_id=agent_id, user_id=user_id, limit=15
                 )
         except Exception:
-            logger.debug("Space chat backfill enqueue failed", exc_info=True)
+            logger.debug("Project chat backfill enqueue failed", exc_info=True)
 
         async def _list_project_sources_handler(args: dict) -> object:
             return await list_project_sources(
@@ -844,7 +844,7 @@ def _build_tool_registry(
             ToolSpec(
                 name="list_project_sources",
                 description=(
-                    "List sources in this space with numeric id, title, kind, summary, and "
+                    "List sources in this project with numeric id, title, kind, summary, and "
                     "length. Includes indexed prior chats (kind=chat) by default. Set "
                     "include_chats=false to list only uploaded files/URLs/text when the user "
                     "wants answers grounded only in documents. Refer to sources by numeric id."
@@ -877,7 +877,7 @@ def _build_tool_registry(
             ToolSpec(
                 name="search_project_sources",
                 description=(
-                    "Semantic search across this space's documents and, by default, indexed "
+                    "Semantic search across this project's documents and, by default, indexed "
                     "prior chats. Returns passages with numeric source id, title, kind, and "
                     "snippet. Set include_chats=false when the user wants answers based only "
                     "on uploaded sources/files (ignore prior chat memory). Then call "
@@ -4380,11 +4380,11 @@ def delete_chat(
     chat.is_deleted = True
     session.add(chat)
     try:
-        from app.services.agents.chat_index import delete_space_chat_source
+        from app.services.agents.chat_index import delete_project_chat_source
 
-        delete_space_chat_source(session, chat.id)
+        delete_project_chat_source(session, chat.id)
     except Exception:
-        logger.exception("Failed to delete space chat index for chat_id=%s", chat.id)
+        logger.exception("Failed to delete project chat index for chat_id=%s", chat.id)
     session.commit()
 
 

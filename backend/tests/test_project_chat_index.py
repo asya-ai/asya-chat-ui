@@ -9,7 +9,7 @@ from app.services.agents.chat_index import (
     build_chat_transcript,
     chat_source_url,
     chat_source_visible_to_user,
-    upsert_space_chat_source,
+    upsert_project_chat_source,
 )
 
 
@@ -71,7 +71,7 @@ def test_build_chat_transcript_skips_tool_roles():
     assert "tool:" not in transcript
 
 
-def test_upsert_space_chat_source_creates_queued_chat_source(monkeypatch):
+def test_upsert_project_chat_source_creates_queued_chat_source(monkeypatch):
     class _Session:
         def __init__(self):
             self.added = []
@@ -105,7 +105,7 @@ def test_upsert_space_chat_source_creates_queued_chat_source(monkeypatch):
         created_at=datetime.utcnow(),
         last_activity_at=datetime.utcnow(),
     )
-    source = upsert_space_chat_source(session, chat)  # type: ignore[arg-type]
+    source = upsert_project_chat_source(session, chat)  # type: ignore[arg-type]
     assert source is not None
     assert source.kind == AgentSourceKind.chat
     assert source.status == AgentSourceStatus.queued
@@ -114,7 +114,7 @@ def test_upsert_space_chat_source_creates_queued_chat_source(monkeypatch):
     assert "budget" in source.content_text.lower()
 
 
-def test_upsert_space_chat_source_updates_existing(monkeypatch):
+def test_upsert_project_chat_source_updates_existing(monkeypatch):
     existing = AgentSource(
         id=uuid4(),
         agent_id=uuid4(),
@@ -159,7 +159,7 @@ def test_upsert_space_chat_source_updates_existing(monkeypatch):
         created_at=datetime.utcnow(),
         last_activity_at=datetime.utcnow(),
     )
-    source = upsert_space_chat_source(session, chat)  # type: ignore[arg-type]
+    source = upsert_project_chat_source(session, chat)  # type: ignore[arg-type]
     assert source is existing
     assert source.title == "Budget chat"
     assert source.status == AgentSourceStatus.queued
@@ -169,7 +169,7 @@ def test_upsert_space_chat_source_updates_existing(monkeypatch):
     assert session.added == [existing]
 
 
-def test_upsert_skips_incognito_and_non_space_chats():
+def test_upsert_skips_incognito_and_non_project_chats():
     class _Session:
         def exec(self, _statement):
             return _Result([])
@@ -190,7 +190,7 @@ def test_upsert_skips_incognito_and_non_space_chats():
         is_deleted=False,
         is_incognito=False,
     )
-    assert upsert_space_chat_source(session, personal) is None  # type: ignore[arg-type]
+    assert upsert_project_chat_source(session, personal) is None  # type: ignore[arg-type]
 
     incognito = Chat(
         id=uuid4(),
@@ -201,4 +201,4 @@ def test_upsert_skips_incognito_and_non_space_chats():
         is_deleted=False,
         is_incognito=True,
     )
-    assert upsert_space_chat_source(session, incognito) is None  # type: ignore[arg-type]
+    assert upsert_project_chat_source(session, incognito) is None  # type: ignore[arg-type]

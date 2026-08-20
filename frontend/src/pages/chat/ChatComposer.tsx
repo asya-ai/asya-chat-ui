@@ -61,6 +61,7 @@ type ChatComposerProps = {
   onWebSearchEnabledChange: (enabled: boolean) => void
   onCodeExecutionEnabledChange: (enabled: boolean) => void
   onInsertPromptRequest?: () => void
+  onDraftChange?: (value: string) => void
   sendLabel: string
   stopLabel: string
   welcomeTitle: string
@@ -94,6 +95,7 @@ export const ChatComposer = ({
   onWebSearchEnabledChange,
   onCodeExecutionEnabledChange,
   onInsertPromptRequest,
+  onDraftChange,
   sendLabel,
   stopLabel,
   welcomeTitle,
@@ -103,6 +105,8 @@ export const ChatComposer = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [hasText, setHasText] = useState(false)
+  const onDraftChangeRef = useRef(onDraftChange)
+  onDraftChangeRef.current = onDraftChange
 
   const assignTextareaRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -115,6 +119,7 @@ export const ChatComposer = ({
   const syncDraft = (next: string) => {
     const nextHasText = next.trim().length > 0
     setHasText((prev) => (prev === nextHasText ? prev : nextHasText))
+    onDraftChangeRef.current?.(next)
   }
 
   useImperativeHandle(ref, () => ({

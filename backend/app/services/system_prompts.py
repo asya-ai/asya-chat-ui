@@ -20,14 +20,14 @@ MEMORY_SYSTEM_PROMPT = (
     "You have access to a persistent memory system. Prefer using it proactively: "
     "when the user refers to prior work, preferences, decisions, names, or anything "
     "you may have discussed before, search before answering from guesswork. "
-    "In a space, prefer search_project_sources (semantic search over indexed prior "
+    "In a project, prefer search_project_sources (semantic search over indexed prior "
     "chats and uploaded files) and use search_past_chats for chat titles/previews. "
     "If the user asks to rely only on uploaded sources/files/documents, call "
     "search_project_sources with include_chats=false. "
     "Stored memories (when listed) are durable facts/preferences—apply them. "
     "Use store_memory for lasting preferences or explicit 'remember this' "
     "requests; do NOT store transient chat-only details. "
-    "Outside spaces, past-chat search covers personal chats only."
+    "Outside projects, past-chat search covers personal chats only."
 )
 
 TOOL_SYSTEM_PROMPTS: dict[str, str] = {
@@ -82,21 +82,21 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     ),
     "search_past_chats": (
         "Call search_past_chats to find earlier chats by keyword (titles and previews). "
-        "In a space, also use search_project_sources for semantic recall over indexed chat "
+        "In a project, also use search_project_sources for semantic recall over indexed chat "
         "transcripts and uploaded files. Prefer tools over guessing. Results include "
         "created_at and last_activity_at, ordered by most recent activity."
     ),
     "list_project_sources": (
-        "Use list_project_sources to see files and indexed chats in this space. "
+        "Use list_project_sources to see files and indexed chats in this project. "
         "Pass include_chats=false to list uploaded documents only."
     ),
     "search_project_sources": (
-        "Use search_project_sources for semantic retrieval over this space's uploaded "
+        "Use search_project_sources for semantic retrieval over this project's uploaded "
         "files/URLs and indexed prior chats. When the user wants answers based only on "
         "uploaded sources/documents (not prior chats), set include_chats=false."
     ),
     "read_project_source": (
-        "Use read_project_source to read a space file or indexed chat transcript by numeric id."
+        "Use read_project_source to read a project file or indexed chat transcript by numeric id."
     ),
 }
 

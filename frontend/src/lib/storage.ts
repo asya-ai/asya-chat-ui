@@ -27,14 +27,14 @@ export type ActionInfoLevel = "none" | "short" | "detailed"
 
 export type SidebarSectionsState = {
   pinned: boolean
-  spaces: boolean
+  projects: boolean
   prompts: boolean
   sessions: boolean
 }
 
 const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionsState = {
   pinned: true,
-  spaces: false,
+  projects: false,
   prompts: false,
   sessions: true,
 }
@@ -42,10 +42,15 @@ const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionsState = {
 const parseSidebarSections = (raw: string | null): SidebarSectionsState => {
   if (!raw) return { ...DEFAULT_SIDEBAR_SECTIONS }
   try {
-    const parsed = JSON.parse(raw) as Partial<SidebarSectionsState>
+    const parsed = JSON.parse(raw) as Partial<SidebarSectionsState> & {
+      spaces?: boolean
+    }
     return {
       pinned: parsed.pinned == null ? true : Boolean(parsed.pinned),
-      spaces: Boolean(parsed.spaces),
+      projects:
+        parsed.projects != null
+          ? Boolean(parsed.projects)
+          : Boolean(parsed.spaces),
       prompts: Boolean(parsed.prompts),
       sessions: parsed.sessions == null ? true : Boolean(parsed.sessions),
     }

@@ -615,7 +615,7 @@ export type AgentShareSuggestion = {
   display_name?: string | null
 }
 
-export type PromptVisibility = "private" | "team" | "users" | "space" | "org"
+export type PromptVisibility = "private" | "team" | "users" | "project" | "org"
 
 export type PromptSharedUser = {
   user_id: string

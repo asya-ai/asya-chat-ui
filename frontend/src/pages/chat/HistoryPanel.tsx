@@ -124,7 +124,7 @@ export const HistoryPanel = ({
                                 <span
                                   aria-hidden="true"
                                   className="figma-icon size-3.5 shrink-0"
-                                  style={{ maskImage: "url('/icon-spaces.svg')" }}
+                                  style={{ maskImage: "url('/icon-projects.svg')" }}
                                 />
                                 <span className="truncate">{spaceLabel}</span>
                               </span>
