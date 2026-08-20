@@ -64,7 +64,9 @@ export const useChatSearch = (orgId: string | null, query: string) =>
 
 export const useChatMessages = (chatId: string | null) =>
   useQuery({
-    queryKey: chatId ? chatKeys.messages(chatId) : ["chatMessages"],
+    // Keep the key chat-scoped even when disabled so a bare ["chatMessages"]
+    // prefix never collides with per-chat caches during /chat ↔ /chat/:id switches.
+    queryKey: chatId ? chatKeys.messages(chatId) : ["chatMessages", "none"],
     queryFn: () => {
       if (!chatId) return []
       return chatApi.messages(chatId)

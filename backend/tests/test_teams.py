@@ -242,6 +242,8 @@ def test_seed_default_does_not_reenable_manually_disabled_model():
     with _session() as session:
         org, _, model_a, model_b = _seed_org(session)
         default = ensure_default_team(session, org.id)
+        # Other teams mean Default can keep intentional disables.
+        session.add(Team(org_id=org.id, name="Engineering", is_default=False))
         session.add(TeamModel(team_id=default.id, model_id=model_a.id, is_enabled=True))
         session.add(TeamModel(team_id=default.id, model_id=model_b.id, is_enabled=False))
         session.commit()
@@ -255,3 +257,23 @@ def test_seed_default_does_not_reenable_manually_disabled_model():
             )
         ).one()
         assert link.is_enabled is False
+
+
+def test_seed_default_reenables_when_org_has_only_default_team():
+    with _session() as session:
+        org, user, model_a, model_b = _seed_org(session)
+        default = ensure_default_team(session, org.id)
+        session.add(TeamModel(team_id=default.id, model_id=model_a.id, is_enabled=True))
+        session.add(TeamModel(team_id=default.id, model_id=model_b.id, is_enabled=False))
+        session.commit()
+
+        seed_default_team_model(session, org.id, model_b.id, enabled=True)
+        session.commit()
+
+        link = session.exec(
+            select(TeamModel).where(
+                TeamModel.team_id == default.id, TeamModel.model_id == model_b.id
+            )
+        ).one()
+        assert link.is_enabled is True
+        assert allowed_model_ids(session, org.id, user.id) == {model_a.id, model_b.id}

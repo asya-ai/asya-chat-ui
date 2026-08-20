@@ -29,9 +29,10 @@ import {
   Plus,
   X,
 } from "lucide-react"
-import { Document, Packer, Paragraph, TextRun } from "docx"
 import html2canvas from "html2canvas"
 import { jsPDF } from "jspdf"
+
+import { exportCoworkMarkdown } from "@/pages/chat/exportCoworkMarkdown"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import type { ActionInfoLevel } from "@/lib/storage"
@@ -711,32 +712,11 @@ const downloadAnswerPdf = async (
 
 const downloadAnswerDocx = async (msg: ChatMessage) => {
   const text = getFinalAnswerText(msg)
-  const bodyFont = "Google Sans Flex"
-  const paragraphs = text.split(/\n/).map(
-    (line) =>
-      new Paragraph({
-        children: [new TextRun({ text: line, size: 24, font: bodyFont })],
-      })
-  )
-  const document = new Document({
-    styles: {
-      default: {
-        document: {
-          run: { font: bodyFont, size: 24 },
-        },
-      },
-    },
-    sections: [
-      {
-        children:
-          paragraphs.length > 0
-            ? paragraphs
-            : [new Paragraph({ children: [new TextRun({ text: "", font: bodyFont, size: 24 })] })],
-      },
-    ],
+  const { blob, fileName } = await exportCoworkMarkdown(text, {
+    format: "docx",
+    fileName: answerFileStem(msg),
   })
-  const blob = await Packer.toBlob(document)
-  downloadBlob(blob, `${answerFileStem(msg)}.docx`)
+  downloadBlob(blob, fileName)
 }
 
 const ToolEventDetails = ({

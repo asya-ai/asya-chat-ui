@@ -32,13 +32,23 @@ def ensure_default_team(session: Session, org_id: UUID, *, commit: bool = True) 
     return team
 
 
+def _org_has_only_default_team(session: Session, org_id: UUID) -> bool:
+    extra = session.exec(
+        select(Team.id).where(Team.org_id == org_id, Team.is_default.is_(False)).limit(1)
+    ).first()
+    return extra is None
+
+
 def seed_default_team_model(
     session: Session, org_id: UUID, model_id: UUID, *, enabled: bool = True
 ) -> None:
     """Add a newly enabled org model to Default so it appears in the chat picker.
 
     If Default has never been configured, mirror the full org-enabled set.
-    Existing Default rows (including manual disables) are left unchanged.
+    When the org has only Default (no other teams), always enable the model on
+    Default — including re-enabling a previously disabled row.
+    When other teams exist, existing Default rows (including manual disables)
+    are left unchanged.
     """
     if not enabled:
         return
@@ -49,7 +59,10 @@ def seed_default_team_model(
         )
     ).first()
     if link:
-        # Already configured for this team (enabled or manually disabled).
+        if _org_has_only_default_team(session, org_id) and not link.is_enabled:
+            link.is_enabled = True
+            session.add(link)
+        # Already configured (enabled, or manually disabled with other teams).
         return
 
     org_enabled = set(

@@ -183,16 +183,10 @@ const App = () => {
             </RequireAuth>
           }
         />
+        {/* Optional :chatId keeps ChatPage mounted across new↔existing chat
+            navigations so in-flight generation state/subscriptions survive. */}
         <Route
-          path="/chat"
-          element={
-            <RequireAuth>
-              <ChatPage />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/chat/:chatId"
+          path="/chat/:chatId?"
           element={
             <RequireAuth>
               <ChatPage />

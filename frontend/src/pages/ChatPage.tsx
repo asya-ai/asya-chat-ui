@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { ApiError, agentApi, chatApi, configApi, promptApi } from "@/lib/api"
-import { chatGenerationIndicatorsStore } from "@/lib/chat-generation-indicators"
+import { chatGenerationIndicatorsStore, useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import {
   actionInfoLevelStore,
   codeExecutionEnabledStore,
@@ -611,6 +611,9 @@ export const ChatPage = () => {
   const taskCursorRef = useRef<Record<string, number>>({})
   const taskSubscriptionsRef = useRef<Record<string, () => void>>({})
   const taskPollingRef = useRef<Record<string, number>>({})
+  // Chats whose send/edit WebSocket is owned by this mount. Prevents the
+  // background reconcile effect from opening a duplicate task subscription.
+  const localStreamChatIdsRef = useRef<Set<string>>(new Set())
 
   const stopGeneration = () => {
     if (!chatId) return
@@ -656,6 +659,7 @@ export const ChatPage = () => {
       currentCancelRef.current()
       currentCancelRef.current = null
     }
+    localStreamChatIdsRef.current.delete(chatId)
     setChatGenerating(chatId, false, { unreadIfAway: false })
   }
 
@@ -1562,9 +1566,31 @@ export const ChatPage = () => {
       !chats.some((item) => item.id === chatId) &&
       !sessionOwnedChatIds.includes(chatId)
   )
-  const currentChatLoading = Boolean(chatId && loadingByChat[chatId])
+  const generationIndicators = useChatGenerationIndicators()
+  const currentChatLoading = Boolean(
+    chatId &&
+      (loadingByChat[chatId] || generationIndicators[chatId] === "generating")
+  )
 
   const isChatSwitchRef = useRef(false)
+
+  useEffect(() => {
+    // Rehydrate local loading flags from the persisted indicator store after
+    // remounts (or Strict Mode) so Stop stays wired to background generations.
+    const generatingIds = chatGenerationIndicatorsStore.generatingChatIds()
+    if (generatingIds.length === 0) return
+    setLoadingByChat((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const id of generatingIds) {
+        if (!next[id]) {
+          next[id] = true
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [])
 
   useEffect(() => {
     setToolEvents([])
@@ -1623,7 +1649,6 @@ export const ChatPage = () => {
 
   useEffect(() => {
     if (!chatId) return
-    if (loadingByChat[chatId]) return
     // Wait for messages so catch-up can attach to the assistant bubble.
     // Otherwise the cursor advances against an empty list and live deltas
     // create a partial timeline that hides persisted content.
@@ -1633,36 +1658,77 @@ export const ChatPage = () => {
       try {
         const tasks = await chatApi.listGenerationTasks(chatId, true)
         if (cancelled) return
-        if (tasks.length === 0) {
-          const cachedMessages =
-            queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
-          if (cachedMessages.length > 0) {
-            return
-          }
+
+        let messages =
+          queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
+
+        // If we navigated away/back (or remounted) with an empty cache while a
+        // generation is still marked loading, always re-fetch history first.
+        if (messages.length === 0) {
           const freshMessages = await chatApi.messages(chatId)
-          if (!cancelled) {
-            replaceChatMessagesFor(chatId, freshMessages)
-          }
+          if (cancelled) return
+          replaceChatMessagesFor(chatId, freshMessages)
+          messages = freshMessages
+        }
+
+        if (tasks.length === 0) {
+          // Already have history (or just fetched it); nothing to attach.
           return
         }
+
+        // Live send/edit on this mount already owns the stream — don't
+        // double-subscribe. Still allow the empty-cache fetch above.
+        if (loadingByChat[chatId]) {
+          const ownsAllAssistants = tasks.every((task) =>
+            messages.some(
+              (msg) =>
+                msg.role === "assistant" &&
+                (msg.id === task.assistant_message_id || msg.task_id === task.id)
+            )
+          )
+          if (ownsAllAssistants) return
+        }
+
         let attached = 0
         for (const task of tasks) {
           if (cancelled) return
-          const messages =
+          messages =
             queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
-          const hasAssistant = messages.some(
-            (msg) => msg.role === "assistant" && msg.id === task.assistant_message_id
+          let hasAssistant = messages.some(
+            (msg) =>
+              msg.role === "assistant" &&
+              (msg.id === task.assistant_message_id || msg.task_id === task.id)
           )
           if (!hasAssistant) {
-            // Messages query may still be empty/stale; retry on next effect run.
+            // Cache may still be optimistic/stale; pull server messages once.
+            const freshMessages = await chatApi.messages(chatId)
+            if (cancelled) return
+            replaceChatMessagesFor(chatId, freshMessages)
+            messages = freshMessages
+            hasAssistant = messages.some(
+              (msg) =>
+                msg.role === "assistant" &&
+                (msg.id === task.assistant_message_id || msg.task_id === task.id)
+            )
+            if (!hasAssistant) continue
+          }
+          if (
+            taskSubscriptionsRef.current[task.id] ||
+            taskPollingRef.current[task.id]
+          ) {
+            setChatGenerating(chatId, true)
             continue
           }
           taskCursorRef.current[task.id] = taskCursorRef.current[task.id] ?? 0
           updateChatMessagesFor(chatId, (prev) =>
             prev.map((msg) =>
-              msg.id === task.assistant_message_id
+              msg.id === task.assistant_message_id || msg.task_id === task.id
                 ? {
                     ...msg,
+                    id:
+                      msg.id.startsWith("temp-")
+                        ? task.assistant_message_id
+                        : msg.id,
                     task_id: task.id,
                     generation_status: task.status,
                   }
@@ -1706,11 +1772,13 @@ export const ChatPage = () => {
     const generatingIds = chatGenerationIndicatorsStore
       .generatingChatIds()
       .filter((id) => id !== chatId)
+      .filter((id) => !localStreamChatIdsRef.current.has(id))
     if (generatingIds.length === 0) return
     let cancelled = false
     const reconcile = async () => {
       for (const targetChatId of generatingIds) {
         if (cancelled) return
+        if (localStreamChatIdsRef.current.has(targetChatId)) continue
         try {
           const tasks = await chatApi.listGenerationTasks(targetChatId, true)
           if (cancelled) return
@@ -1870,7 +1938,8 @@ export const ChatPage = () => {
   ])
 
   const startNewChat = () => {
-    replaceCurrentChatMessages([])
+    // Do not clear the previous chat's message cache — generations may still be
+    // streaming into it, and wiping leaves an empty shell when navigating back.
     setToolEvents([])
     composerRef.current?.setValue("")
     setPendingAttachments([])
@@ -2064,6 +2133,7 @@ export const ChatPage = () => {
       await queryClient.cancelQueries({ queryKey: ["chatMessages", chat.id] })
       generationEpoch = ++generationEpochRef.current
       setChatGenerating(chat.id, true)
+      localStreamChatIdsRef.current.add(chat.id)
       const updateMessages = (updater: (prev: ChatMessage[]) => ChatMessage[]) =>
         updateChatMessagesFor(chat.id, updater)
       const activityAt = new Date().toISOString()
@@ -2143,6 +2213,9 @@ export const ChatPage = () => {
       }
       if (requestChatId && generationEpochRef.current === generationEpoch) {
         setChatGenerating(requestChatId, false)
+      }
+      if (requestChatId) {
+        localStreamChatIdsRef.current.delete(requestChatId)
       }
     }
   }
@@ -2705,6 +2778,7 @@ export const ChatPage = () => {
     lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", activeChat.id] })
     setChatGenerating(activeChat.id, true)
+    localStreamChatIdsRef.current.add(activeChat.id)
     setToolEvents([])
     const activityAt = new Date().toISOString()
     bumpChatActivity(activeChat.id, activityAt)
@@ -2781,6 +2855,7 @@ export const ChatPage = () => {
       if (generationEpochRef.current === generationEpoch) {
         setChatGenerating(activeChat.id, false)
       }
+      localStreamChatIdsRef.current.delete(activeChat.id)
     }
   }, [
     activeChat,
@@ -2838,6 +2913,7 @@ export const ChatPage = () => {
     lastScrolledKeyRef.current = null
     await queryClient.cancelQueries({ queryKey: ["chatMessages", chatId] })
     setChatGenerating(chatId, true)
+    localStreamChatIdsRef.current.add(chatId)
     setToolEvents([])
     const activityAt = new Date().toISOString()
     bumpChatActivity(chatId, activityAt)
@@ -2923,6 +2999,7 @@ export const ChatPage = () => {
       if (generationEpochRef.current === generationEpoch) {
         setChatGenerating(chatId, false)
       }
+      localStreamChatIdsRef.current.delete(chatId)
     }
   }, [
     chatId,
