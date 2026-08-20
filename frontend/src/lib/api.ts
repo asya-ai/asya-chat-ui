@@ -685,6 +685,7 @@ export const chatApi = {
     attachments?: ChatMessageAttachmentInput[],
     web_search_enabled?: boolean,
     code_execution_enabled?: boolean,
+    reasoning_effort?: string,
     locale?: string
   ) =>
     apiFetch<ChatMessage[]>(`/chats/${chatId}/messages`, {
@@ -695,6 +696,7 @@ export const chatApi = {
         attachments,
         web_search_enabled,
         code_execution_enabled,
+        reasoning_effort,
         locale,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
@@ -706,6 +708,7 @@ export const chatApi = {
     attachments: ChatMessageAttachmentInput[] | undefined,
     web_search_enabled: boolean | undefined,
     code_execution_enabled: boolean | undefined,
+    reasoning_effort: string | undefined,
     locale: string | undefined,
     onEvent: (event: StreamEvent) => void
   ) =>
@@ -717,6 +720,7 @@ export const chatApi = {
         attachments,
         web_search_enabled,
         code_execution_enabled,
+        reasoning_effort,
         locale,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
@@ -730,6 +734,7 @@ export const chatApi = {
     attachments: ChatMessageAttachmentInput[] | null | undefined,
     web_search_enabled: boolean | undefined,
     code_execution_enabled: boolean | undefined,
+    reasoning_effort: string | undefined,
     locale: string | undefined,
     onEvent: (event: StreamEvent) => void
   ) =>
@@ -742,6 +747,7 @@ export const chatApi = {
         attachments,
         web_search_enabled,
         code_execution_enabled,
+        reasoning_effort,
         locale,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },

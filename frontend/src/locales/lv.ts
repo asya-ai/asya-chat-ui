@@ -185,6 +185,8 @@ export const lv = {
   chat_privacy_message_detail: "Šī resursa administrators un uzturētājs nevar piekļūt sarunām.",
   chat_select_model: "Izvēlieties modeli",
   chat_best_available_model: "Labākais pieejamais modelis",
+  chat_thinking_level: "Spriešana",
+  chat_thinking_level_auto: "Automātiski",
   chat_add_files: "Pievienot failus",
   chat_voice_input: "Balss ievade",
   chat_enable_incognito: "Ieslēgt inkognito režīmu",

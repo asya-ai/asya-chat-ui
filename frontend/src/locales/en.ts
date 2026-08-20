@@ -183,6 +183,8 @@ export const en = {
   chat_privacy_message_detail: "The administrator and maintainer of this resource do not have access to the conversations.",
   chat_select_model: "Select a model",
   chat_best_available_model: "Best available model",
+  chat_thinking_level: "Reasoning",
+  chat_thinking_level_auto: "Auto",
   chat_add_files: "Add files",
   chat_voice_input: "Voice input",
   chat_enable_incognito: "Enable Incognito",

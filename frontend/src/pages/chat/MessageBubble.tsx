@@ -1187,7 +1187,7 @@ const MessageBubbleComponent = ({
       p({ children, node, ...rest }: any) {
         void node
         return (
-          <p className={isUser ? "m-0 leading-5" : "my-1.5 leading-5"} {...rest}>
+          <p className={isUser ? "m-0 leading-6" : "my-3 leading-7"} {...rest}>
             {children}
           </p>
         )
@@ -1195,7 +1195,7 @@ const MessageBubbleComponent = ({
       ul({ children, node, ...rest }: any) {
         void node
         return (
-          <ul className="space-y-2 my-1.5 pl-6 list-disc" {...rest}>
+          <ul className="space-y-2.5 my-3 pl-6 list-disc" {...rest}>
             {children}
           </ul>
         )
@@ -1203,7 +1203,7 @@ const MessageBubbleComponent = ({
       ol({ children, node, ...rest }: any) {
         void node
         return (
-          <ol className="space-y-2 my-1.5 pl-6 list-decimal" {...rest}>
+          <ol className="space-y-2.5 my-3 pl-6 list-decimal" {...rest}>
             {children}
           </ol>
         )
@@ -1211,7 +1211,7 @@ const MessageBubbleComponent = ({
       li({ children, node, ...rest }: any) {
         void node
         return (
-          <li className="leading-5" {...rest}>
+          <li className="leading-7" {...rest}>
             {children}
           </li>
         )
@@ -1240,7 +1240,7 @@ const MessageBubbleComponent = ({
       strong({ children, node, ...rest }: any) {
         void node
         return (
-          <strong {...rest} className="font-medium">
+          <strong {...rest} className="font-semibold">
             {children}
           </strong>
         )
@@ -1248,7 +1248,7 @@ const MessageBubbleComponent = ({
       b({ children, node, ...rest }: any) {
         void node
         return (
-          <b {...rest} className="font-medium">
+          <b {...rest} className="font-semibold">
             {children}
           </b>
         )
@@ -1256,7 +1256,7 @@ const MessageBubbleComponent = ({
       h1({ children, node, ...rest }: any) {
         void node
         return (
-          <h1 className="mt-4 mb-2 font-semibold text-xl" {...rest}>
+          <h1 className="mt-6 mb-3 font-bold text-xl" {...rest}>
             {children}
           </h1>
         )
@@ -1264,7 +1264,7 @@ const MessageBubbleComponent = ({
       h2({ children, node, ...rest }: any) {
         void node
         return (
-          <h2 className="mt-3 mb-2 font-semibold text-lg" {...rest}>
+          <h2 className="mt-5 mb-3 font-bold text-lg" {...rest}>
             {children}
           </h2>
         )
@@ -1272,7 +1272,7 @@ const MessageBubbleComponent = ({
       h3({ children, node, ...rest }: any) {
         void node
         return (
-          <h3 className="mt-3 mb-2 font-semibold text-base" {...rest}>
+          <h3 className="mt-5 mb-2 font-semibold text-base" {...rest}>
             {children}
           </h3>
         )
@@ -1280,7 +1280,7 @@ const MessageBubbleComponent = ({
       h4({ children, node, ...rest }: any) {
         void node
         return (
-          <h4 className="mt-3 mb-2 font-semibold text-base" {...rest}>
+          <h4 className="mt-4 mb-2 font-semibold text-base" {...rest}>
             {children}
           </h4>
         )
@@ -1322,7 +1322,7 @@ const MessageBubbleComponent = ({
       th({ children, node, ...rest }: any) {
         void node
         return (
-          <th className="px-3 py-2 font-medium text-left" {...rest}>
+          <th className="px-3 py-2.5 font-semibold text-left" {...rest}>
             {children}
           </th>
         )
@@ -1330,9 +1330,17 @@ const MessageBubbleComponent = ({
       td({ children, node, ...rest }: any) {
         void node
         return (
-          <td className="px-3 py-2 align-top" {...rest}>
+          <td className="px-3 py-2.5 align-top" {...rest}>
             {children}
           </td>
+        )
+      },
+      tr({ children, node, ...rest }: any) {
+        void node
+        return (
+          <tr className="border-border border-b even:bg-muted/30" {...rest}>
+            {children}
+          </tr>
         )
       },
       code(props: any) {
@@ -1524,12 +1532,12 @@ const MessageBubbleComponent = ({
           </div>
         ) : null}
         <div
-          className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal [&_strong]:font-medium [&_b]:font-medium ${
+          className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal ${
             isUser
-              ? "bg-secondary p-2 text-base leading-5 text-foreground"
+              ? "bg-secondary p-2 text-base leading-6 text-foreground"
               : hasEventHeader
-                ? "bg-transparent p-2 text-base leading-5 text-foreground"
-                : "bg-transparent p-0 text-base leading-5 text-foreground"
+                ? "bg-transparent p-2 text-base leading-7 text-foreground"
+                : "bg-transparent p-0 text-base leading-7 text-foreground"
           }`}
         >
           {hasEventHeader ? (

@@ -67,6 +67,37 @@ const DEFAULT_ATTACHMENT_LIMITS = {
   max_total_bytes: 50_000_000,
 }
 
+const PROVIDER_REASONING_LEVELS: Record<string, string[]> = {
+  openai: ["none", "low", "medium", "high"],
+  azure: ["none", "low", "medium", "high"],
+  openrouter: ["none", "low", "medium", "high"],
+  anthropic: ["low", "medium", "high"],
+  gemini: ["low", "medium", "high"],
+  vertex: ["low", "medium", "high"],
+  groq: ["low", "medium", "high"],
+}
+
+const DEFAULT_REASONING_LEVELS = ["none", "low", "medium", "high"]
+
+const getProviderReasoningLevels = (provider?: string | null): string[] => {
+  if (!provider) return DEFAULT_REASONING_LEVELS
+  const configured = PROVIDER_REASONING_LEVELS[provider] ?? DEFAULT_REASONING_LEVELS
+  return configured.length > 0 ? configured : DEFAULT_REASONING_LEVELS
+}
+
+const resolveReasoningStopIndex = (
+  effort: string | null | undefined,
+  providerLevels: string[]
+): number => {
+  const normalized = effort?.trim().toLowerCase()
+  if (!normalized) {
+    return providerLevels.indexOf("none") >= 0 ? providerLevels.indexOf("none") : 0
+  }
+  const effortIndex = providerLevels.indexOf(normalized)
+  if (effortIndex >= 0) return effortIndex
+  return providerLevels.indexOf("none") >= 0 ? providerLevels.indexOf("none") : 0
+}
+
 const SESSION_OWNED_CHAT_IDS_KEY = "chatui_session_owned_chat_ids"
 
 const readSessionOwnedChatIds = (): string[] => {
@@ -390,6 +421,7 @@ export const ChatPage = () => {
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     modelStore.get() ?? undefined
   )
+  const [reasoningStopIndex, setReasoningStopIndex] = useState(0)
   const [loadingByChat, setLoadingByChat] = useState<Record<string, boolean>>({})
   const chatIdRef = useRef(chatId)
   chatIdRef.current = chatId
@@ -649,6 +681,18 @@ export const ChatPage = () => {
     () => selectableChatModels.find((model) => model.id === selectedModel) ?? null,
     [selectableChatModels, selectedModel]
   )
+  const providerReasoningLevels = useMemo(
+    () => getProviderReasoningLevels(selectedChatModel?.provider ?? null),
+    [selectedChatModel?.provider]
+  )
+  const selectedReasoningEffort = useMemo(
+    () => providerReasoningLevels[reasoningStopIndex] ?? selectedChatModel?.reasoning_effort ?? undefined,
+    [providerReasoningLevels, reasoningStopIndex, selectedChatModel?.reasoning_effort]
+  )
+  const activeReasoningStopIndex = useMemo(() => {
+    const effortIndex = providerReasoningLevels.indexOf(selectedReasoningEffort ?? "")
+    return effortIndex >= 0 ? effortIndex : reasoningStopIndex
+  }, [providerReasoningLevels, selectedReasoningEffort, reasoningStopIndex])
   const rejectUnsupportedImageAttachments = useCallback(
     (
       items: Array<{ content_type?: string | null }>,
@@ -1540,6 +1584,15 @@ export const ChatPage = () => {
   }, [selectedModel])
 
   useEffect(() => {
+    setReasoningStopIndex(
+      resolveReasoningStopIndex(
+        selectedChatModel?.reasoning_effort,
+        providerReasoningLevels
+      )
+    )
+  }, [selectedChatModel?.id, selectedChatModel?.reasoning_effort, providerReasoningLevels])
+
+  useEffect(() => {
     webSearchEnabledStore.set(webSearchEnabled)
   }, [webSearchEnabled])
 
@@ -2047,6 +2100,7 @@ export const ChatPage = () => {
         })),
         webSearchEnabled,
         codeExecutionEnabled,
+        selectedReasoningEffort,
         locale,
         (event) => {
           applyStreamEvent(chat.id, assistantId, event)
@@ -2690,6 +2744,7 @@ export const ChatPage = () => {
       })),
       webSearchEnabled,
       codeExecutionEnabled,
+      selectedReasoningEffort,
       locale,
       (event) => {
         applyStreamEvent(activeChat.id, tempAssistantId, event)
@@ -2735,6 +2790,7 @@ export const ChatPage = () => {
     queryClient,
     updateChatMessagesFor,
     selectedModel,
+    selectedReasoningEffort,
     modelNameById,
     cancelEditMessage,
     webSearchEnabled,
@@ -2835,6 +2891,7 @@ export const ChatPage = () => {
       })),
       webSearchEnabled,
       codeExecutionEnabled,
+      selectedReasoningEffort,
       locale,
       (event) => {
         applyStreamEvent(chatId, tempAssistantId, event)
@@ -2874,6 +2931,7 @@ export const ChatPage = () => {
     queryClient,
     stopGeneration,
     selectedModel,
+    selectedReasoningEffort,
     modelNameById,
     webSearchEnabled,
     codeExecutionEnabled,
@@ -3349,6 +3407,45 @@ export const ChatPage = () => {
                           </SelectItem>
                         )
                       })}
+                      <div className="mt-1 border-t px-2 pt-2 pb-1">
+                        <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                          <span>{t("chat_thinking_level")}</span>
+                          <span>{selectedReasoningEffort ?? t("chat_thinking_level_auto")}</span>
+                        </div>
+                        <div className="reasoning-slider">
+                          <div className="reasoning-slider__track">
+                            {providerReasoningLevels.map((level, index) => {
+                              const stopCount = Math.max(providerReasoningLevels.length - 1, 1)
+                              const leftPercent = (index / stopCount) * 100
+                              return (
+                                <div
+                                  key={`${level}-${index}`}
+                                  className={
+                                    index === activeReasoningStopIndex
+                                      ? "reasoning-slider__dot reasoning-slider__dot--active"
+                                      : "reasoning-slider__dot"
+                                  }
+                                  style={{ left: `${leftPercent}%` }}
+                                />
+                              )
+                            })}
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={Math.max(providerReasoningLevels.length - 1, 0)}
+                            step={1}
+                            value={activeReasoningStopIndex}
+                            onChange={(event) => {
+                              const index = Number(event.target.value)
+                              const maxIndex = Math.max(providerReasoningLevels.length - 1, 0)
+                              setReasoningStopIndex(Math.max(0, Math.min(index, maxIndex)))
+                            }}
+                            className="reasoning-slider__input"
+                            aria-label={t("chat_thinking_level")}
+                          />
+                        </div>
+                      </div>
                     </SelectContent>
                   </Select>
                 }

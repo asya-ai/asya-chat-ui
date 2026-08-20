@@ -1,4 +1,4 @@
-import { Document, Packer, Paragraph, TextRun } from "docx"
+import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx"
 import html2canvas from "html2canvas"
 import { jsPDF } from "jspdf"
 
@@ -92,14 +92,107 @@ const buildSourceBlob = (markdown: string, extension: "md" | "txt") =>
     type: extension === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8",
   })
 
+const inlineMarkdownToRuns = (value: string, font: string): TextRun[] => {
+  const runs: TextRun[] = []
+  const tokenPattern =
+    /(\[[^\]]+\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g
+  let cursor = 0
+  for (const match of value.matchAll(tokenPattern)) {
+    const index = match.index ?? 0
+    if (index > cursor) {
+      runs.push(new TextRun({ text: value.slice(cursor, index), font }))
+    }
+    if (match[1]) {
+      runs.push(
+        new TextRun({
+          text: `${match[0].slice(1, match[0].indexOf("]("))} (${match[2]})`,
+          font,
+          underline: {},
+        })
+      )
+    } else if (match[3]) {
+      runs.push(new TextRun({ text: match[3], font, bold: true }))
+    } else if (match[4]) {
+      runs.push(new TextRun({ text: match[4], font, italics: true }))
+    } else if (match[5]) {
+      runs.push(new TextRun({ text: match[5], font }))
+    }
+    cursor = index + match[0].length
+  }
+  if (cursor < value.length) {
+    runs.push(new TextRun({ text: value.slice(cursor), font }))
+  }
+  return runs.length > 0 ? runs : [new TextRun({ text: "", font })]
+}
+
+const markdownToDocxParagraphs = (markdown: string, font: string): Paragraph[] => {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n")
+  const paragraphs: Paragraph[] = []
+  let paragraphBuffer: string[] = []
+
+  const flushParagraph = () => {
+    if (paragraphBuffer.length === 0) return
+    paragraphs.push(
+      new Paragraph({
+        children: inlineMarkdownToRuns(paragraphBuffer.join(" "), font),
+      })
+    )
+    paragraphBuffer = []
+  }
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim()
+    if (!trimmed) {
+      flushParagraph()
+      continue
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed)
+    if (heading) {
+      flushParagraph()
+      const levelMap: Record<number, (typeof HeadingLevel)[keyof typeof HeadingLevel]> = {
+        1: HeadingLevel.HEADING_1,
+        2: HeadingLevel.HEADING_2,
+        3: HeadingLevel.HEADING_3,
+      }
+      paragraphs.push(
+        new Paragraph({
+          heading: levelMap[heading[1].length] ?? HeadingLevel.HEADING_3,
+          children: inlineMarkdownToRuns(heading[2], font),
+        })
+      )
+      continue
+    }
+    const unordered = /^[-*•]\s+(.+)$/.exec(trimmed)
+    if (unordered) {
+      flushParagraph()
+      paragraphs.push(
+        new Paragraph({
+          bullet: { level: 0 },
+          children: inlineMarkdownToRuns(unordered[1], font),
+        })
+      )
+      continue
+    }
+    const ordered = /^\d+[.)]\s+(.+)$/.exec(trimmed)
+    if (ordered) {
+      flushParagraph()
+      paragraphs.push(
+        new Paragraph({
+          numbering: { reference: "markdown-ordered-list", level: 0 },
+          children: inlineMarkdownToRuns(ordered[1], font),
+        })
+      )
+      continue
+    }
+    paragraphBuffer.push(trimmed)
+  }
+  flushParagraph()
+  return paragraphs
+}
+
 const buildDocxBlob = async (markdown: string) => {
   const bodyFont = "Calibri"
-  const paragraphs = markdown.split(/\n/).map(
-    (line) =>
-      new Paragraph({
-        children: [new TextRun({ text: line, size: 24, font: bodyFont })],
-      })
-  )
+  const paragraphs = markdownToDocxParagraphs(markdown, bodyFont)
   const document = new Document({
     styles: {
       default: {
@@ -107,6 +200,21 @@ const buildDocxBlob = async (markdown: string) => {
           run: { font: bodyFont, size: 24 },
         },
       },
+    },
+    numbering: {
+      config: [
+        {
+          reference: "markdown-ordered-list",
+          levels: [
+            {
+              level: 0,
+              format: "decimal",
+              text: "%1.",
+              alignment: "start",
+            },
+          ],
+        },
+      ],
     },
     sections: [
       {

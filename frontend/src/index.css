@@ -246,3 +246,89 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+.reasoning-slider {
+  --reasoning-thumb-size: 14px;
+  --reasoning-track-height: 6px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--reasoning-thumb-size);
+}
+
+.reasoning-slider__track {
+  position: absolute;
+  inset-inline: calc(var(--reasoning-thumb-size) / 2);
+  height: var(--reasoning-track-height);
+  border-radius: 9999px;
+  background: var(--muted);
+}
+
+.reasoning-slider__dot {
+  position: absolute;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  transform: translate(-50%, -50%);
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+
+.reasoning-slider__dot--active {
+  width: 5px;
+  height: 5px;
+  background: var(--primary);
+}
+
+.reasoning-slider__input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  margin: 0;
+  height: var(--reasoning-thumb-size);
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+.reasoning-slider__input:focus-visible {
+  outline: none;
+}
+
+.reasoning-slider__input:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px var(--popover),
+    0 0 0 4px color-mix(in oklab, var(--primary) 45%, transparent);
+}
+
+.reasoning-slider__input::-webkit-slider-runnable-track {
+  height: var(--reasoning-track-height);
+  background: transparent;
+  border: none;
+}
+
+.reasoning-slider__input::-webkit-slider-thumb {
+  appearance: none;
+  width: var(--reasoning-thumb-size);
+  height: var(--reasoning-thumb-size);
+  margin-top: calc((var(--reasoning-track-height) - var(--reasoning-thumb-size)) / 2);
+  border: 2px solid var(--popover);
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.reasoning-slider__input::-moz-range-track {
+  height: var(--reasoning-track-height);
+  background: transparent;
+  border: none;
+}
+
+.reasoning-slider__input::-moz-range-thumb {
+  width: var(--reasoning-thumb-size);
+  height: var(--reasoning-thumb-size);
+  border: 2px solid var(--popover);
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+}
