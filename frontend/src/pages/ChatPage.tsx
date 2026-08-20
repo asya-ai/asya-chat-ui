@@ -501,7 +501,7 @@ export const ChatPage = () => {
 
   const { data: currentUser } = useMe()
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
-  const { data: models = [] } = useModels(orgId)
+  const { data: models = [], refetch: refetchModels } = useModels(orgId)
   const { data: chats = [], isFetched: chatsFetched, refetch: refetchChats } = useChats(orgId)
   const { data: searchedChats = [] } = useChatSearch(orgId, chatSearchDebounced)
   const {
@@ -1533,14 +1533,25 @@ export const ChatPage = () => {
 
   useEffect(() => {
     if (selectableChatModels.length === 0) return
-    if (selectedModel && selectableChatModels.some((model) => model.id === selectedModel)) return
+    const availableModels = selectableChatModels.filter(
+      (model) => model.is_available !== false
+    )
+    // Prefer available models so a stale selection doesn't stick on a disabled item
+    // (Radix Select gets weird when the value points at a disabled SelectItem).
+    const pool = availableModels.length > 0 ? availableModels : selectableChatModels
+    if (selectedModel && pool.some((model) => model.id === selectedModel)) return
     const stored = modelStore.get()
-    if (stored && selectableChatModels.some((model) => model.id === stored)) {
+    if (stored && pool.some((model) => model.id === stored)) {
       setSelectedModel(stored)
       return
     }
-    setSelectedModel(selectableChatModels[0].id)
+    setSelectedModel(pool[0].id)
   }, [selectableChatModels, selectedModel])
+
+  useEffect(() => {
+    if (chatId) return
+    void refetchModels()
+  }, [chatId, refetchModels])
 
   const activeChat = useMemo(() => {
     const fromList = chats.find((item) => item.id === chatId)
@@ -1972,6 +1983,9 @@ export const ChatPage = () => {
     skipDraftPersistRef.current = false
     setPendingAttachments([])
     setAttachmentError(null)
+    // Admin may have changed availability since this tab loaded; refresh so the
+    // picker doesn't keep disabled/stale models selected.
+    void refetchModels()
     navigate(
       isAgentMode && activeAgentId
         ? `/chat?agent=${encodeURIComponent(activeAgentId)}`
