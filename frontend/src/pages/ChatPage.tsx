@@ -32,7 +32,6 @@ import { getProviderIconCandidates } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Image as ImageIcon, Menu, PanelLeftOpen, Plus } from "lucide-react"
 import { toast } from "sonner"
@@ -158,6 +157,7 @@ const actionLabelMatchesToolEvent = (
   label: string,
   toolEvent: NonNullable<ChatMessage["tool_event"]>
 ): boolean => {
+  if (toolEvent.type === "reasoning") return label === "Thoughts"
   if (toolEvent.type === "tool_call") {
     const summary = toolEvent.action_summary?.trim()
     if (summary) return label === summary
@@ -201,11 +201,13 @@ const isSpecializedToolEvent = (
   toolEvent.type === "code_execution" ||
   toolEvent.type === "url_attachments" ||
   toolEvent.type === "context_summary" ||
-  toolEvent.type === "coworking"
+  toolEvent.type === "coworking" ||
+  toolEvent.type === "reasoning"
 
 const resolveToolEventActionLabel = (
   toolEvent: NonNullable<ChatMessage["tool_event"]>
 ): string => {
+  if (toolEvent.type === "reasoning") return "Thoughts"
   if (toolEvent.type === "tool_call") {
     const summary = toolEvent.action_summary?.trim()
     if (summary) return summary
@@ -246,6 +248,15 @@ const attachStreamActionToolEvent = (
       next[i] = { ...part, tool_event: toolEvent }
       return next
     }
+  }
+  // Reasoning episodes must not coalesce by label — each distinct id is its own action.
+  if (toolEvent.type === "reasoning") {
+    next.push({
+      type: "action",
+      label: resolveToolEventActionLabel(toolEvent),
+      tool_event: toolEvent,
+    })
+    return next
   }
   for (let i = next.length - 1; i >= 0; i -= 1) {
     const part = next[i]
@@ -371,21 +382,21 @@ const InsertPromptPicker = ({
           onChange={(event) => setQuery(event.target.value)}
           placeholder={searchPlaceholder}
         />
-        <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+        <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
           {filtered.map((prompt) => (
             <Button
               key={prompt.id}
               type="button"
               variant="ghost"
-              className="flex h-auto min-h-10 w-full flex-col items-start gap-0.5 px-3 py-2 text-left"
+              className="flex flex-col items-start gap-0.5 px-3 py-2 w-full h-auto min-h-10 text-left"
               onClick={() => {
                 onSelect(prompt.body)
                 onOpenChange(false)
               }}
             >
-              <span className="w-full truncate text-sm font-medium">{prompt.name}</span>
+              <span className="w-full font-medium text-sm truncate">{prompt.name}</span>
               {prompt.description ? (
-                <span className="w-full truncate text-xs text-muted-foreground">
+                <span className="w-full text-muted-foreground text-xs truncate">
                   {prompt.description}
                 </span>
               ) : null}
@@ -476,7 +487,7 @@ export const ChatPage = () => {
     const stored = codeExecutionEnabledStore.get()
     return stored == null ? true : stored === "1"
   })
-  const [incognitoEnabled, setIncognitoEnabled] = useState(
+  const [incognitoEnabled] = useState(
     () => window.sessionStorage.getItem("chatui_incognito_enabled") === "1"
   )
   const [actionInfoLevel, setActionInfoLevel] = useState<ActionInfoLevel>(() =>
@@ -581,6 +592,9 @@ export const ChatPage = () => {
           if (msg.tool_event?.type === "coworking") {
             const status = msg.tool_event.output?.status
             return status !== "ok" && status !== "error"
+          }
+          if (msg.tool_event?.type === "reasoning") {
+            return true
           }
           return false
         })
@@ -3462,15 +3476,15 @@ export const ChatPage = () => {
             onToggleShareChat={toggleShareChat}
           />
         ) : (
-          <div className="flex flex-1 min-w-0 min-h-0 flex-col">
+          <div className="flex flex-col flex-1 min-w-0 min-h-0">
             {cowork.open && cowork.document && isMobile ? (
-              <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
-                <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
+              <div className="flex items-center gap-1 px-3 py-2 border-border border-b shrink-0">
+                <div className="flex items-center gap-1 bg-muted p-0.5 rounded-lg">
                   <Button
                     type="button"
                     size="sm"
                     variant={cowork.mobileTab === "chat" ? "secondary" : "ghost"}
-                    className="h-7 px-2.5 text-xs"
+                    className="px-2.5 h-7 text-xs"
                     onClick={() => cowork.setMobileTab("chat")}
                   >
                     Chat
@@ -3479,18 +3493,18 @@ export const ChatPage = () => {
                     type="button"
                     size="sm"
                     variant={cowork.mobileTab === "document" ? "secondary" : "ghost"}
-                    className="h-7 px-2.5 text-xs"
+                    className="px-2.5 h-7 text-xs"
                     onClick={() => cowork.setMobileTab("document")}
                   >
                     Document
                     {cowork.document.version > cowork.document.last_assistant_version ? (
-                      <span className="ml-1 inline-block size-1.5 rounded-full bg-amber-500" />
+                      <span className="inline-block bg-amber-500 ml-1 rounded-full size-1.5" />
                     ) : null}
                   </Button>
                 </div>
               </div>
             ) : null}
-            <div className="flex min-h-0 min-w-0 flex-1">
+            <div className="flex flex-1 min-w-0 min-h-0">
             <div
               className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
                 isMobile && cowork.open && cowork.mobileTab === "document" ? "hidden" : ""
@@ -3537,7 +3551,7 @@ export const ChatPage = () => {
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="hidden h-8 md:inline-flex"
+                      className="hidden md:inline-flex h-8"
                       onClick={() => {
                         cowork.setOpen(true)
                         cowork.setMobileTab("document")
@@ -3545,18 +3559,18 @@ export const ChatPage = () => {
                     >
                       Document
                       {cowork.document.version > cowork.document.last_assistant_version ? (
-                        <span className="ml-1 size-1.5 rounded-full bg-amber-500" />
+                        <span className="bg-amber-500 ml-1 rounded-full size-1.5" />
                       ) : null}
                     </Button>
                   ) : null}
-                  <label className="hidden md:inline-flex items-center gap-2 cursor-pointer">
+                  {/*                   <label className="hidden md:inline-flex items-center gap-2 cursor-pointer">
                     <span className="text-sm leading-5">{t("chat_save_session")}</span>
                     <Switch
                       checked={!incognitoEnabled}
                       onCheckedChange={(checked) => setIncognitoEnabled(!checked)}
                       aria-label={t("chat_save_session")}
                     />
-                  </label>
+                  </label> */}
                 </div>
               </div>
               <MessageList
@@ -3590,7 +3604,7 @@ export const ChatPage = () => {
                 modelSelect={
                   <Select value={selectedModel} onValueChange={setSelectedModel}>
                     <SelectTrigger
-                      className="h-9 w-auto min-w-0 max-w-full overflow-hidden bg-transparent shadow-none border-0 [&_[data-slot=select-value]]:min-w-0"
+                      className="bg-transparent shadow-none border-0 w-auto min-w-0 [&_[data-slot=select-value]]:min-w-0 max-w-full h-9 overflow-hidden"
                       aria-label={t("chat_select_model")}
                     >
                       <SelectValue placeholder={t("chat_best_available_model")} />
@@ -3608,7 +3622,7 @@ export const ChatPage = () => {
                             value={model.id}
                             disabled={model.is_available === false}
                           >
-                            <span className="inline-flex min-w-0 items-center gap-2">
+                            <span className="inline-flex items-center gap-2 min-w-0">
                               {hasProviderIcon ? (
                                 <ProviderIcon
                                   provider={model.provider}
@@ -3623,8 +3637,8 @@ export const ChatPage = () => {
                           </SelectItem>
                         )
                       })}
-                      <div className="mt-1 border-t px-2 pt-2 pb-1">
-                        <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                      <div className="mt-1 px-2 pt-2 pb-1 border-t">
+                        <div className="flex justify-between items-center mb-1 text-[11px] text-muted-foreground">
                           <span>{t("chat_thinking_level")}</span>
                           <span>{selectedReasoningEffort ?? t("chat_thinking_level_auto")}</span>
                         </div>

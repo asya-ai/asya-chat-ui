@@ -5,7 +5,7 @@ import base64
 import io
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from google import genai
 from google.genai import types
@@ -17,10 +17,66 @@ from sqlalchemy import or_
 from app.core.config import settings
 from app.models import ChatMessage, ChatMessageAttachment, ChatModel, OrgModel, OrgProviderConfig
 from app.services.org_service import require_provider_enabled
+from app.services.providers.base import ChatUsage
+from app.services.providers.gemini_provider import GeminiProvider
+from app.services.providers.openai_provider import _usage_chunk_from_response_usage
 from app.services.team_service import allowed_model_ids
 from app.services.tools.registry import ToolResult
 
 logger = logging.getLogger(__name__)
+
+_IMAGE_USAGE_TOKEN_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "cached_tokens",
+    "thinking_tokens",
+)
+
+
+def image_usage_token_fields(output: dict | None) -> dict[str, int]:
+    """Token fields for UsageEvent / image_usages from an image tool output dict."""
+    output = output if isinstance(output, dict) else {}
+    return {key: int(output.get(key) or 0) for key in _IMAGE_USAGE_TOKEN_KEYS}
+
+
+def _apply_usage_fields(output: dict[str, Any], usage: ChatUsage | None) -> None:
+    if usage is None:
+        return
+    output["prompt_tokens"] = int(usage.prompt_tokens or 0)
+    output["completion_tokens"] = int(usage.completion_tokens or 0)
+    output["total_tokens"] = int(usage.total_tokens or 0)
+    output["input_tokens"] = int(usage.input_tokens or 0)
+    output["output_tokens"] = int(usage.output_tokens or 0)
+    output["cached_tokens"] = int(usage.cached_tokens or 0)
+    output["thinking_tokens"] = int(usage.thinking_tokens or 0)
+
+
+def _usage_from_openai_response(response: Any) -> ChatUsage:
+    return _usage_chunk_from_response_usage(getattr(response, "usage", None)).usage
+
+
+def _usage_from_gemini_response(response: Any) -> ChatUsage:
+    return GeminiProvider._usage_from_metadata(getattr(response, "usage_metadata", None))
+
+
+def _new_generated_image_filename(*, content_type: str = "image/png") -> str:
+    """Unique name so multi-image turns rematch correctly after reload."""
+    suffix = "png"
+    mime = (content_type or "").split(";")[0].strip().lower()
+    if mime == "image/jpeg":
+        suffix = "jpg"
+    elif mime == "image/webp":
+        suffix = "webp"
+    elif mime == "image/gif":
+        suffix = "gif"
+    elif "/" in mime:
+        maybe = mime.rsplit("/", 1)[-1].strip()
+        if maybe and maybe.isalpha() and len(maybe) <= 5:
+            suffix = maybe
+    return f"generated-{uuid4().hex[:12]}.{suffix}"
 
 
 @dataclass
@@ -521,9 +577,10 @@ async def _build_image_result(
             image_base64 = base64.b64encode(response.content).decode("ascii")
     if not image_base64:
         return ToolResult(name=name, output={"error": "Image generation failed"})
+    file_name = _new_generated_image_filename()
     output = {
         "content_type": "image/png",
-        "file_name": "generated.png",
+        "file_name": file_name,
     }
     if model_id:
         output["model_id"] = model_id
@@ -534,12 +591,13 @@ async def _build_image_result(
     output["image_count"] = 1
     if image_format:
         output["image_format"] = image_format
+    _apply_usage_fields(output, _usage_from_openai_response(result))
     return ToolResult(
         name=name,
         output=output,
         attachments=[
             {
-                "file_name": "generated.png",
+                "file_name": file_name,
                 "content_type": "image/png",
                 "data_base64": image_base64,
             }
@@ -550,6 +608,7 @@ async def _build_image_result(
 def _extract_gemini_image(
     name: str, response: Any, *, model_id: str | None = None
 ) -> ToolResult:
+    usage = _usage_from_gemini_response(response)
     candidates = getattr(response, "candidates", []) or []
     for candidate in candidates:
         content = getattr(candidate, "content", None)
@@ -560,20 +619,22 @@ def _extract_gemini_image(
                 data_base64 = inline_data.data
                 if isinstance(data_base64, (bytes, bytearray)):
                     data_base64 = base64.b64encode(data_base64).decode("ascii")
+                file_name = _new_generated_image_filename(content_type=mime_type)
                 output = {
                     "content_type": mime_type,
-                    "file_name": "generated.png",
+                    "file_name": file_name,
                 }
                 if model_id:
                     output["model_id"] = model_id
                 output["image_count"] = 1
                 output["image_format"] = mime_type
+                _apply_usage_fields(output, usage)
                 return ToolResult(
                     name=name,
                     output=output,
                     attachments=[
                         {
-                            "file_name": "generated.png",
+                            "file_name": file_name,
                             "content_type": mime_type,
                             "data_base64": data_base64,
                         }
@@ -621,19 +682,21 @@ def _extract_openai_response_image(
                 break
     if not image_base64:
         return ToolResult(name=name, output={"error": "Image generation failed"})
+    file_name = _new_generated_image_filename()
     output: dict[str, Any] = {
         "content_type": "image/png",
-        "file_name": "generated.png",
+        "file_name": file_name,
         "image_count": 1,
     }
     if model_id:
         output["model_id"] = model_id
+    _apply_usage_fields(output, _usage_from_openai_response(response))
     return ToolResult(
         name=name,
         output=output,
         attachments=[
             {
-                "file_name": "generated.png",
+                "file_name": file_name,
                 "content_type": "image/png",
                 "data_base64": image_base64,
             }

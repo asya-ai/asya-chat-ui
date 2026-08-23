@@ -136,6 +136,24 @@ async def test_response_stream_chunks_emit_text_and_tool_calls() -> None:
         yield SimpleNamespace(type="response.output_text.delta", delta="Hello ")
         yield SimpleNamespace(type="response.output_text.delta", delta="world")
         yield SimpleNamespace(
+            type="response.reasoning_summary_text.delta",
+            delta="Considering the capital",
+            item_id="rs_1",
+            summary_index=0,
+        )
+        yield SimpleNamespace(
+            type="response.reasoning_summary_text.delta",
+            delta=" of France.",
+            item_id="rs_1",
+            summary_index=0,
+        )
+        yield SimpleNamespace(
+            type="response.reasoning_summary_text.delta",
+            delta="Choosing Paris.",
+            item_id="rs_1",
+            summary_index=1,
+        )
+        yield SimpleNamespace(
             type="response.output_item.added",
             output_index=0,
             item=SimpleNamespace(
@@ -177,6 +195,17 @@ async def test_response_stream_chunks_emit_text_and_tool_calls() -> None:
 
     chunks = [chunk async for chunk in _iter_response_stream_chunks(_fake_stream())]
     assert [chunk.content for chunk in chunks if chunk.content] == ["Hello ", "world"]
+    reasoning_chunks = [chunk for chunk in chunks if chunk.reasoning_content]
+    assert [chunk.reasoning_content for chunk in reasoning_chunks] == [
+        "Considering the capital",
+        " of France.",
+        "Choosing Paris.",
+    ]
+    assert [chunk.reasoning_id for chunk in reasoning_chunks] == [
+        "reasoning:rs_1:0",
+        "reasoning:rs_1:0",
+        "reasoning:rs_1:1",
+    ]
     assert any(chunk.finish_reason == "tool_calls" for chunk in chunks)
     final_tools = next(chunk.tool_calls for chunk in chunks if chunk.tool_calls is not None)
     assert final_tools[0].id == "call-1"
@@ -243,3 +272,34 @@ def test_openrouter_endpoint_sets_provider_routing() -> None:
     assert provider.extra_body == {
         "provider": {"only": ["google-vertex/eu"], "allow_fallbacks": False},
     }
+
+
+def test_extract_response_reasoning_from_summary_items() -> None:
+    from types import SimpleNamespace
+
+    from app.services.providers.openai_provider import _extract_response_reasoning
+
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="reasoning",
+                summary=[
+                    SimpleNamespace(type="summary_text", text="First thought"),
+                    SimpleNamespace(type="summary_text", text="Second thought"),
+                ],
+            ),
+            SimpleNamespace(type="message", content=[]),
+        ]
+    )
+    assert _extract_response_reasoning(response) == "First thought\n\nSecond thought"
+    assert _extract_response_reasoning(SimpleNamespace(output=[])) is None
+
+
+def test_responses_reasoning_payload_opts_into_summary() -> None:
+    provider = OpenAIProvider(api_key="test-key", reasoning_effort="medium")
+    assert provider._responses_reasoning_payload("o3") == {
+        "effort": "medium",
+        "summary": "auto",
+    }
+    provider_none = OpenAIProvider(api_key="test-key", reasoning_effort="none")
+    assert provider_none._responses_reasoning_payload("o3") is None

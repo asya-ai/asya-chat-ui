@@ -295,6 +295,22 @@ class GeminiProvider:
             return ""
 
     @staticmethod
+    def _extract_reasoning_content(response: object) -> str | None:
+        """Collect Gemini thought parts when the model exposes them."""
+        thought_parts: list[str] = []
+        for candidate in getattr(response, "candidates", None) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                if not getattr(part, "thought", None):
+                    continue
+                text = getattr(part, "text", None)
+                if text:
+                    thought_parts.append(text)
+        if not thought_parts:
+            return None
+        return "".join(thought_parts)
+
+    @staticmethod
     def _extract_system_instruction(messages: list[dict]) -> str | None:
         parts: list[str] = []
         for msg in messages:
@@ -550,6 +566,7 @@ class GeminiProvider:
             usage = getattr(response, "usage_metadata", None)
             return ChatResponse(
                 content=text,
+                reasoning_content=self._extract_reasoning_content(response),
                 usage=self._usage_from_metadata(usage),
             )
 
@@ -567,6 +584,9 @@ class GeminiProvider:
             text = self._extract_response_text(chunk)
             if text:
                 yield ChatStreamChunk(content=text)
+            reasoning = self._extract_reasoning_content(chunk)
+            if reasoning:
+                yield ChatStreamChunk(reasoning_content=reasoning)
             usage = getattr(chunk, "usage_metadata", None)
             if usage is not None:
                 usage_sent = True
@@ -625,6 +645,7 @@ class GeminiProvider:
             usage = getattr(response, "usage_metadata", None)
             return ChatResponse(
                 content=text,
+                reasoning_content=self._extract_reasoning_content(response),
                 usage=self._usage_from_metadata(usage),
                 tool_calls=tool_calls or None,
                 finish_reason=None,
@@ -656,6 +677,9 @@ class GeminiProvider:
             text = self._extract_response_text(chunk)
             if text:
                 yield ChatStreamChunk(content=text)
+            reasoning = self._extract_reasoning_content(chunk)
+            if reasoning:
+                yield ChatStreamChunk(reasoning_content=reasoning)
             for call in self._tool_calls_from_response(chunk):
                 key = f"{call.id}:{call.name}"
                 if key not in pending_tool_calls and not signaled_tool_calls:

@@ -143,6 +143,30 @@ def _extract_response_text(result: object) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def _extract_response_reasoning(result: object) -> str | None:
+    """Collect opted-in reasoning summaries from Responses API output items."""
+    output = getattr(result, "output", []) or []
+    parts: list[str] = []
+    for item in output:
+        item_type = getattr(item, "type", None) or (
+            item.get("type") if isinstance(item, dict) else None
+        )
+        if item_type != "reasoning":
+            continue
+        summaries = getattr(item, "summary", None)
+        if summaries is None and isinstance(item, dict):
+            summaries = item.get("summary")
+        for summary in summaries or []:
+            text = getattr(summary, "text", None)
+            if text is None and isinstance(summary, dict):
+                text = summary.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    if not parts:
+        return None
+    return "\n\n".join(parts)
+
+
 def _extract_response_tool_calls(result: object) -> list[ChatToolCall]:
     output = getattr(result, "output", []) or []
     tool_calls: list[ChatToolCall] = []
@@ -275,6 +299,16 @@ async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]
             delta = getattr(event, "delta", None)
             if delta:
                 yield ChatStreamChunk(content=delta)
+            continue
+        if event_type == "response.reasoning_summary_text.delta":
+            delta = getattr(event, "delta", None)
+            if delta:
+                item_id = str(getattr(event, "item_id", None) or "")
+                summary_index = getattr(event, "summary_index", 0) or 0
+                yield ChatStreamChunk(
+                    reasoning_content=delta,
+                    reasoning_id=f"reasoning:{item_id}:{summary_index}",
+                )
             continue
         if event_type == "response.output_item.added":
             item = getattr(event, "item", None)
@@ -428,6 +462,13 @@ class OpenAIProvider:
             return self.reasoning_effort
         return None
 
+    def _responses_reasoning_payload(self, model: str) -> dict[str, str] | None:
+        """Opt into summary text whenever reasoning effort is enabled."""
+        effort = self._responses_reasoning_effort(model)
+        if not effort:
+            return None
+        return {"effort": effort, "summary": "auto"}
+
     async def _create_chat_completion(self, payload: dict) -> object:
         self._apply_extra_body(payload)
         try:
@@ -549,9 +590,9 @@ class OpenAIProvider:
     ) -> AsyncIterator[ChatStreamChunk]:
         input_items = _to_responses_input(messages)
         payload: dict[str, object] = {"model": model, "input": input_items}
-        reasoning_effort = self._responses_reasoning_effort(model)
-        if reasoning_effort:
-            payload["reasoning"] = {"effort": reasoning_effort}
+        reasoning = self._responses_reasoning_payload(model)
+        if reasoning:
+            payload["reasoning"] = reasoning
         self._apply_prompt_cache(payload)
         stream = await self._create_response_stream(payload)
         async for chunk in _iter_response_stream_chunks(stream):
@@ -578,9 +619,9 @@ class OpenAIProvider:
                 for tool in tools
             ],
         }
-        reasoning_effort = self._responses_reasoning_effort(model)
-        if reasoning_effort:
-            payload["reasoning"] = {"effort": reasoning_effort}
+        reasoning = self._responses_reasoning_payload(model)
+        if reasoning:
+            payload["reasoning"] = reasoning
         mapped_tool_choice = _to_responses_tool_choice(tool_choice)
         if mapped_tool_choice is not None:
             payload["tool_choice"] = mapped_tool_choice
@@ -592,9 +633,9 @@ class OpenAIProvider:
     async def _chat_via_responses(self, model: str, messages: list[dict]) -> object:
         input_items = _to_responses_input(messages)
         payload: dict[str, object] = {"model": model, "input": input_items}
-        reasoning_effort = self._responses_reasoning_effort(model)
-        if reasoning_effort:
-            payload["reasoning"] = {"effort": reasoning_effort}
+        reasoning = self._responses_reasoning_payload(model)
+        if reasoning:
+            payload["reasoning"] = reasoning
         self._apply_prompt_cache(payload)
         return await self._create_response(payload)
 
@@ -619,9 +660,9 @@ class OpenAIProvider:
                 for tool in tools
             ],
         }
-        reasoning_effort = self._responses_reasoning_effort(model)
-        if reasoning_effort:
-            payload["reasoning"] = {"effort": reasoning_effort}
+        reasoning = self._responses_reasoning_payload(model)
+        if reasoning:
+            payload["reasoning"] = reasoning
         mapped_tool_choice = _to_responses_tool_choice(tool_choice)
         if mapped_tool_choice is not None:
             payload["tool_choice"] = mapped_tool_choice
@@ -638,9 +679,11 @@ class OpenAIProvider:
             raise
 
     async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
+        reasoning_content: str | None = None
         if self._should_use_responses(model):
             response = await self._chat_via_responses(model, messages)
             message = _extract_response_text(response)
+            reasoning_content = _extract_response_reasoning(response)
             usage = getattr(response, "usage", None)
         else:
             payload = {"model": model, "messages": messages}
@@ -650,11 +693,17 @@ class OpenAIProvider:
             try:
                 result = await self._create_chat_completion(payload)
                 message = result.choices[0].message.content or "" if result.choices else ""
+                reasoning_content = (
+                    getattr(result.choices[0].message, "reasoning_content", None)
+                    if result.choices
+                    else None
+                )
                 usage = result.usage
             except NonChatModelError:
                 self._mark_responses_only_model(model)
                 response = await self._chat_via_responses(model, messages)
                 message = _extract_response_text(response)
+                reasoning_content = _extract_response_reasoning(response)
                 usage = getattr(response, "usage", None)
         cached_tokens, thinking_tokens = _extract_usage_details(usage)
         prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
@@ -664,6 +713,7 @@ class OpenAIProvider:
             input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=message,
+            reasoning_content=reasoning_content,
             usage=ChatUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -723,6 +773,7 @@ class OpenAIProvider:
                 input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
             return ChatResponse(
                 content=content or "",
+                reasoning_content=_extract_response_reasoning(response),
                 usage=ChatUsage(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -781,6 +832,7 @@ class OpenAIProvider:
                 input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
             return ChatResponse(
                 content=content or "",
+                reasoning_content=_extract_response_reasoning(response),
                 usage=ChatUsage(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -796,9 +848,11 @@ class OpenAIProvider:
         cached_tokens, thinking_tokens = _extract_usage_details(usage)
         tool_calls: list[ChatToolCall] = []
         finish_reason = None
+        reasoning_content: str | None = None
         if result.choices:
             choice = result.choices[0]
             finish_reason = getattr(choice, "finish_reason", None)
+            reasoning_content = getattr(choice.message, "reasoning_content", None)
             for call in choice.message.tool_calls or []:
                 arguments = {}
                 if call.function.arguments:
@@ -821,6 +875,7 @@ class OpenAIProvider:
             input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
         return ChatResponse(
             content=result.choices[0].message.content or "" if result.choices else "",
+            reasoning_content=reasoning_content,
             usage=ChatUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -890,9 +945,11 @@ class OpenAIProvider:
         usage_sent = False
         async for event in stream:
             if event.choices:
-                delta = event.choices[0].delta.content
-                if delta:
-                    yield ChatStreamChunk(content=delta)
+                delta = event.choices[0].delta
+                content = getattr(delta, "content", None)
+                reasoning_content = getattr(delta, "reasoning_content", None)
+                if content or reasoning_content:
+                    yield ChatStreamChunk(content=content, reasoning_content=reasoning_content)
             if event.usage:
                 usage_sent = True
                 cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
@@ -995,8 +1052,10 @@ class OpenAIProvider:
                 if tool_deltas and not signaled_tool_calls:
                     signaled_tool_calls = True
                     yield ChatStreamChunk(finish_reason="tool_calls")
-                if delta and delta.content:
-                    yield ChatStreamChunk(content=delta.content)
+                content = getattr(delta, "content", None) if delta else None
+                reasoning_content = getattr(delta, "reasoning_content", None) if delta else None
+                if content or reasoning_content:
+                    yield ChatStreamChunk(content=content, reasoning_content=reasoning_content)
                 for call in tool_deltas:
                     index = getattr(call, "index", 0) or 0
                     entry = pending_tool_calls.setdefault(
@@ -1254,9 +1313,11 @@ class AzureOpenAIProvider:
         usage_sent = False
         async for event in stream:
             if event.choices:
-                delta = event.choices[0].delta.content
-                if delta:
-                    yield ChatStreamChunk(content=delta)
+                delta = event.choices[0].delta
+                content = getattr(delta, "content", None)
+                reasoning_content = getattr(delta, "reasoning_content", None)
+                if content or reasoning_content:
+                    yield ChatStreamChunk(content=content, reasoning_content=reasoning_content)
             if event.usage:
                 usage_sent = True
                 cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
@@ -1354,8 +1415,10 @@ class AzureOpenAIProvider:
                 if tool_deltas and not signaled_tool_calls:
                     signaled_tool_calls = True
                     yield ChatStreamChunk(finish_reason="tool_calls")
-                if delta and delta.content:
-                    yield ChatStreamChunk(content=delta.content)
+                content = getattr(delta, "content", None) if delta else None
+                reasoning_content = getattr(delta, "reasoning_content", None) if delta else None
+                if content or reasoning_content:
+                    yield ChatStreamChunk(content=content, reasoning_content=reasoning_content)
                 for call in tool_deltas:
                     index = getattr(call, "index", 0) or 0
                     entry = pending_tool_calls.setdefault(

@@ -239,7 +239,7 @@ async def test_agentic_loop_langchain_runs_tool_then_returns_final_answer():
     assert tool_events[-1]["state"] == "end"
     assert tool_events[-1]["input_preview"] == '{"text": "hello"}'
     assert tool_events[-1]["action_summary"] == "Running echo tool"
-
+    assert tool_events[-1]["output"]["result_preview"] == "completed"
 
 @pytest.mark.asyncio
 async def test_agentic_loop_shares_pending_attachments_with_later_tools():
@@ -449,6 +449,13 @@ async def test_agentic_loop_records_image_usages_from_image_tools():
             name="generate_image",
             output={
                 "model_id": "11111111-1111-1111-1111-111111111111",
+                "prompt_tokens": 19,
+                "completion_tokens": 1056,
+                "total_tokens": 1075,
+                "input_tokens": 19,
+                "output_tokens": 1056,
+                "cached_tokens": 0,
+                "thinking_tokens": 0,
                 "image_width": 1024,
                 "image_height": 1024,
                 "image_count": 1,
@@ -514,11 +521,11 @@ async def test_agentic_loop_records_image_usages_from_image_tools():
     assert image_usages == [
         {
             "model_id": "11111111-1111-1111-1111-111111111111",
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
+            "prompt_tokens": 19,
+            "completion_tokens": 1056,
+            "total_tokens": 1075,
+            "input_tokens": 19,
+            "output_tokens": 1056,
             "cached_tokens": 0,
             "thinking_tokens": 0,
             "image_width": 1024,

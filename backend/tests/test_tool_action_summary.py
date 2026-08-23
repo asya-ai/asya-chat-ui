@@ -1,4 +1,8 @@
-from app.services.tools.previews import tool_call_action_summary
+from app.services.tools.previews import (
+    tool_call_action_summary,
+    tool_call_input_preview,
+    tool_call_output_preview,
+)
 
 
 def test_action_summary_web_search():
@@ -53,3 +57,24 @@ def test_action_summary_code_execution_falls_back_to_first_code_line():
 
 def test_action_summary_unknown_tool():
     assert tool_call_action_summary("custom_tool", {}) == "Running custom tool"
+
+
+def test_input_preview_keeps_full_image_prompt():
+    prompt = (
+        "Create an original fan-art illustration of Claudia Jolicoeur, "
+        "the same 23-year-old heroine from An Arcane Study of Stars, "
+        "keeping her appearance consistent: moon-pale skin, slender underfeathered cloak, "
+        "and green eyes beneath watchful constellations."
+    )
+    assert len(prompt) > 180
+    assert tool_call_input_preview("generate_image", {"prompt": prompt}) == f"prompt: {prompt}"
+    assert tool_call_output_preview(
+        "generate_image",
+        {
+            "content_type": "image/png",
+            "file_name": "generated.png",
+            "image_count": 1,
+            "prompt_tokens": 226,
+            "completion_tokens": 1756,
+        },
+    ) == "images: 1"

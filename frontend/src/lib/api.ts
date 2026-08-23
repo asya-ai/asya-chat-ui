@@ -72,6 +72,7 @@ type StreamEvent =
       model_id?: string
       attachments?: ChatMessageAttachmentInput[]
       sources?: SourceItem[]
+      usage?: ChatMessage["usage"]
     }
 
 const getWsBase = () => {

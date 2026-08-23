@@ -134,6 +134,9 @@ export type MessageUsage = {
   thinking_tokens: number
   total_tokens: number
   cost_usd?: number | null
+  time_to_first_token_ms?: number | null
+  generation_time_ms?: number | null
+  tokens_per_second?: number | null
 }
 
 export type ChatMessage = {
@@ -295,12 +298,19 @@ export type CoworkingToolEvent = {
   } | null
 }
 
+export type ReasoningToolEvent = {
+  type: "reasoning"
+  id?: string
+  content: string
+}
+
 export type ToolEvent =
   | CodeExecutionToolEvent
   | ContextSummaryToolEvent
   | UrlAttachmentsToolEvent
   | ToolCallToolEvent
   | CoworkingToolEvent
+  | ReasoningToolEvent
 
 export type GenerationStatus =
   | "queued"

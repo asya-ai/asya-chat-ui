@@ -181,3 +181,138 @@ def test_build_stream_parts_inserts_content_when_only_actions_exist():
         {"type": "text", "text": "Done."},
         {"type": "action", "label": "Generating image"},
     ]
+
+
+def test_build_stream_parts_reasoning_updates_same_action_node():
+    events = [
+        _event(
+            "tool_event",
+            {"type": "reasoning", "id": "reasoning_0", "content": "Step one"},
+            1,
+        ),
+        _event(
+            "tool_event",
+            {
+                "type": "reasoning",
+                "id": "reasoning_0",
+                "content": "Step one\nStep two",
+            },
+            2,
+        ),
+        _event("delta", {"delta": "Final answer."}, 3),
+    ]
+
+    parts, _thinking_steps = _build_stream_parts_from_events(events, message_content="")
+    assert parts is not None
+    assert len(parts) == 2
+    assert parts[0]["type"] == "action"
+    assert parts[0]["label"] == "Thoughts"
+    assert parts[0]["tool_event"]["content"] == "Step one\nStep two"
+    assert parts[1] == {"type": "text", "text": "Final answer."}
+
+
+def test_build_stream_parts_reasoning_keeps_separate_episodes():
+    events = [
+        _event(
+            "tool_event",
+            {"type": "reasoning", "id": "reasoning_0", "content": "First episode"},
+            1,
+        ),
+        _event(
+            "tool_event",
+            {"type": "reasoning", "id": "reasoning_1", "content": "Second episode"},
+            2,
+        ),
+    ]
+
+    parts, _thinking_steps = _build_stream_parts_from_events(events, message_content="")
+    assert parts is not None
+    assert len(parts) == 2
+    assert parts[0]["label"] == "Thoughts"
+    assert parts[0]["tool_event"]["content"] == "First episode"
+    assert parts[1]["label"] == "Thoughts"
+    assert parts[1]["tool_event"]["content"] == "Second episode"
+
+
+def test_build_stream_parts_maps_duplicate_generated_png_uniquely():
+    """Reload rematch must not collapse every generate_image onto the last file."""
+    message_attachments = [
+        SimpleNamespace(
+            id="att-1",
+            file_name="generated.png",
+            content_type="image/png",
+            content_url="https://example.test/1.png",
+            data_base64=None,
+        ),
+        SimpleNamespace(
+            id="att-2",
+            file_name="generated.png",
+            content_type="image/png",
+            content_url="https://example.test/2.png",
+            data_base64=None,
+        ),
+        SimpleNamespace(
+            id="att-3",
+            file_name="generated.png",
+            content_type="image/png",
+            content_url="https://example.test/3.png",
+            data_base64=None,
+        ),
+    ]
+    events = []
+    sequence = 0
+    for call_id in ("call:img-1", "call:img-2", "call:img-3"):
+        sequence += 1
+        events.append(
+            _event(
+                "activity",
+                {"label": "Generating image", "state": "start"},
+                sequence,
+            )
+        )
+        sequence += 1
+        events.append(
+            _event(
+                "tool_event",
+                {
+                    "type": "tool_call",
+                    "id": call_id,
+                    "tool_name": "generate_image",
+                    "state": "end",
+                    "action_summary": "Generating image",
+                    "output": {
+                        "status": "ok",
+                        "attachments": [
+                            {
+                                "file_name": "generated.png",
+                                "content_type": "image/png",
+                                # Distinct payload that would previously be discarded
+                                # once rematch preferred the last content_url.
+                                "data_base64": f"payload-for-{call_id}",
+                            }
+                        ],
+                    },
+                },
+                sequence,
+            )
+        )
+
+    parts, _thinking_steps = _build_stream_parts_from_events(
+        events,
+        message_content="Created three images.",
+        message_attachments=message_attachments,
+    )
+
+    assert parts is not None
+    action_parts = [part for part in parts if part.get("type") == "action"]
+    assert len(action_parts) == 3
+    assert [part["attachments"][0]["id"] for part in action_parts] == [
+        "att-1",
+        "att-2",
+        "att-3",
+    ]
+    assert [part["attachments"][0]["content_url"] for part in action_parts] == [
+        "https://example.test/1.png",
+        "https://example.test/2.png",
+        "https://example.test/3.png",
+    ]

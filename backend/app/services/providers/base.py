@@ -17,6 +17,7 @@ class ChatUsage:
 class ChatResponse:
     content: str
     usage: ChatUsage
+    reasoning_content: str | None = None
     tool_calls: list["ChatToolCall"] | None = None
     finish_reason: str | None = None
     sources: list[dict] | list[str] | None = None
@@ -25,6 +26,9 @@ class ChatResponse:
 @dataclass
 class ChatStreamChunk:
     content: str | None = None
+    reasoning_content: str | None = None
+    # When set, scopes which Thoughts action this delta updates (new id => new action).
+    reasoning_id: str | None = None
     usage: ChatUsage | None = None
     tool_calls: list["ChatToolCall"] | None = None
     finish_reason: str | None = None

@@ -78,7 +78,12 @@ from app.services.langchain_runtime import (
 from app.services.generation_event_bus import publish_generation_event
 from app.services.providers.base import ChatUsage
 from app.services.providers.registry import get_provider
-from app.services.tools.image_tool import ImageToolContext, edit_image, generate_image
+from app.services.tools.image_tool import (
+    ImageToolContext,
+    edit_image,
+    generate_image,
+    image_usage_token_fields,
+)
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -364,6 +369,9 @@ def _aggregated_message_usage_payload(
             "thinking_tokens": 0,
             "total_tokens": 0,
             "cost_usd": None,
+            "time_to_first_token_ms": None,
+            "generation_time_ms": None,
+            "tokens_per_second": None,
         }
     return {
         "input_tokens": usage.input_tokens,
@@ -372,6 +380,9 @@ def _aggregated_message_usage_payload(
         "thinking_tokens": usage.thinking_tokens,
         "total_tokens": usage.total_tokens,
         "cost_usd": usage.cost_usd,
+        "time_to_first_token_ms": usage.time_to_first_token_ms,
+        "generation_time_ms": usage.generation_time_ms,
+        "tokens_per_second": usage.tokens_per_second,
     }
 
 
@@ -993,13 +1004,7 @@ async def _run_generation(task_id: UUID) -> None:
                     chat_id=chat.id,
                     message_id=assistant_message.id,
                     model_id=model.id,
-                    prompt_tokens=0,
-                    completion_tokens=0,
-                    total_tokens=0,
-                    input_tokens=0,
-                    output_tokens=0,
-                    cached_tokens=0,
-                    thinking_tokens=0,
+                    **image_usage_token_fields(image_result.output),
                     image_width=image_result.output.get("image_width"),
                     image_height=image_result.output.get("image_height"),
                     image_count=image_result.output.get("image_count"),
@@ -1030,6 +1035,13 @@ async def _run_generation(task_id: UUID) -> None:
                             },
                         },
                     )
+                completed_at = datetime.utcnow()
+                assistant_message.status = "done"
+                assistant_message.completed_at = completed_at
+                session.add(assistant_message)
+                task.status = GenerationStatus.completed
+                task.completed_at = completed_at
+                session.commit()
                 _append_event(
                     session,
                     task.id,
@@ -1047,12 +1059,6 @@ async def _run_generation(task_id: UUID) -> None:
                         ),
                     },
                 )
-                assistant_message.status = "done"
-                assistant_message.completed_at = datetime.utcnow()
-                session.add(assistant_message)
-                task.status = GenerationStatus.completed
-                task.completed_at = datetime.utcnow()
-                session.commit()
                 _queue_project_chat_index(session, chat)
                 return
 
@@ -1135,8 +1141,54 @@ async def _run_generation(task_id: UUID) -> None:
             else:
                 if hasattr(provider, "chat_stream"):
                     assistant_content = ""
+                    episode_reasoning = ""
+                    episode_id = "reasoning_0"
+                    last_emitted_reasoning_len = 0
                     async for chunk in chat_stream_with_langchain(provider, model.model_name, messages):
                         _ensure_task_not_cancelled(session, task.id)
+                        if getattr(chunk, "reasoning_content", None):
+                            chunk_episode = getattr(chunk, "reasoning_id", None) or "reasoning_0"
+                            if chunk_episode != episode_id:
+                                if episode_reasoning:
+                                    _append_event(
+                                        session,
+                                        task.id,
+                                        sequence_ref,
+                                        "tool_event",
+                                        {
+                                            "type": "reasoning",
+                                            "id": episode_id,
+                                            "content": episode_reasoning,
+                                        },
+                                    )
+                                episode_id = chunk_episode
+                                episode_reasoning = ""
+                                last_emitted_reasoning_len = 0
+                            piece = chunk.reasoning_content
+                            if not episode_reasoning:
+                                episode_reasoning = piece
+                            elif piece.startswith(episode_reasoning):
+                                episode_reasoning = piece
+                            elif episode_reasoning.endswith(piece):
+                                piece = ""
+                            else:
+                                episode_reasoning += piece
+                            if piece and (
+                                last_emitted_reasoning_len == 0
+                                or len(episode_reasoning) - last_emitted_reasoning_len >= 80
+                            ):
+                                last_emitted_reasoning_len = len(episode_reasoning)
+                                _append_event(
+                                    session,
+                                    task.id,
+                                    sequence_ref,
+                                    "tool_event",
+                                    {
+                                        "type": "reasoning",
+                                        "id": episode_id,
+                                        "content": episode_reasoning,
+                                    },
+                                )
                         if chunk.content:
                             assistant_content += chunk.content
                             assistant_message.content = assistant_content
@@ -1153,6 +1205,18 @@ async def _run_generation(task_id: UUID) -> None:
                             )
                         if chunk.usage:
                             usage = chunk.usage
+                    if episode_reasoning:
+                        _append_event(
+                            session,
+                            task.id,
+                            sequence_ref,
+                            "tool_event",
+                            {
+                                "type": "reasoning",
+                                "id": episode_id,
+                                "content": episode_reasoning,
+                            },
+                        )
                     assistant_message.content = assistant_content
                     session.add(assistant_message)
                     session.commit()
@@ -1163,6 +1227,19 @@ async def _run_generation(task_id: UUID) -> None:
                     session.add(assistant_message)
                     session.commit()
                     usage = response.usage
+                    reasoning_content = getattr(response, "reasoning_content", None)
+                    if reasoning_content:
+                        _append_event(
+                            session,
+                            task.id,
+                            sequence_ref,
+                            "tool_event",
+                            {
+                                "type": "reasoning",
+                                "id": "reasoning_0",
+                                "content": reasoning_content,
+                            },
+                        )
                     _append_event(
                         session,
                         task.id,
@@ -1217,6 +1294,13 @@ async def _run_generation(task_id: UUID) -> None:
                 except Exception:
                     logger.debug("Chat title job failed", exc_info=True)
 
+            completed_at = datetime.utcnow()
+            assistant_message.status = "done"
+            assistant_message.completed_at = completed_at
+            session.add(assistant_message)
+            task.status = GenerationStatus.completed
+            task.completed_at = completed_at
+            session.commit()
             _append_event(
                 session,
                 task.id,
@@ -1235,12 +1319,6 @@ async def _run_generation(task_id: UUID) -> None:
                     ),
                 },
             )
-            assistant_message.status = "done"
-            assistant_message.completed_at = datetime.utcnow()
-            session.add(assistant_message)
-            task.status = GenerationStatus.completed
-            task.completed_at = datetime.utcnow()
-            session.commit()
             synced_doc = mark_assistant_synced(session, chat.id)
             if synced_doc:
                 _append_event(

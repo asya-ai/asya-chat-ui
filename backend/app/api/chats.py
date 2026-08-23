@@ -60,6 +60,7 @@ from app.services.tools.image_tool import (
     edit_image,
     generate_image,
     get_image_model,
+    image_usage_token_fields,
 )
 from app.services.tools.code_execution import (
     ALLOWED_IMPORTS_HINT,
@@ -1330,126 +1331,15 @@ def _sanitize_tool_output_for_context(value: object) -> object:
 
 
 def _tool_call_input_preview(name: str, arguments: dict[str, Any]) -> str:
-    if name == "web_search":
-        queries = _ensure_list(arguments.get("queries")) or _ensure_list(
-            arguments.get("query")
-        )
-        if queries:
-            return f"query: {', '.join(queries[:3])}"
-        return "query: (empty)"
-    if name == "web_scrape":
-        urls = _ensure_list(arguments.get("urls")) or _ensure_list(arguments.get("url"))
-        output = str(arguments.get("output") or "markdown").strip().lower() or "markdown"
-        question = str(arguments.get("question") or "").strip()
-        base = f"urls: {', '.join(urls[:2])}" if urls else "urls: (empty)"
-        if output == "answer" and question:
-            return f"{base}; question: {question[:160]}"
-        return f"{base}; output: {output}"
-    if name == "download_attachments":
-        urls = _ensure_list(arguments.get("urls")) or _ensure_list(arguments.get("url"))
-        return f"urls: {', '.join(urls[:3])}" if urls else "urls: (empty)"
-    if name == "extract_pdf":
-        attachment_id = str(arguments.get("attachment_id") or "").strip()
-        file_name = str(arguments.get("file_name") or "").strip()
-        page = arguments.get("page")
-        page_from = arguments.get("page_from")
-        page_to = arguments.get("page_to")
-        target = (
-            f"attachment_id: {attachment_id}"
-            if attachment_id
-            else (f"file: {file_name}" if file_name else "latest PDF")
-        )
-        if isinstance(page, int):
-            return f"{target}; page: {page}"
-        if isinstance(page_from, int) or isinstance(page_to, int):
-            return f"{target}; range: {page_from or 1}..{page_to or page_from or 1}"
-        return f"{target}; page selection missing"
-    if name == "code_execution":
-        purpose = str(arguments.get("purpose") or "").strip()
-        if purpose:
-            return f"purpose: {purpose[:160]}"
-        language = str(arguments.get("language") or "python").strip() or "python"
-        code = str(arguments.get("code") or "").strip()
-        first_line = code.splitlines()[0][:120] if code else ""
-        return f"{language}: {first_line}" if first_line else f"{language}: (empty code)"
-    if name in {"generate_image", "edit_image"}:
-        prompt = str(arguments.get("prompt") or "").strip()
-        return f"prompt: {prompt[:180]}" if prompt else "prompt: (empty)"
-    if name == "store_memory":
-        content = str(arguments.get("content") or "").strip()
-        return f"content: {content[:120]}" if content else "content: (empty)"
-    if name == "remove_memory":
-        return f"memory_id: {arguments.get('memory_id', '')}"
-    if name == "search_past_chats":
-        query = str(arguments.get("query") or "").strip()
-        return f"query: {query[:120]}" if query else "query: (empty)"
-    keys = ", ".join(sorted(arguments.keys())[:6])
-    return f"args: {keys}" if keys else "no args"
+    from app.services.tools.previews import tool_call_input_preview
+
+    return tool_call_input_preview(name, arguments)
 
 
 def _tool_call_output_preview(name: str, output: dict[str, Any]) -> str:
-    if not isinstance(output, dict):
-        return "completed"
-    if name == "web_search":
-        queries = output.get("queries", []) or []
-        count = 0
-        if isinstance(queries, list):
-            for batch in queries:
-                if isinstance(batch, dict):
-                    count += len(batch.get("results", []) or [])
-        return f"results: {count}"
-    if name == "web_scrape":
-        results = output.get("results", []) or []
-        success = 0
-        failures = 0
-        if isinstance(results, list):
-            for item in results:
-                if isinstance(item, dict) and item.get("error"):
-                    failures += 1
-                else:
-                    success += 1
-        return f"success: {success}, failed: {failures}"
-    if name == "download_attachments":
-        results = output.get("results", []) or []
-        files = 0
-        failures = 0
-        if isinstance(results, list):
-            for item in results:
-                if isinstance(item, dict) and item.get("error"):
-                    failures += 1
-                else:
-                    files += 1
-        return f"files: {files}, failed: {failures}"
-    if name == "extract_pdf":
-        page_count = output.get("page_count")
-        selected = output.get("selected_pages")
-        if isinstance(selected, list) and selected:
-            return f"page_count: {page_count}, extracted: {len(selected)} page(s)"
-        return f"page_count: {page_count}"
-    if name == "code_execution":
-        if output.get("requires_approval"):
-            return "requires approval"
-        if output.get("timed_out"):
-            return "timed out"
-        if output.get("error"):
-            return f"error: {str(output.get('error'))[:160]}"
-        exit_code = output.get("exit_code")
-        if isinstance(exit_code, int):
-            return f"exit code: {exit_code}"
-        return "completed"
-    if name in {"generate_image", "edit_image"}:
-        count = output.get("image_count")
-        if isinstance(count, int):
-            return f"images: {count}"
-        return "image generated"
-    if name == "store_memory":
-        return output.get("status", "completed")
-    if name == "remove_memory":
-        return output.get("status", "completed")
-    if name == "search_past_chats":
-        results = output.get("results", [])
-        return f"found: {len(results)} chat(s)" if isinstance(results, list) else "completed"
-    return "completed"
+    from app.services.tools.previews import tool_call_output_preview
+
+    return tool_call_output_preview(name, output)
 
 
 def _parse_web_answer_payload(content: str) -> tuple[str, list[str], bool]:
@@ -1848,6 +1738,17 @@ def _attach_stream_action_attachments(
 ) -> None:
     if not attachments:
         return
+    # Prefer an empty matching action so repeated labels (e.g. three
+    # "Generating image" steps) each get their own attachments.
+    for index in range(len(parts) - 1, -1, -1):
+        part = parts[index]
+        if part.get("type") != "action" or part.get("label") != label:
+            continue
+        existing = part.get("attachments")
+        if isinstance(existing, list) and existing:
+            continue
+        part["attachments"] = attachments
+        return
     for index in range(len(parts) - 1, -1, -1):
         part = parts[index]
         if part.get("type") != "action" or part.get("label") != label:
@@ -1867,11 +1768,14 @@ def _is_specialized_tool_event(payload: dict[str, Any]) -> bool:
         "url_attachments",
         "context_summary",
         "coworking",
+        "reasoning",
     }
 
 
 def _tool_event_action_label(payload: dict[str, Any]) -> str:
     event_type = payload.get("type")
+    if event_type == "reasoning":
+        return "Thoughts"
     if event_type == "tool_call":
         summary = payload.get("action_summary")
         if isinstance(summary, str) and summary.strip():
@@ -1910,6 +1814,8 @@ def _tool_event_action_label(payload: dict[str, Any]) -> str:
 
 def _action_label_matches_tool_event(label: str, payload: dict[str, Any]) -> bool:
     event_type = payload.get("type")
+    if event_type == "reasoning":
+        return label == "Thoughts"
     if event_type == "tool_call":
         summary = payload.get("action_summary")
         if isinstance(summary, str) and summary.strip():
@@ -1955,6 +1861,16 @@ def _attach_stream_action_tool_event(
             if isinstance(existing, dict) and existing.get("id") == event_id:
                 part["tool_event"] = payload
                 return
+    # Reasoning episodes must not coalesce by label — each distinct id is its own action.
+    if payload.get("type") == "reasoning":
+        parts.append(
+            {
+                "type": "action",
+                "label": _tool_event_action_label(payload),
+                "tool_event": payload,
+            }
+        )
+        return
     for index in range(len(parts) - 1, -1, -1):
         part = parts[index]
         if part.get("type") != "action":
@@ -1990,20 +1906,34 @@ def _normalize_timeline_attachments(
     raw_attachments: Any,
     message_attachments: list["ChatMessageAttachmentRead"] | None = None,
 ) -> list[dict[str, Any]]:
+    """Map tool-event attachment stubs onto message attachments.
+
+    ``message_attachments`` is treated as a consumable pool: each match is
+    removed so repeated names like ``generated.png`` remap 1:1 in order
+    instead of all collapsing onto the last file.
+    """
     if not isinstance(raw_attachments, list):
         return []
-    by_name = {
-        item.file_name: item
-        for item in (message_attachments or [])
-        if item.file_name
-    }
+    pool = message_attachments if message_attachments is not None else []
     normalized: list[dict[str, Any]] = []
     for item in raw_attachments:
         if not isinstance(item, dict):
             continue
         file_name = str(item.get("file_name") or "").strip()
         content_type = str(item.get("content_type") or "").strip() or "application/octet-stream"
-        matched = by_name.get(file_name) if file_name else None
+        raw_id = item.get("id")
+        matched = None
+        if isinstance(raw_id, str) and raw_id.strip():
+            wanted = raw_id.strip()
+            for index, candidate in enumerate(pool):
+                if candidate.id == wanted:
+                    matched = pool.pop(index)
+                    break
+        if matched is None and file_name:
+            for index, candidate in enumerate(pool):
+                if candidate.file_name == file_name:
+                    matched = pool.pop(index)
+                    break
         entry: dict[str, Any] = {
             "file_name": file_name or (matched.file_name if matched else "attachment"),
             "content_type": matched.content_type if matched else content_type,
@@ -2029,6 +1959,8 @@ def _build_stream_parts_from_events(
     """Rebuild interleaved timeline + action labels from persisted generation events."""
     parts: list[dict[str, Any]] = []
     thinking_steps: list[str] = []
+    # Consumable copy so duplicate file names (e.g. generated.png) remap uniquely.
+    attachment_pool = list(message_attachments or [])
     for event in events:
         payload = event.payload_json if isinstance(event.payload_json, dict) else {}
         if event.event_type == "delta":
@@ -2059,7 +1991,7 @@ def _build_stream_parts_from_events(
             continue
         output = payload.get("output")
         raw_attachments = output.get("attachments") if isinstance(output, dict) else None
-        attachments = _normalize_timeline_attachments(raw_attachments, message_attachments)
+        attachments = _normalize_timeline_attachments(raw_attachments, attachment_pool)
         if not attachments:
             continue
         label = payload.get("action_summary")
@@ -2691,13 +2623,9 @@ async def _run_agentic_loop(
                         image_usages.append(
                             {
                                 "model_id": model_id,
-                                "prompt_tokens": 0,
-                                "completion_tokens": 0,
-                                "total_tokens": 0,
-                                "input_tokens": 0,
-                                "output_tokens": 0,
-                                "cached_tokens": 0,
-                                "thinking_tokens": 0,
+                                **image_usage_token_fields(
+                                    result.output if isinstance(result.output, dict) else None
+                                ),
                                 "image_width": result.output.get("image_width"),
                                 "image_height": result.output.get("image_height"),
                                 "image_count": result.output.get("image_count"),
@@ -2957,6 +2885,78 @@ class MessageUsageRead(BaseModel):
     thinking_tokens: int = 0
     total_tokens: int = 0
     cost_usd: float | None = None
+    time_to_first_token_ms: float | None = None
+    generation_time_ms: float | None = None
+    tokens_per_second: float | None = None
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    delta_ms = (end - start).total_seconds() * 1000.0
+    if delta_ms < 0:
+        return None
+    return delta_ms
+
+
+def _attach_generation_timing(
+    session: Session, usage_by_message: dict[UUID, MessageUsageRead]
+) -> None:
+    if not usage_by_message:
+        return
+    message_ids = list(usage_by_message.keys())
+    messages = session.exec(
+        select(ChatMessage).where(ChatMessage.id.in_(message_ids))
+    ).all()
+    message_map = {message.id: message for message in messages}
+    tasks = session.exec(
+        select(ChatGenerationTask).where(
+            ChatGenerationTask.assistant_message_id.in_(message_ids)
+        )
+    ).all()
+    task_by_message = {task.assistant_message_id: task for task in tasks}
+    task_ids = [task.id for task in tasks]
+    first_token_by_task: dict[UUID, datetime] = {}
+    if task_ids:
+        rows = session.exec(
+            select(
+                ChatGenerationEvent.task_id,
+                func.min(ChatGenerationEvent.created_at),
+            )
+            .where(ChatGenerationEvent.task_id.in_(task_ids))
+            .where(ChatGenerationEvent.event_type == "delta")
+            .group_by(ChatGenerationEvent.task_id)
+        ).all()
+        for task_id, first_at in rows:
+            if task_id is not None and first_at is not None:
+                first_token_by_task[task_id] = first_at
+
+    for message_id, usage in usage_by_message.items():
+        message = message_map.get(message_id)
+        if message is None:
+            continue
+        task = task_by_message.get(message_id)
+        started_at = message.started_at or (task.started_at if task else None)
+        completed_at = message.completed_at or (task.completed_at if task else None)
+        first_token_at = (
+            first_token_by_task.get(task.id) if task is not None else None
+        )
+
+        usage.generation_time_ms = _duration_ms(started_at, completed_at)
+        usage.time_to_first_token_ms = _duration_ms(started_at, first_token_at)
+
+        tokens_per_second: float | None = None
+        output_tokens = usage.output_tokens or 0
+        if output_tokens > 0 and completed_at is not None:
+            if first_token_at is not None:
+                decode_s = (completed_at - first_token_at).total_seconds()
+                if decode_s >= 0.05:
+                    tokens_per_second = output_tokens / decode_s
+            if tokens_per_second is None and started_at is not None:
+                total_s = (completed_at - started_at).total_seconds()
+                if total_s > 0:
+                    tokens_per_second = output_tokens / total_s
+        usage.tokens_per_second = tokens_per_second
 
 
 def _estimate_message_usage_cost(
@@ -3065,6 +3065,7 @@ def build_message_usage_map(
     for message_id in missing_cost:
         if message_id in usage_by_message:
             usage_by_message[message_id].cost_usd = None
+    _attach_generation_timing(session, usage_by_message)
     return usage_by_message
 
 
@@ -3767,11 +3768,13 @@ def list_messages(
     attachments = []
     if messages:
         attachments = session.exec(
-            select(ChatMessageAttachment).where(
+            select(ChatMessageAttachment)
+            .where(
                 ChatMessageAttachment.message_id.in_(
                     [message.id for message in messages]
                 )
             )
+            .order_by(ChatMessageAttachment.created_at)
         ).all()
     task_map: dict[UUID, ChatGenerationTask] = {}
     task_by_id: dict[UUID, ChatGenerationTask] = {}
@@ -4863,13 +4866,7 @@ async def create_message(
                 chat_id=chat.id,
                 message_id=assistant_message.id,
                 model_id=model.id,
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-                input_tokens=0,
-                output_tokens=0,
-                cached_tokens=0,
-                thinking_tokens=0,
+                **image_usage_token_fields(image_result.output),
                 image_width=image_result.output.get("image_width"),
                 image_height=image_result.output.get("image_height"),
                 image_count=image_result.output.get("image_count"),
@@ -4924,13 +4921,7 @@ async def create_message(
             chat_id=chat.id,
             message_id=assistant_message.id,
             model_id=model.id,
-            prompt_tokens=0,
-            completion_tokens=0,
-            total_tokens=0,
-            input_tokens=0,
-            output_tokens=0,
-            cached_tokens=0,
-            thinking_tokens=0,
+            **image_usage_token_fields(image_result.output),
         )
         session.add(usage_event)
         session.commit()
@@ -5776,13 +5767,7 @@ async def edit_message(
             chat_id=chat.id,
             message_id=assistant_message.id,
             model_id=model.id,
-            prompt_tokens=0,
-            completion_tokens=0,
-            total_tokens=0,
-            input_tokens=0,
-            output_tokens=0,
-            cached_tokens=0,
-            thinking_tokens=0,
+            **image_usage_token_fields(image_result.output),
         )
         session.add(usage_event)
         session.commit()

@@ -113,6 +113,25 @@ type MessageBubbleProps = {
   onPreviewAttachment: (attachment: ChatMessageAttachmentInput) => void
 }
 
+const formatDurationMs = (ms: number): string => {
+  if (!Number.isFinite(ms) || ms < 0) return "—"
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) {
+    const seconds = ms / 1000
+    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
+  }
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.round((ms % 60_000) / 1000)
+  return `${minutes}m ${seconds}s`
+}
+
+const formatTokensPerSecond = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return "—"
+  if (value >= 100) return value.toFixed(0)
+  if (value >= 10) return value.toFixed(1)
+  return value.toFixed(2)
+}
+
 let mermaidInitialized = false
 let mermaidRenderId = 0
 
@@ -795,6 +814,15 @@ const ToolEventDetails = ({
       </div>
     )
   }
+  if (toolEvent.type === "reasoning") {
+    return (
+      <div className="max-w-none text-muted-foreground text-xs [&_p]:my-1.5 [&_p]:leading-5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:text-foreground/80 [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:font-medium [&_h1]:text-sm [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:font-medium [&_h2]:text-sm [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:font-medium [&_h3]:text-xs">
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+          {toolEvent.content}
+        </ReactMarkdown>
+      </div>
+    )
+  }
   if (toolEvent.type === "url_attachments") {
     return (
       <div className="space-y-3">
@@ -1449,7 +1477,9 @@ const MessageBubbleComponent = ({
     (canCopyMessage ||
       uniqueSources.length > 0 ||
       Boolean(msg.model_name) ||
-      (actionInfoLevel === "detailed" && (msg.usage?.total_tokens ?? 0) > 0) ||
+      (actionInfoLevel === "detailed" &&
+        ((msg.usage?.total_tokens ?? 0) > 0 ||
+          msg.usage?.generation_time_ms != null)) ||
       (actionsEnabled && msg.generation_status === "failed") ||
       (actionsEnabled && Boolean(onSaveAsPrompt) && canCopyMessage))
 
@@ -1831,12 +1861,26 @@ const MessageBubbleComponent = ({
                     }
                     return (
                       <div key={`action-${index}`} className="space-y-2">
-                        <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
-                          <span aria-hidden="true" className="opacity-50 select-none">
-                            ›
-                          </span>
-                          <span className="min-w-0 wrap-break-word">{part.label}</span>
-                        </div>
+                        {part.tool_event?.type === "reasoning" && part.tool_event.content ? (
+                          <details className="group/action text-muted-foreground text-xs">
+                            <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
+                              <span aria-hidden="true" className="opacity-50 select-none">
+                                ›
+                              </span>
+                              <span className="min-w-0 wrap-break-word">{part.label}</span>
+                            </summary>
+                            <div className="space-y-2 mt-2 ml-3 text-foreground">
+                              <ToolEventDetails toolEvent={part.tool_event} t={t} />
+                            </div>
+                          </details>
+                        ) : (
+                          <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
+                            <span aria-hidden="true" className="opacity-50 select-none">
+                              ›
+                            </span>
+                            <span className="min-w-0 wrap-break-word">{part.label}</span>
+                          </div>
+                        )}
                         {part.tool_event?.type === "tool_call" &&
                         (part.tool_event.output?.status === "error" ||
                           part.tool_event.output?.error) ? (
@@ -2175,7 +2219,9 @@ const MessageBubbleComponent = ({
                 </div>
               </TooltipProvider>
               {uniqueSources.length > 0 ||
-              ((msg.usage?.total_tokens ?? 0) > 0) ? (
+              ((msg.usage?.total_tokens ?? 0) > 0) ||
+              (actionInfoLevel === "detailed" &&
+                msg.usage?.generation_time_ms != null) ? (
                 <div className="flex items-center gap-2">
                   {uniqueSources.length > 0 ? (
                     <Button
@@ -2238,6 +2284,46 @@ const MessageBubbleComponent = ({
                                         : 2,
                                   })}
                             </span>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : null}
+                  {actionInfoLevel === "detailed" &&
+                  msg.usage?.generation_time_ms != null ? (
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className="inline-flex items-center bg-background px-2.5 border border-border rounded-full h-7 text-muted-foreground text-xs tabular-nums cursor-default"
+                            tabIndex={0}
+                          >
+                            {formatDurationMs(msg.usage.generation_time_ms)}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="px-3 py-2">
+                          <div className="gap-x-4 gap-y-1 grid grid-cols-[1fr_auto] min-w-[9rem] text-xs">
+                            <span>{t("usage_generation_time")}</span>
+                            <span className="tabular-nums text-right">
+                              {formatDurationMs(msg.usage.generation_time_ms)}
+                            </span>
+                            {msg.usage.time_to_first_token_ms != null ? (
+                              <>
+                                <span>{t("usage_ttft")}</span>
+                                <span className="tabular-nums text-right">
+                                  {formatDurationMs(msg.usage.time_to_first_token_ms)}
+                                </span>
+                              </>
+                            ) : null}
+                            {msg.usage.tokens_per_second != null ? (
+                              <>
+                                <span>{t("usage_tokens_per_second")}</span>
+                                <span className="tabular-nums text-right">
+                                  {formatTokensPerSecond(msg.usage.tokens_per_second)}{" "}
+                                  {t("usage_tok_per_sec_unit")}
+                                </span>
+                              </>
+                            ) : null}
                           </div>
                         </TooltipContent>
                       </Tooltip>

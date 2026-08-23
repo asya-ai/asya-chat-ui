@@ -8,7 +8,12 @@ import anyio
 from json_repair import loads as repair_json_loads
 
 from app.services.providers.base import ChatUsage
-from app.services.tools.previews import tool_call_action_summary
+from app.services.tools.image_tool import image_usage_token_fields
+from app.services.tools.previews import (
+    tool_call_action_summary,
+    tool_call_input_preview,
+    tool_call_output_preview,
+)
 from app.services.tools.registry import ToolResult, ToolRegistry
 from app.services.langchain_runtime.tool_adapters import LangChainToolExecutor
 from app.services.mcp import mcp_source_items_from_tool_result
@@ -243,11 +248,60 @@ async def run_agentic_loop_langchain(
         if delta_sender:
             await delta_sender.send({"delta": text})
 
-    async def _call_model() -> tuple[str, list[Any], ChatUsage | None]:
+    async def _call_model(current_step: int) -> tuple[str, str, list[Any], ChatUsage | None]:
         if hasattr(provider, "chat_stream_with_tools"):
             content_parts: list[str] = []
+            episode_reasoning = ""
+            episode_id = f"reasoning_{current_step}"
+            all_reasoning_parts: list[str] = []
             tool_calls: list[Any] = []
             step_usage: ChatUsage | None = None
+            last_emitted_reasoning_len = 0
+
+            def _absorb_reasoning_delta(piece: str) -> None:
+                nonlocal episode_reasoning
+                if not piece:
+                    return
+                # Support both true deltas and cumulative provider chunks.
+                if not episode_reasoning:
+                    episode_reasoning = piece
+                elif piece.startswith(episode_reasoning):
+                    episode_reasoning = piece
+                elif episode_reasoning.endswith(piece):
+                    return
+                else:
+                    episode_reasoning += piece
+
+            async def _emit_reasoning(force: bool = False) -> None:
+                nonlocal last_emitted_reasoning_len
+                if not episode_reasoning:
+                    return
+                if (
+                    not force
+                    and last_emitted_reasoning_len > 0
+                    and len(episode_reasoning) - last_emitted_reasoning_len < 80
+                ):
+                    return
+                last_emitted_reasoning_len = len(episode_reasoning)
+                await _emit_tool_event(
+                    {
+                        "type": "reasoning",
+                        "id": episode_id,
+                        "content": episode_reasoning,
+                    }
+                )
+
+            async def _start_episode(next_id: str) -> None:
+                nonlocal episode_id, episode_reasoning, last_emitted_reasoning_len
+                if next_id == episode_id:
+                    return
+                await _emit_reasoning(force=True)
+                if episode_reasoning:
+                    all_reasoning_parts.append(episode_reasoning)
+                episode_id = next_id
+                episode_reasoning = ""
+                last_emitted_reasoning_len = 0
+
             async for chunk in provider.chat_stream_with_tools(
                 model_name, messages, tool_specs
             ):
@@ -256,16 +310,36 @@ async def run_agentic_loop_langchain(
                 if chunk.content:
                     content_parts.append(chunk.content)
                     await _emit_delta(chunk.content)
+                if getattr(chunk, "reasoning_content", None):
+                    chunk_episode = getattr(chunk, "reasoning_id", None) or f"reasoning_{current_step}"
+                    await _start_episode(chunk_episode)
+                    _absorb_reasoning_delta(chunk.reasoning_content)
+                    await _emit_reasoning()
                 if chunk.usage:
                     step_usage = chunk.usage
-            return "".join(content_parts), tool_calls, step_usage
+            await _emit_reasoning(force=True)
+            if episode_reasoning:
+                all_reasoning_parts.append(episode_reasoning)
+            return (
+                "".join(content_parts),
+                "\n\n".join(all_reasoning_parts),
+                tool_calls,
+                step_usage,
+            )
 
         response = await provider.chat_with_tools(model_name, messages, tool_specs)
         content = response.content or ""
+        reasoning_content = getattr(response, "reasoning_content", "") or ""
         tool_calls = list(response.tool_calls or [])
         if content:
             await _emit_delta(content)
-        return content, tool_calls, response.usage
+        if reasoning_content:
+            await _emit_tool_event({
+                "type": "reasoning",
+                "id": f"reasoning_{current_step}",
+                "content": reasoning_content,
+            })
+        return content, reasoning_content, tool_calls, response.usage
 
     def _visible_content(fallback: str) -> str:
         if emitted_text_parts:
@@ -276,7 +350,7 @@ async def run_agentic_loop_langchain(
         await _emit_activity(f"Step {step + 1}/{max_steps}", "start")
         thinking_label = "Thinking"
         await _emit_activity(thinking_label, "start")
-        content, tool_calls, step_usage = await _call_model()
+        content, reasoning_content, tool_calls, step_usage = await _call_model(step)
         usage = _merge_chat_usage(usage, step_usage)
         if not tool_calls:
             await _emit_activity(thinking_label, "end")
@@ -304,7 +378,7 @@ async def run_agentic_loop_langchain(
 
         async def _run_one_tool_call(call: Any) -> tuple[Any, ToolResult, dict[str, Any], ChatUsage | None]:
             call_arguments = call.arguments if isinstance(call.arguments, dict) else {}
-            input_preview = json.dumps(call_arguments, ensure_ascii=False)[:200]
+            input_preview = tool_call_input_preview(call.name, call_arguments)
             action_summary = tool_call_action_summary(call.name, call_arguments)
             async with emit_lock:
                 await _emit_activity(action_summary, "start")
@@ -447,10 +521,7 @@ async def run_agentic_loop_langchain(
             if error_text is None and tool_output.get("is_error"):
                 error_text = "Tool reported an error"
             is_error = error_text is not None
-            try:
-                result_preview = json.dumps(tool_output, ensure_ascii=False)[:240]
-            except Exception:
-                result_preview = str(tool_output)[:240]
+            result_preview = tool_call_output_preview(call.name, tool_output)
 
             async with emit_lock:
                 if call.name == "code_execution":
@@ -591,13 +662,9 @@ async def run_agentic_loop_langchain(
                     image_usages.append(
                         {
                             "model_id": model_id,
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                            "total_tokens": 0,
-                            "input_tokens": 0,
-                            "output_tokens": 0,
-                            "cached_tokens": 0,
-                            "thinking_tokens": 0,
+                            **image_usage_token_fields(
+                                result.output if isinstance(result.output, dict) else None
+                            ),
                             "image_width": result.output.get("image_width"),
                             "image_height": result.output.get("image_height"),
                             "image_count": result.output.get("image_count"),
