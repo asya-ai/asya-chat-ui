@@ -14,6 +14,7 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.models import AgentChunk, AgentEmbedding, AgentSource, AgentSourceKind, AgentSourceStatus
 from app.services.agents.chat_index import chat_source_visible_to_user
+from app.services.agents.onnx_embedder import load_onnx_embedder
 
 _embedding_model: Any | None = None
 _embedding_model_lock = threading.Lock()
@@ -27,68 +28,27 @@ def _get_embedding_model():
         if _embedding_model is not None:
             return _embedding_model
         try:
-            from fastembed import TextEmbedding
+            _embedding_model = load_onnx_embedder(settings.agent_embedding_model)
         except Exception:
             return None
-        _embedding_model = TextEmbedding(model_name=settings.agent_embedding_model)
     return _embedding_model
-
-
-def _l2_normalize_vectors(vectors: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    return vectors / norms
-
-
-def _l2_normalize_vector(vector: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(vector))
-    if norm == 0:
-        return vector
-    return vector / norm
 
 
 def _encode_documents(texts: list[str]) -> np.ndarray | None:
     model = _get_embedding_model()
     if model is None or not texts:
         return None
-    if hasattr(model, "passage_embed"):
-        vectors = list(model.passage_embed(texts))
-        vectors = np.asarray(vectors, dtype=np.float32)
-        vectors = _l2_normalize_vectors(vectors)
-    elif hasattr(model, "encode_document"):
-        vectors = model.encode_document(
-            texts,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            batch_size=settings.agent_embedding_batch_size,
-        )
-    else:
-        vectors = model.encode(
-            texts,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            batch_size=settings.agent_embedding_batch_size,
-        )
-    return np.asarray(vectors, dtype=np.float32)
+    return np.asarray(
+        model.embed(texts, batch_size=settings.agent_embedding_batch_size),
+        dtype=np.float32,
+    )
 
 
 def _encode_query(text: str) -> np.ndarray | None:
     model = _get_embedding_model()
     if model is None:
         return None
-    if hasattr(model, "query_embed"):
-        vector = list(model.query_embed([text]))[0]
-        vector = np.asarray(vector, dtype=np.float32)
-        vector = _l2_normalize_vector(vector)
-    elif hasattr(model, "encode_query"):
-        vector = model.encode_query(
-            [text], convert_to_numpy=True, normalize_embeddings=True, batch_size=1
-        )[0]
-    else:
-        vector = model.encode(
-            [text], convert_to_numpy=True, normalize_embeddings=True, batch_size=1
-        )[0]
-    return np.asarray(vector, dtype=np.float32)
+    return np.asarray(model.embed([text])[0], dtype=np.float32)
 
 
 def chunk_text(content: str, chunk_size: int = 1200, overlap: int = 200) -> list[str]:

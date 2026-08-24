@@ -941,7 +941,9 @@ def _check_embedding_model_cached() -> str | None:
     model = (settings.agent_embedding_model or "").strip()
     if not model:
         return "AGENT_EMBEDDING_MODEL is empty"
-    slug = "models--" + model.replace("/", "--")
+    from app.services.agents.onnx_embedder import embedding_cache_slugs
+
+    slugs = embedding_cache_slugs(model)
     cache_roots = [
         Path(os.environ.get("SENTENCE_TRANSFORMERS_HOME", "") or ""),
         Path(os.environ.get("TRANSFORMERS_CACHE", "") or ""),
@@ -952,14 +954,15 @@ def _check_embedding_model_cached() -> str | None:
     for root in cache_roots:
         if not root or str(root) in {"", "."}:
             continue
-        candidates = [root / slug, root / "hub" / slug]
-        for candidate in candidates:
-            if candidate.exists():
-                return None
+        for slug in slugs:
+            candidates = [root / slug, root / "hub" / slug]
+            for candidate in candidates:
+                if candidate.exists():
+                    return None
         hub = root / "hub" if (root / "hub").exists() else root
         if hub.exists():
             try:
-                if any(hub.glob(f"**/{slug}")):
+                if any(any(hub.glob(f"**/{slug}")) for slug in slugs):
                     return None
             except Exception:
                 pass
