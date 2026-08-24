@@ -109,7 +109,7 @@ docker buildx build \
 
 ### 2) Backend (build architectures separately)
 
-The backend image is large because it installs CPU PyTorch and downloads the embedding model. Build amd64 and arm64 separately, prune between them, then create the multi-arch manifests:
+The backend image is still the heaviest because it preloads ONNX embedding weights and Python runtime dependencies. Build amd64 and arm64 separately, prune between them, then create the multi-arch manifests:
 
 ```bash
 docker buildx build \

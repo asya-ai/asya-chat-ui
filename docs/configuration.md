@@ -46,7 +46,6 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
   - `SCRAPE_PARALLEL_MAX` (default: 5)
   - `AGENT_EMBEDDING_MODEL` (default: `BAAI/bge-m3`; Docker build arg + runtime env must match — weights are downloaded at image build)
   - `AGENT_EMBEDDING_BATCH_SIZE` (default: 16)
-  - `AGENT_EMBEDDING_DEVICE` (default: `cpu`)
   - Compose-injected runtime vars (shown in System diagnosis): `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `DOCKER_HOST`, `EXEC_HOST_FILES_DIR`, `HF_HOME`
 - MCP data sources (host-mounted catalog at `/config/mcp_servers.yaml`):
   - `MCP_CACHE_TTL_SECONDS` (default: 300)

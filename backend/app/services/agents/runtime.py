@@ -27,30 +27,48 @@ def _get_embedding_model():
         if _embedding_model is not None:
             return _embedding_model
         try:
-            from sentence_transformers import SentenceTransformer
+            from fastembed import TextEmbedding
         except Exception:
             return None
-        _embedding_model = SentenceTransformer(
-            settings.agent_embedding_model,
-            device=settings.agent_embedding_device,
-            local_files_only=True,
-        )
+        _embedding_model = TextEmbedding(model_name=settings.agent_embedding_model)
     return _embedding_model
+
+
+def _l2_normalize_vectors(vectors: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return vectors / norms
+
+
+def _l2_normalize_vector(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    if norm == 0:
+        return vector
+    return vector / norm
 
 
 def _encode_documents(texts: list[str]) -> np.ndarray | None:
     model = _get_embedding_model()
     if model is None or not texts:
         return None
-    encode_kwargs = {
-        "convert_to_numpy": True,
-        "normalize_embeddings": True,
-        "batch_size": settings.agent_embedding_batch_size,
-    }
-    if hasattr(model, "encode_document"):
-        vectors = model.encode_document(texts, **encode_kwargs)
+    if hasattr(model, "passage_embed"):
+        vectors = list(model.passage_embed(texts))
+        vectors = np.asarray(vectors, dtype=np.float32)
+        vectors = _l2_normalize_vectors(vectors)
+    elif hasattr(model, "encode_document"):
+        vectors = model.encode_document(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            batch_size=settings.agent_embedding_batch_size,
+        )
     else:
-        vectors = model.encode(texts, **encode_kwargs)
+        vectors = model.encode(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            batch_size=settings.agent_embedding_batch_size,
+        )
     return np.asarray(vectors, dtype=np.float32)
 
 
@@ -58,15 +76,18 @@ def _encode_query(text: str) -> np.ndarray | None:
     model = _get_embedding_model()
     if model is None:
         return None
-    encode_kwargs = {
-        "convert_to_numpy": True,
-        "normalize_embeddings": True,
-        "batch_size": 1,
-    }
-    if hasattr(model, "encode_query"):
-        vector = model.encode_query([text], **encode_kwargs)[0]
+    if hasattr(model, "query_embed"):
+        vector = list(model.query_embed([text]))[0]
+        vector = np.asarray(vector, dtype=np.float32)
+        vector = _l2_normalize_vector(vector)
+    elif hasattr(model, "encode_query"):
+        vector = model.encode_query(
+            [text], convert_to_numpy=True, normalize_embeddings=True, batch_size=1
+        )[0]
     else:
-        vector = model.encode([text], **encode_kwargs)[0]
+        vector = model.encode(
+            [text], convert_to_numpy=True, normalize_embeddings=True, batch_size=1
+        )[0]
     return np.asarray(vector, dtype=np.float32)
 
 

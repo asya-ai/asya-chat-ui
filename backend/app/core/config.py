@@ -133,9 +133,6 @@ class Settings(BaseSettings):
     agent_embedding_batch_size: int = Field(
         default=16, validation_alias="AGENT_EMBEDDING_BATCH_SIZE"
     )
-    agent_embedding_device: str = Field(
-        default="cpu", validation_alias="AGENT_EMBEDDING_DEVICE"
-    )
     # Full dense scan is fine for small corpora; above this, use FTS candidates.
     agent_embedding_full_scan_max: int = Field(
         default=400, validation_alias="AGENT_EMBEDDING_FULL_SCAN_MAX"

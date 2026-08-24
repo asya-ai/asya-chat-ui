@@ -899,12 +899,6 @@ def _build_specs() -> list[_EnvSpec]:
             empty_means_missing=False,
             validate=_check_positive_int("agent_embedding_batch_size"),
         ),
-        _EnvSpec(
-            "AGENT_EMBEDDING_DEVICE",
-            "agents",
-            "agent_embedding_device",
-            empty_means_missing=False,
-        ),
         # Injected by docker-compose (not Settings fields).
         _EnvSpec(
             "CELERY_BROKER_URL",

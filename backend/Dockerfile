@@ -15,7 +15,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 ARG AGENT_EMBEDDING_MODEL=BAAI/bge-m3
 ENV AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL}
-RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${AGENT_EMBEDDING_MODEL}', device='cpu')"
+RUN uv run python -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='${AGENT_EMBEDDING_MODEL}').passage_embed(['warmup']))"
 
 COPY app ./app
 COPY executor ./executor

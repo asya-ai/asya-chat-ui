@@ -31,10 +31,9 @@ dependencies = [
     "sqlalchemy>=2.0.51",
     "sqlmodel>=0.0.39",
     "timezonefinder>=8.2.5",
-    "torch>=2.13.0",
     "uvicorn[standard]>=0.52.1",
     "xlrd>=2.0.2",
-    "sentence-transformers>=5.6.1",
+    "fastembed>=0.7.3",
     "langchain-core>=1.5.3",
     "json-repair>=0.61.7",
     "pyjwt[crypto]>=2.13.0",
@@ -48,10 +47,3 @@ dev = [
     "pytest-asyncio>=1.4.0",
 ]
 
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
