@@ -28,6 +28,7 @@ import type {
   ApiKey,
   UserMemory,
   Agent,
+  AgentRole,
   AgentShare,
   AgentShareSuggestion,
   AgentSource,
@@ -867,13 +868,23 @@ export const agentApi = {
       `/agents/${agentId}/share-suggestions?${params.toString()}`
     )
   },
-  share: (agentId: string, payload: { user_id: string; role: "owner" | "editor" | "viewer" }) =>
+  share: (
+    agentId: string,
+    payload:
+      | { user_id: string; role: AgentRole }
+      | { team_id: string; role: AgentRole }
+      | { org: true; role: AgentRole }
+  ) =>
     apiFetch<AgentShare>(`/agents/${agentId}/shares`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   unshare: (agentId: string, userId: string) =>
     apiFetch(`/agents/${agentId}/shares/${userId}`, { method: "DELETE" }),
+  unshareTeam: (agentId: string, teamId: string) =>
+    apiFetch(`/agents/${agentId}/shares/teams/${teamId}`, { method: "DELETE" }),
+  unshareOrg: (agentId: string) =>
+    apiFetch(`/agents/${agentId}/shares/org`, { method: "DELETE" }),
 }
 
 export const promptApi = {

@@ -12,7 +12,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -26,10 +26,17 @@ from app.models import (
     AgentSource,
     AgentSourceKind,
     AgentSourceStatus,
+    AgentTeamAccess,
     AgentVisibility,
     Chat,
     OrgMembership,
+    Team,
     User,
+)
+from app.services.agent_access import (
+    ROLE_ORDER,
+    get_agent_role,
+    list_accessible_agents,
 )
 from app.services.agents.source_parsing import extract_text_from_file
 from app.services.file_storage import delete_file, write_agent_source_file
@@ -150,22 +157,38 @@ class AgentSourceRead(BaseModel):
 
 
 class AgentShareRequest(BaseModel):
-    user_id: str
+    user_id: str | None = None
+    team_id: str | None = None
+    org: bool = False
     role: AgentAccessRole = AgentAccessRole.viewer
+
+    @model_validator(mode="after")
+    def exactly_one_target(self) -> "AgentShareRequest":
+        targets = sum((bool(self.user_id), bool(self.team_id), self.org))
+        if targets != 1:
+            raise ValueError("Provide exactly one of user_id, team_id, or org=true")
+        return self
 
 
 class AgentShareRead(BaseModel):
-    user_id: str
-    email: str
+    kind: str
+    user_id: str | None = None
+    email: str | None = None
+    display_name: str | None = None
+    team_id: str | None = None
+    team_name: str | None = None
     role: AgentAccessRole
     created_at: datetime
     updated_at: datetime
 
 
 class AgentShareSuggestion(BaseModel):
-    user_id: str
-    email: str
+    kind: str
+    user_id: str | None = None
+    email: str | None = None
     display_name: str | None = None
+    team_id: str | None = None
+    team_name: str | None = None
 
 
 def _to_agent_read(agent: Agent, user_id: UUID, role: AgentAccessRole) -> AgentRead:
@@ -190,15 +213,6 @@ def _parse_uuid(value: str, detail: str) -> UUID:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
 
 
-def _get_agent_role(session: Session, agent_id: UUID, user_id: UUID) -> AgentAccessRole | None:
-    access = session.exec(
-        select(AgentAccess).where(
-            AgentAccess.agent_id == agent_id, AgentAccess.user_id == user_id
-        )
-    ).first()
-    return access.role if access else None
-
-
 def _require_agent_access(
     session: Session,
     auth: AuthContext,
@@ -212,21 +226,56 @@ def _require_agent_access(
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    role = _get_agent_role(session, agent.id, auth.user.id)
+    role = get_agent_role(session, agent, auth.user.id)
     if role is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent access required")
 
-    role_order = {
-        AgentAccessRole.viewer: 1,
-        AgentAccessRole.editor: 2,
-        AgentAccessRole.owner: 3,
-    }
-    if role_order[role] < role_order[minimum_role]:
+    if ROLE_ORDER[role] < ROLE_ORDER[minimum_role]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient agent permissions",
         )
     return agent, role
+
+
+def _refresh_agent_visibility(session: Session, agent: Agent) -> None:
+    has_org = agent.org_access_role is not None
+    has_team = (
+        session.exec(
+            select(AgentTeamAccess.id).where(AgentTeamAccess.agent_id == agent.id).limit(1)
+        ).first()
+        is not None
+    )
+    has_extra_user = (
+        session.exec(
+            select(AgentAccess.id)
+            .where(
+                AgentAccess.agent_id == agent.id,
+                AgentAccess.user_id != agent.owner_user_id,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+    agent.visibility = (
+        AgentVisibility.shared if (has_org or has_team or has_extra_user) else AgentVisibility.private
+    )
+    agent.updated_at = datetime.utcnow()
+    session.add(agent)
+
+
+def _validate_org_team(session: Session, auth: AuthContext, team_id: UUID) -> Team:
+    team = session.exec(
+        select(Team).where(Team.id == team_id, Team.org_id == auth.org_id)
+    ).first()
+    if not team:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    if team.is_default:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Share with the organization instead of the default team",
+        )
+    return team
 
 
 def _decode_source_text(payload: AgentSourceCreateRequest) -> str:
@@ -364,13 +413,8 @@ def list_agents(
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
 ) -> list[AgentRead]:
-    accesses = session.exec(
-        select(AgentAccess, Agent)
-        .join(Agent, Agent.id == AgentAccess.agent_id)
-        .where(Agent.org_id == auth.org_id, AgentAccess.user_id == auth.user.id)
-        .order_by(Agent.updated_at.desc())
-    ).all()
-    return [_to_agent_read(agent, auth.user.id, access.role) for access, agent in accesses]
+    rows = list_accessible_agents(session, auth.org_id, auth.user.id)
+    return [_to_agent_read(agent, auth.user.id, role) for agent, role in rows]
 
 
 @router.post("", response_model=AgentRead)
@@ -460,6 +504,11 @@ def delete_agent(
         select(AgentAccess).where(AgentAccess.agent_id == agent.id)
     ).all()
     for row in access_rows:
+        session.delete(row)
+    team_access_rows = session.exec(
+        select(AgentTeamAccess).where(AgentTeamAccess.agent_id == agent.id)
+    ).all()
+    for row in team_access_rows:
         session.delete(row)
 
     sources = session.exec(select(AgentSource).where(AgentSource.agent_id == agent.id)).all()
@@ -678,23 +727,53 @@ def list_shares(
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
 ) -> list[AgentShareRead]:
-    _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
-    rows = session.exec(
+    agent, _ = _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    shares: list[AgentShareRead] = []
+    if agent.org_access_role is not None:
+        shares.append(
+            AgentShareRead(
+                kind="org",
+                role=agent.org_access_role,
+                created_at=agent.updated_at,
+                updated_at=agent.updated_at,
+            )
+        )
+    team_rows = session.exec(
+        select(AgentTeamAccess, Team)
+        .join(Team, Team.id == AgentTeamAccess.team_id)
+        .where(AgentTeamAccess.agent_id == agent_id)
+        .order_by(Team.name.asc())
+    ).all()
+    for access, team in team_rows:
+        shares.append(
+            AgentShareRead(
+                kind="team",
+                team_id=str(team.id),
+                team_name=team.name,
+                role=access.role,
+                created_at=access.created_at,
+                updated_at=access.updated_at,
+            )
+        )
+    user_rows = session.exec(
         select(AgentAccess, User)
         .join(User, User.id == AgentAccess.user_id)
         .where(AgentAccess.agent_id == agent_id)
         .order_by(AgentAccess.created_at.asc())
     ).all()
-    return [
-        AgentShareRead(
-            user_id=str(user.id),
-            email=user.email,
-            role=access.role,
-            created_at=access.created_at,
-            updated_at=access.updated_at,
+    for access, user in user_rows:
+        shares.append(
+            AgentShareRead(
+                kind="user",
+                user_id=str(user.id),
+                email=user.email,
+                display_name=user.display_name,
+                role=access.role,
+                created_at=access.created_at,
+                updated_at=access.updated_at,
+            )
         )
-        for access, user in rows
-    ]
+    return shares
 
 
 @router.get("/{agent_id}/share-suggestions", response_model=list[AgentShareSuggestion])
@@ -705,21 +784,45 @@ def share_suggestions(
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
 ) -> list[AgentShareSuggestion]:
-    _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    agent, _ = _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
     capped_limit = max(1, min(limit, 25))
+    needle = (q or "").strip().lower()
+    suggestions: list[AgentShareSuggestion] = []
+
+    org_labels = ("organization", "organisation", "everyone", "org")
+    if agent.org_access_role is None and (not needle or any(label.startswith(needle) or needle in label for label in org_labels)):
+        suggestions.append(AgentShareSuggestion(kind="org"))
+
+    already_teams = set(
+        session.exec(
+            select(AgentTeamAccess.team_id).where(AgentTeamAccess.agent_id == agent_id)
+        ).all()
+    )
+    team_statement = select(Team).where(
+        Team.org_id == auth.org_id,
+        Team.is_default.is_(False),
+    )
+    if needle:
+        team_statement = team_statement.where(func.lower(Team.name).like(f"%{needle}%"))
+    for team in session.exec(team_statement.order_by(Team.name.asc())).all():
+        if team.id in already_teams:
+            continue
+        suggestions.append(
+            AgentShareSuggestion(kind="team", team_id=str(team.id), team_name=team.name)
+        )
+        if len(suggestions) >= capped_limit:
+            return suggestions
 
     already_shared = set(
         session.exec(
             select(AgentAccess.user_id).where(AgentAccess.agent_id == agent_id)
         ).all()
     )
-
     statement = (
         select(User)
         .join(OrgMembership, OrgMembership.user_id == User.id)
         .where(OrgMembership.org_id == auth.org_id)
     )
-    needle = (q or "").strip().lower()
     if needle:
         pattern = f"%{needle}%"
         statement = statement.where(
@@ -728,13 +831,12 @@ def share_suggestions(
             | func.lower(func.coalesce(User.username, "")).like(pattern)
         )
     statement = statement.order_by(User.email.asc()).limit(capped_limit + len(already_shared) + 1)
-
-    suggestions: list[AgentShareSuggestion] = []
     for user in session.exec(statement).all():
         if user.id in already_shared:
             continue
         suggestions.append(
             AgentShareSuggestion(
+                kind="user",
                 user_id=str(user.id),
                 email=user.email,
                 display_name=user.display_name,
@@ -752,8 +854,55 @@ def share_agent(
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
 ) -> AgentShareRead:
-    _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
-    target_user_id = _parse_uuid(payload.user_id, "Invalid user id")
+    agent, _ = _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    now = datetime.utcnow()
+
+    if payload.org:
+        agent.org_access_role = payload.role
+        _refresh_agent_visibility(session, agent)
+        session.commit()
+        session.refresh(agent)
+        return AgentShareRead(
+            kind="org",
+            role=agent.org_access_role,
+            created_at=agent.updated_at,
+            updated_at=agent.updated_at,
+        )
+
+    if payload.team_id:
+        team = _validate_org_team(session, auth, _parse_uuid(payload.team_id, "Invalid team id"))
+        access = session.exec(
+            select(AgentTeamAccess).where(
+                AgentTeamAccess.agent_id == agent.id,
+                AgentTeamAccess.team_id == team.id,
+            )
+        ).first()
+        if access:
+            access.role = payload.role
+            access.updated_at = now
+        else:
+            access = AgentTeamAccess(
+                agent_id=agent.id,
+                team_id=team.id,
+                role=payload.role,
+                granted_by_user_id=auth.user.id,
+                created_at=now,
+                updated_at=now,
+            )
+        session.add(access)
+        _refresh_agent_visibility(session, agent)
+        session.commit()
+        session.refresh(access)
+        return AgentShareRead(
+            kind="team",
+            team_id=str(team.id),
+            team_name=team.name,
+            role=access.role,
+            created_at=access.created_at,
+            updated_at=access.updated_at,
+        )
+
+    target_user_id = _parse_uuid(payload.user_id or "", "Invalid user id")
     target_user = session.exec(select(User).where(User.id == target_user_id)).first()
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -769,10 +918,9 @@ def share_agent(
             detail="User must belong to the same organization",
         )
 
-    now = datetime.utcnow()
     access = session.exec(
         select(AgentAccess).where(
-            AgentAccess.agent_id == agent_id,
+            AgentAccess.agent_id == agent.id,
             AgentAccess.user_id == target_user.id,
         )
     ).first()
@@ -781,7 +929,7 @@ def share_agent(
         access.updated_at = now
     else:
         access = AgentAccess(
-            agent_id=agent_id,
+            agent_id=agent.id,
             user_id=target_user.id,
             role=payload.role,
             granted_by_user_id=auth.user.id,
@@ -789,22 +937,51 @@ def share_agent(
             updated_at=now,
         )
     session.add(access)
-
-    agent = session.exec(select(Agent).where(Agent.id == agent_id)).first()
-    if agent and agent.visibility == AgentVisibility.private:
-        agent.visibility = AgentVisibility.shared
-        agent.updated_at = now
-        session.add(agent)
-
+    _refresh_agent_visibility(session, agent)
     session.commit()
     session.refresh(access)
     return AgentShareRead(
+        kind="user",
         user_id=str(target_user.id),
         email=target_user.email,
+        display_name=target_user.display_name,
         role=access.role,
         created_at=access.created_at,
         updated_at=access.updated_at,
     )
+
+
+@router.delete("/{agent_id}/shares/org", status_code=status.HTTP_204_NO_CONTENT)
+def unshare_agent_org(
+    agent_id: UUID,
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> None:
+    agent, _ = _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    agent.org_access_role = None
+    _refresh_agent_visibility(session, agent)
+    session.commit()
+
+
+@router.delete("/{agent_id}/shares/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unshare_agent_team(
+    agent_id: UUID,
+    team_id: UUID,
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> None:
+    agent, _ = _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    access = session.exec(
+        select(AgentTeamAccess).where(
+            AgentTeamAccess.agent_id == agent.id,
+            AgentTeamAccess.team_id == team_id,
+        )
+    ).first()
+    if access:
+        session.delete(access)
+        session.flush()
+    _refresh_agent_visibility(session, agent)
+    session.commit()
 
 
 @router.delete("/{agent_id}/shares/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -814,18 +991,21 @@ def unshare_agent(
     session: Session = Depends(get_db),
     auth: AuthContext = Depends(get_auth_context),
 ) -> None:
-    _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
-    if user_id == auth.user.id:
+    agent, _ = _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.owner)
+    if user_id == agent.owner_user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Owner cannot remove self from agent",
         )
     access = session.exec(
         select(AgentAccess).where(
-            AgentAccess.agent_id == agent_id,
+            AgentAccess.agent_id == agent.id,
             AgentAccess.user_id == user_id,
         )
     ).first()
     if access:
         session.delete(access)
-        session.commit()
+        session.flush()
+    _refresh_agent_visibility(session, agent)
+    session.commit()
+

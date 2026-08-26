@@ -611,18 +611,27 @@ export type AgentSource = {
   updated_at: string
 }
 
+export type AgentShareKind = "user" | "team" | "org"
+
 export type AgentShare = {
-  user_id: string
-  email: string
+  kind: AgentShareKind
+  user_id?: string | null
+  email?: string | null
+  display_name?: string | null
+  team_id?: string | null
+  team_name?: string | null
   role: AgentRole
   created_at: string
   updated_at: string
 }
 
 export type AgentShareSuggestion = {
-  user_id: string
-  email: string
+  kind: AgentShareKind
+  user_id?: string | null
+  email?: string | null
   display_name?: string | null
+  team_id?: string | null
+  team_name?: string | null
 }
 
 export type PromptVisibility = "private" | "team" | "users" | "project" | "org"

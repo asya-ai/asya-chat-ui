@@ -10,7 +10,6 @@ from sqlmodel import Session, select
 from app.api.deps import AuthContext, get_auth_context, get_db
 from app.models import (
     Agent,
-    AgentAccess,
     AgentAccessRole,
     OrgMembership,
     Prompt,
@@ -21,14 +20,9 @@ from app.models import (
     TeamMembership,
     User,
 )
+from app.services.agent_access import ROLE_ORDER, accessible_agent_ids, get_agent_role
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
-
-_ROLE_ORDER = {
-    AgentAccessRole.viewer: 1,
-    AgentAccessRole.editor: 2,
-    AgentAccessRole.owner: 3,
-}
 
 
 class PromptCreateRequest(BaseModel):
@@ -86,23 +80,14 @@ def _parse_uuid(value: str, detail: str) -> UUID:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
 
 
-def _get_agent_role(session: Session, agent_id: UUID, user_id: UUID) -> AgentAccessRole | None:
-    access = session.exec(
-        select(AgentAccess).where(
-            AgentAccess.agent_id == agent_id, AgentAccess.user_id == user_id
-        )
-    ).first()
-    return access.role if access else None
-
-
 def _require_project_editor(session: Session, auth: AuthContext, agent_id: UUID) -> Agent:
     agent = session.exec(
         select(Agent).where(Agent.id == agent_id, Agent.org_id == auth.org_id)
     ).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    role = _get_agent_role(session, agent.id, auth.user.id)
-    if role is None or _ROLE_ORDER[role] < _ROLE_ORDER[AgentAccessRole.editor]:
+    role = get_agent_role(session, agent, auth.user.id)
+    if role is None or ROLE_ORDER[role] < ROLE_ORDER[AgentAccessRole.editor]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Project editor access required",
@@ -275,13 +260,7 @@ def _to_prompt_read(session: Session, prompt: Prompt, user_id: UUID) -> PromptRe
 
 
 def _accessible_agent_ids(session: Session, org_id: UUID, user_id: UUID) -> set[UUID]:
-    return set(
-        session.exec(
-            select(AgentAccess.agent_id)
-            .join(Agent, Agent.id == AgentAccess.agent_id)
-            .where(Agent.org_id == org_id, AgentAccess.user_id == user_id)
-        ).all()
-    )
+    return accessible_agent_ids(session, org_id, user_id)
 
 
 def _can_see_prompt(

@@ -347,10 +347,24 @@ export const ProjectPage = () => {
     withBusy(async () => {
       if (!project) return
       if (!shareSelected) {
-        setError(t("project_member_required"))
+        setError(t("project_share_target_required"))
         return
       }
-      await agentApi.share(project.id, { user_id: shareSelected.user_id, role: shareRole })
+      if (shareSelected.kind === "org") {
+        await agentApi.share(project.id, { org: true, role: shareRole })
+      } else if (shareSelected.kind === "team") {
+        if (!shareSelected.team_id) {
+          setError(t("project_share_target_required"))
+          return
+        }
+        await agentApi.share(project.id, { team_id: shareSelected.team_id, role: shareRole })
+      } else {
+        if (!shareSelected.user_id) {
+          setError(t("project_share_target_required"))
+          return
+        }
+        await agentApi.share(project.id, { user_id: shareSelected.user_id, role: shareRole })
+      }
       setShareQuery("")
       setShareSelected(null)
       setSuggestionsOpen(false)
@@ -358,10 +372,18 @@ export const ProjectPage = () => {
       notify(t("project_access_granted"))
     })
 
-  const handleRemoveShare = (userId: string) =>
+  const handleRemoveShare = (share: AgentShare) =>
     withBusy(async () => {
       if (!project) return
-      await agentApi.unshare(project.id, userId)
+      if (share.kind === "org") {
+        await agentApi.unshareOrg(project.id)
+      } else if (share.kind === "team") {
+        if (!share.team_id) return
+        await agentApi.unshareTeam(project.id, share.team_id)
+      } else {
+        if (!share.user_id) return
+        await agentApi.unshare(project.id, share.user_id)
+      }
       setShares(await agentApi.listShares(project.id))
     })
 
@@ -787,34 +809,48 @@ export const ProjectPage = () => {
                 />
                 {suggestionsOpen && shareSuggestions.length > 0 ? (
                   <div className="bg-popover absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-md border p-1 shadow-md">
-                    {shareSuggestions.map((suggestion) => (
+                    {shareSuggestions.map((suggestion) => {
+                      const key =
+                        suggestion.kind === "org"
+                          ? "org"
+                          : suggestion.kind === "team"
+                            ? `team-${suggestion.team_id}`
+                            : `user-${suggestion.user_id}`
+                      const title =
+                        suggestion.kind === "org"
+                          ? t("project_share_org")
+                          : suggestion.kind === "team"
+                            ? (suggestion.team_name ?? t("project_share_team_hint"))
+                            : suggestion.display_name || suggestion.email || ""
+                      const subtitle =
+                        suggestion.kind === "org"
+                          ? t("project_share_org_hint")
+                          : suggestion.kind === "team"
+                            ? t("project_share_team_hint")
+                            : suggestion.display_name
+                              ? suggestion.email
+                              : null
+                      return (
                       <button
-                        key={suggestion.user_id}
+                        key={key}
                         type="button"
                         className="hover:bg-accent flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm"
                         onMouseDown={(event) => {
                           event.preventDefault()
                           setShareSelected(suggestion)
-                          setShareQuery(
-                            suggestion.display_name
-                              ? `${suggestion.display_name} (${suggestion.email})`
-                              : suggestion.email
-                          )
+                          setShareQuery(title)
                           setSuggestionsOpen(false)
                         }}
                       >
-                        {suggestion.display_name ? (
-                          <>
-                            <span className="truncate">{suggestion.display_name}</span>
-                            <span className="text-muted-foreground truncate text-xs">
-                              {suggestion.email}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="truncate">{suggestion.email}</span>
-                        )}
+                        <span className="truncate">{title}</span>
+                        {subtitle ? (
+                          <span className="text-muted-foreground truncate text-xs">
+                            {subtitle}
+                          </span>
+                        ) : null}
                       </button>
-                    ))}
+                      )
+                    })}
                   </div>
                 ) : null}
               </div>
@@ -840,14 +876,36 @@ export const ProjectPage = () => {
               {shares.length === 0 ? (
                 <p className="text-muted-foreground text-sm">{t("project_share_empty")}</p>
               ) : (
-                shares.map((share) => (
+                shares.map((share) => {
+                  const key =
+                    share.kind === "org"
+                      ? "org"
+                      : share.kind === "team"
+                        ? `team-${share.team_id}`
+                        : `user-${share.user_id}`
+                  const title =
+                    share.kind === "org"
+                      ? t("project_share_org")
+                      : share.kind === "team"
+                        ? (share.team_name ?? t("project_share_team_hint"))
+                        : share.display_name || share.email || ""
+                  const subtitle =
+                    share.kind === "org"
+                      ? t("project_share_org_hint")
+                      : share.kind === "team"
+                        ? t("project_share_team_hint")
+                        : share.display_name
+                          ? share.email
+                          : null
+                  return (
                   <div
-                    key={share.user_id}
+                    key={key}
                     className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm">{share.email}</p>
+                      <p className="truncate text-sm">{title}</p>
                       <p className="text-muted-foreground text-xs">
+                        {subtitle ? `${subtitle} · ` : ""}
                         {t(ROLE_KEYS[share.role])}
                       </p>
                     </div>
@@ -857,12 +915,13 @@ export const ProjectPage = () => {
                       className="text-destructive h-8 w-8"
                       aria-label={t("project_remove_access_aria")}
                       disabled={busy}
-                      onClick={() => handleRemoveShare(share.user_id)}
+                      onClick={() => handleRemoveShare(share)}
                     >
                       <Trash2 className="h-4 w-4" aria-hidden="true" />
                     </Button>
                   </div>
-                ))
+                  )
+                })
               )}
             </div>
           </div>

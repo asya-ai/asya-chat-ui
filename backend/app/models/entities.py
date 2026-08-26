@@ -491,6 +491,10 @@ class Agent(SQLModel, table=True):
         default=AgentVisibility.private,
         sa_column=Column(String(32), nullable=False),
     )
+    org_access_role: Optional[AgentAccessRole] = Field(
+        default=None,
+        sa_column=Column(String(32), nullable=True),
+    )
     config_json: Optional[dict[str, Any]] = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
@@ -504,6 +508,21 @@ class AgentAccess(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     agent_id: UUID = Field(foreign_key="agents.id", index=True)
     user_id: UUID = Field(foreign_key="users.id", index=True)
+    role: AgentAccessRole = Field(sa_column=Column(String(32), nullable=False))
+    granted_by_user_id: Optional[UUID] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class AgentTeamAccess(SQLModel, table=True):
+    __tablename__ = "agent_team_access"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "team_id", name="uq_agent_team_access_agent_team"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    agent_id: UUID = Field(foreign_key="agents.id", index=True)
+    team_id: UUID = Field(foreign_key="teams.id", index=True)
     role: AgentAccessRole = Field(sa_column=Column(String(32), nullable=False))
     granted_by_user_id: Optional[UUID] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)

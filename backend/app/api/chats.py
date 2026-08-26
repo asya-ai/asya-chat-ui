@@ -28,7 +28,6 @@ from app.core.security import decode_access_token_claims
 from app.db.session import engine
 from app.models import (
     Agent,
-    AgentAccess,
     Chat,
     ChatCoworkDocument,
     ChatGenerationEvent,
@@ -44,6 +43,7 @@ from app.models import (
     User,
     UserMemory,
 )
+from app.services.agent_access import get_agent_role
 from app.services.org_service import require_org_member, require_provider_enabled
 from app.services.team_service import allowed_model_ids
 from app.services.model_capabilities import (
@@ -3574,13 +3574,7 @@ def create_chat(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
             )
-        access = session.exec(
-            select(AgentAccess).where(
-                AgentAccess.agent_id == agent.id,
-                AgentAccess.user_id == current_user.id,
-            )
-        ).first()
-        if not access:
+        if get_agent_role(session, agent, current_user.id) is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Agent access required",
