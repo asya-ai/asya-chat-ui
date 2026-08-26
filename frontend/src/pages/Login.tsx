@@ -37,6 +37,8 @@ export const LoginPage = () => {
   const [orgSelectionRequired, setOrgSelectionRequired] = useState(true)
   const hasError = Boolean(error)
   const [searchParams] = useSearchParams()
+  // Undocumented break-glass: /login?direct=1 forces password login when SSO is stuck.
+  const directLogin = searchParams.get("direct") === "1"
 
   useEffect(() => {
     const orgParam = searchParams.get("org")
@@ -56,7 +58,7 @@ export const LoginPage = () => {
         setOrg(resolvedOrg)
         loginOrgStore.set(resolvedOrg)
       }
-      if (resolve.action === "sso" && resolve.redirect_url) {
+      if (resolve.action === "sso" && resolve.redirect_url && !directLogin) {
         setSsoRedirectUrl(resolve.redirect_url)
         setStage("sso")
         return
@@ -146,7 +148,7 @@ export const LoginPage = () => {
       if (stage === "org" && orgSelectionRequired) {
         const resolve = await authApi.loginResolve("", orgValue, clientHost)
         applySubmitResolve(resolve)
-        if (resolve.action === "sso" && resolve.redirect_url) {
+        if (resolve.action === "sso" && resolve.redirect_url && !directLogin) {
           setSsoRedirectUrl(resolve.redirect_url)
           setStage("sso")
           return
@@ -154,11 +156,13 @@ export const LoginPage = () => {
         setStage("credentials")
         return
       }
-      const resolve = await authApi.loginResolve(identifier, orgValue, clientHost)
-      applySubmitResolve(resolve)
-      if (resolve.action === "sso" && resolve.redirect_url) {
-        window.location.href = resolve.redirect_url
-        return
+      if (!directLogin) {
+        const resolve = await authApi.loginResolve(identifier, orgValue, clientHost)
+        applySubmitResolve(resolve)
+        if (resolve.action === "sso" && resolve.redirect_url) {
+          window.location.href = resolve.redirect_url
+          return
+        }
       }
       if (!password.trim()) {
         setError(t("auth_login_failed"))
