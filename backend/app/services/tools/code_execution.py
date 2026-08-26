@@ -26,7 +26,7 @@ from app.models import (
     ChatMessage,
     ChatMessageAttachment,
 )
-from app.services.file_storage import maybe_read_file_bytes
+from app.services.file_storage import attachment_bytes, maybe_read_file_bytes
 from app.services.tools.cowork_tools import bump_content, document_payload, list_documents
 from app.services.tools.registry import ToolResult
 
@@ -242,20 +242,10 @@ def _write_inputs(
             break
         safe_name = _sanitize_filename(attachment.file_name)
         filename = f"{attachment.id}_{safe_name}"
-        payload: bytes | None = None
-        if attachment.file_path:
-            payload = maybe_read_file_bytes(attachment.file_path)
-        if payload is None and attachment.data_base64:
-            try:
-                payload = base64.b64decode(attachment.data_base64)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to decode attachment id=%s filename=%s: %s",
-                    attachment.id,
-                    attachment.file_name,
-                    exc,
-                )
-                continue
+        payload = attachment_bytes(
+            file_path=attachment.file_path,
+            data_base64=attachment.data_base64,
+        )
         if payload is None:
             continue
         if len(payload) > settings.attachments_max_file_bytes:

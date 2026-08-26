@@ -64,6 +64,7 @@ from app.services.tools.cowork_tools import (
 from app.services.org_service import require_provider_enabled
 from app.services.team_service import allowed_model_ids
 from app.services.file_storage import delete_file
+from app.services.chat_attachments import persist_tool_attachment_dicts
 from app.services.agents.runtime import reindex_source
 from app.services.agents.chat_index import (
     enqueue_project_chat_index,
@@ -986,18 +987,12 @@ async def _run_generation(task_id: UUID) -> None:
                     )
                 _ensure_task_not_cancelled(session, task.id)
                 if image_result.attachments:
-                    session.add_all(
-                        [
-                            ChatMessageAttachment(
-                                message_id=assistant_message.id,
-                                file_name=item["file_name"],
-                                content_type=item["content_type"],
-                                data_base64=item["data_base64"],
-                            )
-                            for item in image_result.attachments
-                        ]
+                    persist_tool_attachment_dicts(
+                        session,
+                        chat_id=chat.id,
+                        message_id=assistant_message.id,
+                        items=list(image_result.attachments),
                     )
-                    session.commit()
                 usage_event = UsageEvent(
                     org_id=chat.org_id,
                     user_id=chat.user_id,
@@ -1118,18 +1113,12 @@ async def _run_generation(task_id: UUID) -> None:
                     session.add(assistant_message)
                     session.commit()
                 if tool_attachments:
-                    session.add_all(
-                        [
-                            ChatMessageAttachment(
-                                message_id=assistant_message.id,
-                                file_name=item["file_name"],
-                                content_type=item["content_type"],
-                                data_base64=item["data_base64"],
-                            )
-                            for item in tool_attachments
-                        ]
+                    persist_tool_attachment_dicts(
+                        session,
+                        chat_id=chat.id,
+                        message_id=assistant_message.id,
+                        items=list(tool_attachments),
                     )
-                    session.commit()
                 if not delta_sender.emitted:
                     _append_event(
                         session,

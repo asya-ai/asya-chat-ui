@@ -350,12 +350,24 @@ export type ChatMessageAttachment = {
   content_url?: string
 }
 
+export type PendingAttachmentUploadStatus =
+  | "pending"
+  | "uploading"
+  | "ready"
+  | "error"
+
 export type ChatMessageAttachmentInput = {
   upload_id?: string
   file_name: string
   content_type: string
   data_base64?: string
   content_url?: string
+  local_id?: string
+  preview_url?: string
+  file?: File
+  upload_progress?: number
+  upload_status?: PendingAttachmentUploadStatus
+  upload_error?: string
 }
 
 export type ChatMessageAttachmentLike =

@@ -10,6 +10,7 @@ from pypdf import PdfReader
 from sqlmodel import Session, select
 
 from app.models import ChatMessage, ChatMessageAttachment
+from app.services.file_storage import attachment_bytes
 from app.services.tools.registry import ToolResult
 
 MAX_PAGE_RANGE = 20
@@ -160,12 +161,14 @@ async def extract_pdf(
             output={"error": "PDF attachment not found for this chat."},
         )
 
-    try:
-        data = base64.b64decode(attachment.data_base64)
-    except Exception as exc:
+    data = attachment_bytes(
+        file_path=attachment.file_path,
+        data_base64=attachment.data_base64,
+    )
+    if data is None:
         return ToolResult(
             name="extract_pdf",
-            output={"error": f"Failed to decode PDF attachment: {exc}"},
+            output={"error": "Failed to read PDF attachment content"},
         )
 
     try:

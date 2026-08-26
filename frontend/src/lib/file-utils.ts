@@ -22,6 +22,34 @@ const toAttachment = async (
   }
 }
 
+/** Chat composer pending chips — keep File locally; upload as multipart. */
+export const filesToPendingAttachments = (
+  files: File[],
+  fallbackName = "attachment"
+): ChatMessageAttachmentInput[] =>
+  files.map((file) => {
+    const contentType = file.type || "application/octet-stream"
+    const isImage = contentType.startsWith("image/")
+    return {
+      local_id: crypto.randomUUID(),
+      file_name: file.name || fallbackName,
+      content_type: contentType,
+      file,
+      preview_url: isImage ? URL.createObjectURL(file) : undefined,
+      upload_status: "pending" as const,
+      upload_progress: 0,
+    }
+  })
+
+export const revokePendingAttachmentPreview = (
+  attachment: ChatMessageAttachmentInput
+) => {
+  if (attachment.preview_url?.startsWith("blob:")) {
+    URL.revokeObjectURL(attachment.preview_url)
+  }
+}
+
+/** Still used by project/agent source uploads (JSON base64). */
 export const readFilesAsAttachments = async (
   files: File[]
 ): Promise<ChatMessageAttachmentInput[]> => {
@@ -31,6 +59,20 @@ export const readFilesAsAttachments = async (
     if (attachment) results.push(attachment)
   }
   return results
+}
+
+export const readClipboardImagesAsPending = async (
+  items: DataTransferItemList | DataTransferItem[]
+): Promise<ChatMessageAttachmentInput[]> => {
+  const list = Array.from(items)
+  const imageItems = list.filter((item) => item.type.startsWith("image/"))
+  if (imageItems.length === 0) return []
+  const files: File[] = []
+  for (const item of imageItems) {
+    const file = item.getAsFile()
+    if (file) files.push(file)
+  }
+  return filesToPendingAttachments(files, "pasted-image")
 }
 
 export const readClipboardImagesAsAttachments = async (

@@ -57,8 +57,9 @@ import {
   useOrgsMine,
 } from "@/hooks/use-chat-query"
 import {
-  readClipboardImagesAsAttachments,
-  readFilesAsAttachments,
+  filesToPendingAttachments,
+  readClipboardImagesAsPending,
+  revokePendingAttachmentPreview,
 } from "@/lib/file-utils"
 
 const DEFAULT_ATTACHMENT_LIMITS = {
@@ -124,6 +125,12 @@ const estimateBase64Bytes = (value: string): number => {
   const padding = value.match(/=+$/)?.[0]?.length ?? 0
   return Math.max(Math.floor((value.length * 3) / 4) - padding, 0)
 }
+
+const pendingAttachmentBytes = (item: ChatMessageAttachmentInput): number => {
+  if (item.file) return item.file.size
+  return estimateBase64Bytes(item.data_base64 || "")
+}
+
 
 const extractAttachmentIdFromContentUrl = (url?: string): string | undefined => {
   if (!url) return undefined
@@ -2110,42 +2117,126 @@ export const ChatPage = () => {
     setAttachmentError(null)
   }, [chatId])
 
+  const patchPendingAttachment = useCallback(
+    (localId: string, patch: Partial<ChatMessageAttachmentInput>) => {
+      setPendingAttachments((prev) =>
+        prev.map((item) => (item.local_id === localId ? { ...item, ...patch } : item))
+      )
+    },
+    []
+  )
+
+  const pendingUploadPromisesRef = useRef(new Map<string, Promise<ChatMessageAttachmentInput>>())
+
+  const uploadOneAttachment = useCallback(
+    async (
+      targetChatId: string,
+      attachment: ChatMessageAttachmentInput
+    ): Promise<ChatMessageAttachmentInput> => {
+      const reusableId =
+        attachment.upload_id || extractAttachmentIdFromContentUrl(attachment.content_url)
+      if (reusableId) {
+        return {
+          upload_id: reusableId,
+          file_name: attachment.file_name,
+          content_type: attachment.content_type,
+          content_url: attachment.content_url,
+          local_id: attachment.local_id,
+          preview_url: attachment.preview_url,
+          upload_status: "ready",
+          upload_progress: 1,
+        }
+      }
+      const localId = attachment.local_id
+      if (localId) {
+        const inflight = pendingUploadPromisesRef.current.get(localId)
+        if (inflight) return inflight
+      }
+      if (!attachment.file) {
+        throw new Error(`Attachment ${attachment.file_name} is missing data.`)
+      }
+      const run = (async (): Promise<ChatMessageAttachmentInput> => {
+        if (localId) {
+          patchPendingAttachment(localId, {
+            upload_status: "uploading",
+            upload_progress: 0,
+            upload_error: undefined,
+          })
+        }
+        try {
+          const created = await chatApi.uploadAttachment(targetChatId, attachment.file!, {
+            onProgress: (progress) => {
+              if (!localId) return
+              patchPendingAttachment(localId, {
+                upload_status: "uploading",
+                upload_progress: progress,
+              })
+            },
+          })
+          const ready: ChatMessageAttachmentInput = {
+            upload_id: created.id,
+            file_name: created.file_name,
+            content_type: created.content_type,
+            local_id: attachment.local_id,
+            preview_url: attachment.preview_url,
+            upload_status: "ready",
+            upload_progress: 1,
+          }
+          if (localId) {
+            patchPendingAttachment(localId, {
+              upload_id: created.id,
+              upload_status: "ready",
+              upload_progress: 1,
+              file: undefined,
+              upload_error: undefined,
+            })
+          }
+          return ready
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : t("chat_attachment_upload_failed")
+          if (localId) {
+            patchPendingAttachment(localId, {
+              upload_status: "error",
+              upload_error: message,
+            })
+          }
+          throw error instanceof Error ? error : new Error(message)
+        } finally {
+          if (localId) pendingUploadPromisesRef.current.delete(localId)
+        }
+      })()
+      if (localId) pendingUploadPromisesRef.current.set(localId, run)
+      return run
+    },
+    [patchPendingAttachment, t]
+  )
+
+  const startPendingUploads = useCallback(
+    (items: ChatMessageAttachmentInput[]) => {
+      void (async () => {
+        const chat = await ensureChatCreated()
+        if (!chat) return
+        await Promise.all(
+          items
+            .filter((item) => item.file && !item.upload_id)
+            .map((item) => uploadOneAttachment(chat.id, item).catch(() => null))
+        )
+      })()
+    },
+    [ensureChatCreated, uploadOneAttachment]
+  )
+
   const uploadAttachmentsForChat = useCallback(async (
     targetChatId: string,
     attachments: ChatMessageAttachmentInput[]
   ): Promise<ChatMessageAttachmentInput[]> => {
     if (attachments.length === 0) return []
-    const uploaded: ChatMessageAttachmentInput[] = []
-    for (const attachment of attachments) {
-      const reusableId = attachment.upload_id || extractAttachmentIdFromContentUrl(attachment.content_url)
-      if (reusableId) {
-        uploaded.push({
-          upload_id: reusableId,
-          file_name: attachment.file_name,
-          content_type: attachment.content_type,
-          data_base64: attachment.data_base64,
-          content_url: attachment.content_url,
-        })
-        continue
-      }
-      if (!attachment.data_base64) {
-        throw new Error(`Attachment ${attachment.file_name} is missing data.`)
-      }
-      const created = await chatApi.uploadAttachment(targetChatId, {
-        file_name: attachment.file_name,
-        content_type: attachment.content_type,
-        data_base64: attachment.data_base64,
-      })
-      uploaded.push({
-        upload_id: created.id,
-        file_name: created.file_name,
-        content_type: created.content_type,
-        data_base64: attachment.data_base64,
-        content_url: attachment.content_url,
-      })
-    }
+    const uploaded = await Promise.all(
+      attachments.map((attachment) => uploadOneAttachment(targetChatId, attachment))
+    )
     return uploaded
-  }, [])
+  }, [uploadOneAttachment])
 
   const deleteChat = async (chatIdToDelete: string) => {
     await deleteChatMutation.mutateAsync(chatIdToDelete)
@@ -2390,7 +2481,7 @@ export const ChatPage = () => {
       }
     }
     const currentTotal = pendingAttachments.reduce(
-      (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+      (sum, item) => sum + pendingAttachmentBytes(item),
       0
     )
     const incomingTotal = files.reduce((sum, file) => sum + file.size, 0)
@@ -2402,13 +2493,11 @@ export const ChatPage = () => {
       )
       return
     }
-    const next = await readFilesAsAttachments(files)
+    const next = filesToPendingAttachments(files)
     if (next.length === 0) return
     setAttachmentError(null)
     setPendingAttachments((prev) => [...prev, ...next])
-    if (!chatIdRef.current && !pendingChatIdRef.current) {
-      void ensureChatCreated()
-    }
+    startPendingUploads(next)
   }
 
   const isLikelyCode = (text: string) => {
@@ -2576,7 +2665,7 @@ export const ChatPage = () => {
     event: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
     const items = event.clipboardData.items
-    const next = await readClipboardImagesAsAttachments(items)
+    const next = await readClipboardImagesAsPending(items)
     if (next.length > 0) {
       if (rejectUnsupportedImageAttachments(next, setAttachmentError)) {
         event.preventDefault()
@@ -2590,7 +2679,7 @@ export const ChatPage = () => {
         return
       }
       for (const attachment of next) {
-        const size = estimateBase64Bytes(attachment.data_base64 || "")
+        const size = pendingAttachmentBytes(attachment)
         if (size > ATTACHMENTS_MAX_FILE_BYTES) {
           event.preventDefault()
           setAttachmentError(
@@ -2603,11 +2692,11 @@ export const ChatPage = () => {
         }
       }
       const currentTotal = pendingAttachments.reduce(
-        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        (sum, item) => sum + pendingAttachmentBytes(item),
         0
       )
       const incomingTotal = next.reduce(
-        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        (sum, item) => sum + pendingAttachmentBytes(item),
         0
       )
       if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
@@ -2622,9 +2711,7 @@ export const ChatPage = () => {
       event.preventDefault()
       setAttachmentError(null)
       setPendingAttachments((prev) => [...prev, ...next])
-      if (!chatIdRef.current && !pendingChatIdRef.current) {
-        void ensureChatCreated()
-      }
+      startPendingUploads(next)
       return
     }
 
@@ -2653,7 +2740,11 @@ export const ChatPage = () => {
 
   const removePendingAttachment = (index: number) => {
     setAttachmentError(null)
-    setPendingAttachments((prev) => prev.filter((_, idx) => idx !== index))
+    setPendingAttachments((prev) => {
+      const target = prev[index]
+      if (target) revokePendingAttachmentPreview(target)
+      return prev.filter((_, idx) => idx !== index)
+    })
   }
 
   const addEditingFiles = useCallback(async (files: File[]) => {
@@ -2683,7 +2774,7 @@ export const ChatPage = () => {
       }
     }
     const currentTotal = editingAttachments.reduce(
-      (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+      (sum, item) => sum + pendingAttachmentBytes(item),
       0
     )
     const incomingTotal = files.reduce((sum, file) => sum + file.size, 0)
@@ -2695,7 +2786,7 @@ export const ChatPage = () => {
       )
       return
     }
-    const next = await readFilesAsAttachments(files)
+    const next = filesToPendingAttachments(files)
     if (next.length === 0) return
     setEditingAttachmentError(null)
     setEditingAttachments((prev) => [...prev, ...next])
@@ -2757,7 +2848,7 @@ export const ChatPage = () => {
       }
     }
     const currentTotal = pendingAttachments.reduce(
-      (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+      (sum, item) => sum + pendingAttachmentBytes(item),
       0
     )
     const incomingTotal = files.reduce((sum, file) => sum + file.size, 0)
@@ -2769,13 +2860,11 @@ export const ChatPage = () => {
       )
       return
     }
-    const next = await readFilesAsAttachments(files)
+    const next = filesToPendingAttachments(files)
     if (next.length > 0) {
       setAttachmentError(null)
       setPendingAttachments((prev) => [...prev, ...next])
-      if (!chatIdRef.current && !pendingChatIdRef.current) {
-        void ensureChatCreated()
-      }
+      startPendingUploads(next)
     }
   }
 
@@ -2785,7 +2874,7 @@ export const ChatPage = () => {
     const textarea = event.currentTarget
     const items = event.clipboardData.items
     const text = event.clipboardData.getData("text")
-    const next = await readClipboardImagesAsAttachments(items)
+    const next = await readClipboardImagesAsPending(items)
     if (next.length > 0) {
       event.preventDefault()
       if (editingAttachments.length + next.length > ATTACHMENTS_MAX_FILES) {
@@ -2795,7 +2884,7 @@ export const ChatPage = () => {
         return
       }
       for (const attachment of next) {
-        const size = estimateBase64Bytes(attachment.data_base64 || "")
+        const size = pendingAttachmentBytes(attachment)
         if (size > ATTACHMENTS_MAX_FILE_BYTES) {
           setEditingAttachmentError(
             t("chat_attachment_limit_file_size", {
@@ -2807,11 +2896,11 @@ export const ChatPage = () => {
         }
       }
       const currentTotal = editingAttachments.reduce(
-        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        (sum, item) => sum + pendingAttachmentBytes(item),
         0
       )
       const incomingTotal = next.reduce(
-        (sum, item) => sum + estimateBase64Bytes(item.data_base64 || ""),
+        (sum, item) => sum + pendingAttachmentBytes(item),
         0
       )
       if (currentTotal + incomingTotal > ATTACHMENTS_MAX_TOTAL_BYTES) {
@@ -3753,9 +3842,10 @@ export const ChatPage = () => {
             {previewAttachment && previewAttachment.content_type.startsWith("image/") ? (
               <img
                 src={
-                  previewAttachment.data_base64
+                  previewAttachment.preview_url ||
+                  (previewAttachment.data_base64
                     ? `data:${previewAttachment.content_type};base64,${previewAttachment.data_base64}`
-                    : (previewAttachment.content_url ?? "")
+                    : (previewAttachment.content_url ?? ""))
                 }
                 alt={previewAttachment.file_name}
                 className="w-auto max-w-[90vw] h-auto max-h-[90vh] object-contain"

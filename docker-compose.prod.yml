@@ -30,9 +30,12 @@ services:
       - .env
     environment:
       APP_ENV: production
+      FILES_BASE_DIR: /data/files
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+    volumes:
+      - files-data:/data/files
     networks:
       - app
     depends_on:

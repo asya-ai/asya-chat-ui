@@ -17,6 +17,7 @@ from sqlalchemy import or_
 from app.core.config import settings
 from app.models import ChatMessage, ChatMessageAttachment, ChatModel, OrgModel, OrgProviderConfig
 from app.services.org_service import require_provider_enabled
+from app.services.file_storage import attachment_bytes
 from app.services.providers.base import ChatUsage
 from app.services.providers.gemini_provider import GeminiProvider
 from app.services.providers.openai_provider import _usage_chunk_from_response_usage
@@ -366,7 +367,11 @@ async def edit_image(
                 .order_by(ChatMessage.created_at.desc())
             ).first()
         if attachment:
-            image_base64 = attachment.data_base64
+            raw = attachment_bytes(
+                file_path=attachment.file_path,
+                data_base64=attachment.data_base64,
+            )
+            image_base64 = base64.b64encode(raw).decode("ascii") if raw else None
             image_content_type = attachment.content_type
     # If no explicit image was provided, fall back to the latest image attachment in this chat.
     if not image_base64 and context.chat_id:
@@ -381,7 +386,11 @@ async def edit_image(
         except Exception:
             latest_image_attachment = None
         if latest_image_attachment:
-            image_base64 = latest_image_attachment.data_base64
+            raw = attachment_bytes(
+                file_path=latest_image_attachment.file_path,
+                data_base64=latest_image_attachment.data_base64,
+            )
+            image_base64 = base64.b64encode(raw).decode("ascii") if raw else None
             image_content_type = latest_image_attachment.content_type
     if mask_id and not mask_base64:
         mask_uuid = _coerce_attachment_uuid(mask_id)
@@ -391,7 +400,11 @@ async def edit_image(
                 select(ChatMessageAttachment).where(ChatMessageAttachment.id == mask_uuid)
             ).first()
         if mask_attachment:
-            mask_base64 = mask_attachment.data_base64
+            raw = attachment_bytes(
+                file_path=mask_attachment.file_path,
+                data_base64=mask_attachment.data_base64,
+            )
+            mask_base64 = base64.b64encode(raw).decode("ascii") if raw else None
             mask_content_type = mask_attachment.content_type
 
     if not image_base64:

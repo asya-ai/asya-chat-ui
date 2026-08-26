@@ -1424,7 +1424,9 @@ const MessageBubbleComponent = ({
     content_type: string
     data_base64?: string
     content_url?: string
+    preview_url?: string
   }) => {
+    if (attachment.preview_url) return attachment.preview_url
     if (attachment.data_base64) {
       return `data:${attachment.content_type};base64,${attachment.data_base64}`
     }

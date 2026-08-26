@@ -618,21 +618,81 @@ export const chatApi = {
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
   uploadAttachment: (
     chatId: string,
-    payload: {
-      file_name: string
-      content_type: string
-      data_base64: string
+    file: File,
+    options?: {
+      onProgress?: (progress: number) => void
+      signal?: AbortSignal
     }
   ) =>
-    apiFetch<{
+    new Promise<{
       id: string
       file_name: string
       content_type: string
       size_bytes: number
       created_at: string
-    }>(`/chats/${chatId}/uploads`, {
-      method: "POST",
-      body: JSON.stringify(payload),
+    }>((resolve, reject) => {
+      const form = new FormData()
+      form.append("file", file, file.name || "attachment")
+      const xhr = new XMLHttpRequest()
+      xhr.open("POST", `${API_BASE}/chats/${chatId}/uploads`)
+      const token = tokenStore.get()
+      if (token) {
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`)
+      }
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable || !options?.onProgress) return
+        options.onProgress(Math.min(1, event.loaded / Math.max(event.total, 1)))
+      }
+      const onAbort = () => {
+        xhr.abort()
+      }
+      options?.signal?.addEventListener("abort", onAbort)
+      xhr.onload = () => {
+        options?.signal?.removeEventListener("abort", onAbort)
+        const refreshedToken = xhr.getResponseHeader("x-access-token")
+        if (refreshedToken) {
+          tokenStore.set(refreshedToken)
+        }
+        if (xhr.status === 401) {
+          tokenStore.clear()
+          window.location.href = "/login"
+          reject(new ApiError("Unauthorized", 401))
+          return
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          let message = "Request failed"
+          try {
+            const data = JSON.parse(xhr.responseText) as { detail?: unknown }
+            if (typeof data.detail === "string") message = data.detail
+          } catch {
+            /* ignore */
+          }
+          reject(new ApiError(message, xhr.status))
+          return
+        }
+        try {
+          resolve(
+            JSON.parse(xhr.responseText) as {
+              id: string
+              file_name: string
+              content_type: string
+              size_bytes: number
+              created_at: string
+            }
+          )
+        } catch (error) {
+          reject(error)
+        }
+      }
+      xhr.onerror = () => {
+        options?.signal?.removeEventListener("abort", onAbort)
+        reject(new ApiError("Network error", 0))
+      }
+      xhr.onabort = () => {
+        options?.signal?.removeEventListener("abort", onAbort)
+        reject(new ApiError("Upload aborted", 0))
+      }
+      xhr.send(form)
     }),
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),

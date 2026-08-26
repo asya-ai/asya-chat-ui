@@ -237,8 +237,24 @@ export const ChatComposer = ({
           <div className="flex flex-wrap gap-2 px-1">
             {pendingAttachments.map((attachment, index) => {
               const isImage = attachment.content_type.startsWith("image/")
+              const previewSrc =
+                attachment.preview_url ||
+                (attachment.data_base64
+                  ? `data:${attachment.content_type};base64,${attachment.data_base64}`
+                  : attachment.content_url || "")
+              const progress = Math.max(0, Math.min(1, attachment.upload_progress ?? 0))
+              const uploading =
+                attachment.upload_status === "uploading" ||
+                attachment.upload_status === "pending"
+              const failed = attachment.upload_status === "error"
+              const radius = 14
+              const circumference = 2 * Math.PI * radius
+              const dashOffset = circumference * (1 - progress)
               return (
-                <div key={`${attachment.file_name}-${index}`} className="relative">
+                <div
+                  key={attachment.local_id || `${attachment.file_name}-${index}`}
+                  className="relative"
+                >
                   {isImage ? (
                     <Button
                       type="button"
@@ -248,16 +264,61 @@ export const ChatComposer = ({
                       onClick={() => onPreviewAttachment(attachment)}
                     >
                       <img
-                        src={`data:${attachment.content_type};base64,${attachment.data_base64}`}
+                        src={previewSrc}
                         alt={attachment.file_name}
-                        className="rounded-md w-16 h-16 object-cover"
+                        className={cn(
+                          "rounded-md w-16 h-16 object-cover",
+                          uploading || failed ? "opacity-50" : null
+                        )}
                       />
                     </Button>
                   ) : (
-                    <div className="px-3 py-2 border rounded-md text-xs">
+                    <div
+                      className={cn(
+                        "px-3 py-2 border rounded-md text-xs",
+                        uploading || failed ? "opacity-50" : null
+                      )}
+                    >
                       {attachment.file_name}
                     </div>
                   )}
+                  {uploading ? (
+                    <div
+                      className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                      aria-hidden="true"
+                    >
+                      <svg width="36" height="36" viewBox="0 0 36 36" className="-rotate-90">
+                        <circle
+                          cx="18"
+                          cy="18"
+                          r={radius}
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          className="text-background/70"
+                        />
+                        <circle
+                          cx="18"
+                          cy="18"
+                          r={radius}
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                          strokeDasharray={circumference}
+                          strokeDashoffset={dashOffset}
+                          className="text-primary"
+                        />
+                      </svg>
+                    </div>
+                  ) : null}
+                  {failed ? (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <span className="rounded bg-destructive/90 px-1 text-[10px] text-destructive-foreground">
+                        !
+                      </span>
+                    </div>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"

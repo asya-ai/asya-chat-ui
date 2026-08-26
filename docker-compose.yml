@@ -33,6 +33,9 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      - FILES_BASE_DIR=/data/files
+    volumes:
+      - ./data/files:/data/files
     # wait_for_db polls; don't block on postgres healthcheck intervals.
     depends_on:
       postgres:
