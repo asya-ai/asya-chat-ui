@@ -17,6 +17,7 @@ from ddgs import DDGS
 from ddgs import http_client as ddgs_http_client
 
 from app.core.config import settings
+from app.services.tool_usage import merge_tool_usage_fields, perplexity_usage_fields
 from app.services.tools.registry import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,16 @@ async def _perplexity_search_one(item: str, limit: int) -> dict:
         answer = data["choices"][0].get("message", {}).get("content", "")
     citations = data.get("citations", [])
     results = [{"url": url} for url in citations[:limit]]
-    return {"query": item, "answer": answer, "sources": citations, "results": results}
+    usage = data.get("usage")
+    payload: dict[str, Any] = {
+        "query": item,
+        "answer": answer,
+        "sources": citations,
+        "results": results,
+    }
+    if isinstance(usage, dict):
+        payload["_usage"] = perplexity_usage_fields(usage)
+    return payload
 
 
 async def _ddgs_search_one(item: str, limit: int, region: str | None) -> dict:
@@ -207,7 +217,24 @@ async def web_search(context: WebToolContext, *, query: str | None = None, queri
         context.org_id,
         sum(len(batch.get("results", []) or []) for batch in batches if isinstance(batch, dict)),
     )
-    return ToolResult(name="web_search", output={"queries": batches})
+    output: dict[str, Any] = {"queries": []}
+    perplexity_usage: dict[str, int] = {key: 0 for key in perplexity_usage_fields({})}
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        batch_usage = batch.pop("_usage", None)
+        if isinstance(batch_usage, dict):
+            merge_tool_usage_fields(perplexity_usage, batch_usage)
+        output["queries"].append(batch)
+    if perplexity_ok and perplexity_usage.get("total_tokens"):
+        model_name = settings.perplexity_model or "sonar-pro"
+        output["_tool_usage"] = {
+            "provider": "perplexity",
+            "model_name": model_name,
+            "display_name": f"Perplexity {model_name}",
+            **perplexity_usage,
+        }
+    return ToolResult(name="web_search", output=output)
 
 
 def _is_private_hostname(hostname: str) -> bool:

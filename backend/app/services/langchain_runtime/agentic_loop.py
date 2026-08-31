@@ -493,12 +493,16 @@ async def run_agentic_loop_langchain(
                 result = ToolResult(name=call.name, output=tool_output)
 
             cowork_updated_payloads: list[dict[str, Any]] = []
+            extra_model_usage: dict[str, Any] | None = None
             if isinstance(tool_output, dict):
                 raw_payloads = tool_output.pop("_cowork_updated_payloads", None)
                 if isinstance(raw_payloads, list):
                     cowork_updated_payloads = [
                         item for item in raw_payloads if isinstance(item, dict)
                     ]
+                raw_tool_usage = tool_output.pop("_tool_usage", None)
+                if isinstance(raw_tool_usage, dict) and int(raw_tool_usage.get("total_tokens") or 0):
+                    extra_model_usage = raw_tool_usage
                 if isinstance(tool_output.get("cowork_updated"), list):
                     tool_output["cowork_updated"] = [
                         {
@@ -637,9 +641,11 @@ async def run_agentic_loop_langchain(
                         },
                     }
                 )
-            return call, result, tool_output, answer_usage
+            return call, result, tool_output, answer_usage, extra_model_usage
 
-        call_results: list[tuple[Any, ToolResult, dict[str, Any], ChatUsage | None] | None] = [
+        call_results: list[
+            tuple[Any, ToolResult, dict[str, Any], ChatUsage | None, dict[str, Any] | None] | None
+        ] = [
             None
         ] * len(tool_calls)
 
@@ -652,10 +658,12 @@ async def run_agentic_loop_langchain(
 
         for item in call_results:
             assert item is not None
-            call, result, tool_output, answer_usage = item
+            call, result, tool_output, answer_usage, extra_model_usage = item
             usage = _merge_chat_usage(usage, answer_usage)
             if result.attachments:
                 attachments.extend(result.attachments)
+            if extra_model_usage:
+                image_usages.append(extra_model_usage)
             if call.name in {"generate_image", "edit_image"}:
                 model_id = result.output.get("model_id") if isinstance(result.output, dict) else None
                 if model_id:

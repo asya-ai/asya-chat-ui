@@ -538,6 +538,98 @@ async def test_agentic_loop_records_image_usages_from_image_tools():
     assert usage.total_tokens == 10
 
 
+@pytest.mark.asyncio
+async def test_agentic_loop_records_perplexity_usage_from_web_search():
+    registry = ToolRegistry()
+
+    async def _web_search(args: dict) -> ToolResult:
+        return ToolResult(
+            name="web_search",
+            output={
+                "queries": [
+                    {
+                        "query": "cats near me",
+                        "results": [{"url": "https://example.com", "title": "Cats"}],
+                    }
+                ],
+                "_tool_usage": {
+                    "provider": "perplexity",
+                    "model_name": "sonar-pro",
+                    "display_name": "Perplexity sonar-pro",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "total_tokens": 140,
+                    "input_tokens": 100,
+                    "output_tokens": 40,
+                    "cached_tokens": 0,
+                    "thinking_tokens": 0,
+                },
+            },
+        )
+
+    registry.register(
+        ToolSpec(
+            name="web_search",
+            description="Search the web",
+            parameters={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            },
+        ),
+        _web_search,
+    )
+
+    @dataclass
+    class _SearchProvider:
+        calls: int = 0
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(total_tokens=4, input_tokens=3, output_tokens=1, prompt_tokens=3, completion_tokens=1),
+                    tool_calls=[
+                        ChatToolCall(
+                            id="tool-1",
+                            name="web_search",
+                            arguments={"query": "cats near me"},
+                        )
+                    ],
+                )
+            return ChatResponse(
+                content="done",
+                usage=_usage(total_tokens=6, input_tokens=5, output_tokens=1, prompt_tokens=5, completion_tokens=1),
+                tool_calls=[],
+            )
+
+    provider = _SearchProvider()
+    content, _attachments, _sources, image_usages, usage = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "find cats"}],
+        tool_registry=registry,
+        max_steps=3,
+    )
+
+    assert content == "done"
+    assert image_usages == [
+        {
+            "provider": "perplexity",
+            "model_name": "sonar-pro",
+            "display_name": "Perplexity sonar-pro",
+            "prompt_tokens": 100,
+            "completion_tokens": 40,
+            "total_tokens": 140,
+            "input_tokens": 100,
+            "output_tokens": 40,
+            "cached_tokens": 0,
+            "thinking_tokens": 0,
+        }
+    ]
+    assert usage is not None
+    assert usage.total_tokens == 10
+
 
 @pytest.mark.asyncio
 async def test_agentic_loop_strips_attachment_data_from_model_keeps_tool_event_payload():

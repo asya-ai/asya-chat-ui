@@ -79,6 +79,7 @@ from app.services.langchain_runtime import (
 from app.services.generation_event_bus import publish_generation_event
 from app.services.providers.base import ChatUsage
 from app.services.instance_providers import get_provider_for_org
+from app.services.tool_usage import persist_tool_model_usage_events
 from app.services.tools.image_tool import (
     ImageToolContext,
     edit_image,
@@ -1247,27 +1248,14 @@ async def _run_generation(task_id: UUID) -> None:
             session.add(usage_event)
             session.commit()
             if image_usages:
-                for item in image_usages:
-                    session.add(
-                        UsageEvent(
-                            org_id=chat.org_id,
-                            user_id=chat.user_id,
-                            chat_id=chat.id,
-                            message_id=assistant_message.id,
-                            model_id=UUID(item["model_id"]),
-                            prompt_tokens=item["prompt_tokens"],
-                            completion_tokens=item["completion_tokens"],
-                            total_tokens=item["total_tokens"],
-                            input_tokens=item["input_tokens"],
-                            output_tokens=item["output_tokens"],
-                            cached_tokens=item["cached_tokens"],
-                            thinking_tokens=item["thinking_tokens"],
-                            image_width=item.get("image_width"),
-                            image_height=item.get("image_height"),
-                            image_count=item.get("image_count"),
-                            image_format=item.get("image_format"),
-                        )
-                    )
+                persist_tool_model_usage_events(
+                    session,
+                    org_id=chat.org_id,
+                    user_id=chat.user_id,
+                    chat_id=chat.id,
+                    message_id=assistant_message.id,
+                    items=image_usages,
+                )
                 session.commit()
 
             if title_task is not None:

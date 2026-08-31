@@ -128,6 +128,7 @@ from app.services.tools.cowork_tools import (
 from app.services.mcp import register_mcp_tools
 from app.services.generation_event_bus import iter_generation_notifications
 from app.services.model_pricing import estimate_token_cost_usd
+from app.services.tool_usage import persist_tool_model_usage_events
 from app.services.usage_limits import enforce_chat_usage_limits
 from app.workers.celery_app import celery_app
 
@@ -5072,27 +5073,14 @@ async def create_message(
                 session.add(usage_event)
                 session.commit()
                 if image_usages:
-                    for item in image_usages:
-                        session.add(
-                            UsageEvent(
-                                org_id=chat.org_id,
-                                user_id=current_user.id,
-                                chat_id=chat.id,
-                                message_id=assistant_message.id,
-                                model_id=UUID(item["model_id"]),
-                                prompt_tokens=item["prompt_tokens"],
-                                completion_tokens=item["completion_tokens"],
-                                total_tokens=item["total_tokens"],
-                                input_tokens=item["input_tokens"],
-                                output_tokens=item["output_tokens"],
-                                cached_tokens=item["cached_tokens"],
-                                thinking_tokens=item["thinking_tokens"],
-                                image_width=item.get("image_width"),
-                                image_height=item.get("image_height"),
-                                image_count=item.get("image_count"),
-                                image_format=item.get("image_format"),
-                            )
-                        )
+                    persist_tool_model_usage_events(
+                        session,
+                        org_id=chat.org_id,
+                        user_id=current_user.id,
+                        chat_id=chat.id,
+                        message_id=assistant_message.id,
+                        items=image_usages,
+                    )
                     session.commit()
                 await _maybe_update_chat_title(
                     session=session,
@@ -5208,6 +5196,16 @@ async def create_message(
     )
     session.add(usage_event)
     session.commit()
+    if image_usages:
+        persist_tool_model_usage_events(
+            session,
+            org_id=chat.org_id,
+            user_id=current_user.id,
+            chat_id=chat.id,
+            message_id=assistant_message.id,
+            items=image_usages,
+        )
+        session.commit()
     persist_responses_api_discovery(session, model, provider)
     await _maybe_update_chat_title(
         session=session,
@@ -5819,27 +5817,14 @@ async def edit_message(
     session.add(usage_event)
     session.commit()
     if image_usages:
-        for item in image_usages:
-            session.add(
-                UsageEvent(
-                    org_id=chat.org_id,
-                    user_id=current_user.id,
-                    chat_id=chat.id,
-                    message_id=assistant_message.id,
-                    model_id=UUID(item["model_id"]),
-                    prompt_tokens=item["prompt_tokens"],
-                    completion_tokens=item["completion_tokens"],
-                    total_tokens=item["total_tokens"],
-                    input_tokens=item["input_tokens"],
-                    output_tokens=item["output_tokens"],
-                    cached_tokens=item["cached_tokens"],
-                    thinking_tokens=item["thinking_tokens"],
-                    image_width=item.get("image_width"),
-                    image_height=item.get("image_height"),
-                    image_count=item.get("image_count"),
-                    image_format=item.get("image_format"),
-                )
-            )
+        persist_tool_model_usage_events(
+            session,
+            org_id=chat.org_id,
+            user_id=current_user.id,
+            chat_id=chat.id,
+            message_id=assistant_message.id,
+            items=image_usages,
+        )
         session.commit()
 
     assistant_attachment_reads = None
