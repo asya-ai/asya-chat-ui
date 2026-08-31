@@ -1482,8 +1482,7 @@ const MessageBubbleComponent = ({
       (actionInfoLevel === "detailed" &&
         ((msg.usage?.total_tokens ?? 0) > 0 ||
           msg.usage?.generation_time_ms != null)) ||
-      (actionsEnabled && msg.generation_status === "failed") ||
-      (actionsEnabled && Boolean(onSaveAsPrompt) && canCopyMessage))
+      (actionsEnabled && msg.generation_status === "failed"))
 
   return (
     <div
@@ -2080,23 +2079,6 @@ const MessageBubbleComponent = ({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>{t("chat_share_answer")}</TooltipContent>
-                    </Tooltip>
-                  ) : null}
-                  {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="opacity-70 hover:opacity-100 size-7"
-                          onClick={() => onSaveAsPrompt(msg)}
-                          aria-label={t("prompt_save_message")}
-                        >
-                          <Bookmark aria-hidden="true" className="size-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>{t("prompt_save_message")}</TooltipContent>
                     </Tooltip>
                   ) : null}
                   {actionsEnabled ? (

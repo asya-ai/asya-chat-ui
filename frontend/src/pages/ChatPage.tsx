@@ -28,9 +28,9 @@ import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
 import { cn } from "@/lib/utils"
 import { ProviderIcon } from "@/components/ProviderIcon"
-import { PromptFormDialog } from "@/components/PromptFormDialog"
 import { getProviderIconCandidates } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
+import { PromptFormDialog } from "@/components/PromptFormDialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,7 +51,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer, type ChatComposerHandle } from "@/pages/chat/ChatComposer"
 import { MessageList } from "@/pages/chat/MessageList"
-import { MessageBubble, getFinalAnswerText } from "@/pages/chat/MessageBubble"
+import { MessageBubble } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 import {
   useChatSearch,
@@ -2663,8 +2663,8 @@ export const ChatPage = () => {
   }, [activeAgentId])
 
   const saveMessageAsPrompt = useCallback((msg: ChatMessage) => {
-    const body =
-      msg.role === "user" ? msg.content.trim() : getFinalAnswerText(msg).trim()
+    if (msg.role !== "user") return
+    const body = msg.content.trim()
     if (!body) return
     setSavePromptBody(body)
     setSavePromptOpen(true)
