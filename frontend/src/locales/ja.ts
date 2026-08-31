@@ -189,6 +189,7 @@ export const ja = {
   chat_waiting_for_download: "ダウンロード待機中...",
   chat_tool_label: "ツール: {name}",
   chat_downloaded_attachments: "ダウンロードした添付ファイル",
+  chat_generated_files: "生成されたファイル",
   chat_attachment_fallback_name: "添付ファイル",
   chat_bytes_unit: "バイト",
   chat_no_messages: "まだメッセージはありません。",

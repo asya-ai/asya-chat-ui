@@ -189,6 +189,7 @@ export const lv = {
   chat_waiting_for_download: "Gaida lejupielādi...",
   chat_tool_label: "Rīks: {name}",
   chat_downloaded_attachments: "Lejupielādētie pielikumi",
+  chat_generated_files: "Ģenerētie faili",
   chat_attachment_fallback_name: "pielikums",
   chat_bytes_unit: "baiti",
   chat_no_messages: "Nav ziņojumu.",

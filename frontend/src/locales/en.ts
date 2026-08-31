@@ -187,6 +187,7 @@ export const en = {
   chat_waiting_for_download: "Waiting for download...",
   chat_tool_label: "Tool: {name}",
   chat_downloaded_attachments: "Downloaded attachments",
+  chat_generated_files: "Generated files",
   chat_attachment_fallback_name: "attachment",
   chat_bytes_unit: "bytes",
   chat_no_messages: "No messages yet.",

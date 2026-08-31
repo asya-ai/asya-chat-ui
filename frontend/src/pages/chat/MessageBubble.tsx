@@ -414,6 +414,45 @@ const answerFileStem = (msg: ChatMessage) => {
   return `chat-answer-${stamp}`
 }
 
+type DownloadableAttachment = {
+  id?: string
+  file_name?: string | null
+  content_type?: string | null
+  data_base64?: string | null
+  content_url?: string | null
+  preview_url?: string
+}
+
+const attachmentDownloadSrc = (attachment: DownloadableAttachment) => {
+  if (attachment.preview_url) return attachment.preview_url
+  if (attachment.data_base64) {
+    return `data:${attachment.content_type ?? "application/octet-stream"};base64,${attachment.data_base64}`
+  }
+  return attachment.content_url || ""
+}
+
+const isAttachmentDownloadable = (attachment: DownloadableAttachment) =>
+  Boolean(attachmentDownloadSrc(attachment))
+
+/** Authoritative list for the end-of-message download strip (msg.attachments + timeline). */
+const collectDownloadableAttachments = (msg: ChatMessage): DownloadableAttachment[] => {
+  const byFileName = new Map<string, DownloadableAttachment>()
+  const consider = (attachment: DownloadableAttachment) => {
+    const fileName = attachment.file_name?.trim()
+    if (!fileName || !isAttachmentDownloadable(attachment)) return
+    const existing = byFileName.get(fileName)
+    if (!existing || (!existing.content_url && attachment.content_url)) {
+      byFileName.set(fileName, attachment)
+    }
+  }
+  for (const attachment of msg.attachments ?? []) consider(attachment)
+  for (const part of msg.stream_parts ?? []) {
+    if (part.type !== "action") continue
+    for (const attachment of part.attachments ?? []) consider(attachment)
+  }
+  return [...byFileName.values()]
+}
+
 /** Final answer only — drops preamble / thoughts before the first tool call. */
 export const getFinalAnswerText = (msg: ChatMessage): string => {
   const parts = msg.stream_parts ?? []
@@ -746,6 +785,10 @@ const ToolEventDetails = ({
   t: I18nContextValue["t"]
 }) => {
   if (toolEvent.type === "code_execution") {
+    const outputFiles = (toolEvent.output?.output_files ?? []).filter(
+      (file): file is NonNullable<typeof file> =>
+        Boolean(file?.file_name && file.data_base64)
+    )
     return (
       <div className="space-y-3">
         <div>
@@ -777,6 +820,24 @@ const ToolEventDetails = ({
               .join("\n") || t("chat_execution_no_output")}
           </pre>
         </div>
+        {outputFiles.length > 0 ? (
+          <div>
+            <p className="opacity-70 mb-1 text-xs uppercase">{t("chat_generated_files")}</p>
+            <div className="flex flex-wrap gap-2">
+              {outputFiles.map((file, index) => (
+                <a
+                  key={`${file.file_name}-${index}`}
+                  className="inline-flex items-center gap-1.5 hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                  href={attachmentDownloadSrc(file)}
+                  download={file.file_name}
+                >
+                  <Download aria-hidden="true" className="opacity-70 size-3.5 shrink-0" />
+                  {file.file_name}
+                </a>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -1420,41 +1481,11 @@ const MessageBubbleComponent = ({
       components={markdownComponents}
     />
   )
-  const attachmentSrc = (attachment: {
-    content_type: string
-    data_base64?: string
-    content_url?: string
-    preview_url?: string
-  }) => {
-    if (attachment.preview_url) return attachment.preview_url
-    if (attachment.data_base64) {
-      return `data:${attachment.content_type};base64,${attachment.data_base64}`
-    }
-    return attachment.content_url || ""
-  }
-  const attachmentHref = (attachment: {
-    content_type: string
-    data_base64?: string
-    content_url?: string
-  }) => {
-    return attachmentSrc(attachment)
-  }
-  const attachmentIdentity = (attachment: {
-    file_name?: string | null
-    content_type?: string | null
-    data_base64?: string | null
-    content_url?: string | null
-  }) =>
-    attachment.data_base64 ||
-    attachment.content_url ||
-    `${attachment.file_name ?? ""}:${attachment.content_type ?? ""}`
-  const timelineAttachmentKeys = new Set(
-    streamParts.flatMap((part) =>
-      part.type === "action" ? (part.attachments ?? []).map(attachmentIdentity) : []
-    )
-  )
-  const bottomAttachments = (msg.attachments ?? []).filter(
-    (attachment) => !timelineAttachmentKeys.has(attachmentIdentity(attachment))
+  const attachmentSrc = (attachment: DownloadableAttachment) => attachmentDownloadSrc(attachment)
+  const attachmentHref = (attachment: DownloadableAttachment) => attachmentDownloadSrc(attachment)
+  const generatedFiles = useMemo(
+    () => (!isUser ? collectDownloadableAttachments(msg) : []),
+    [isUser, msg]
   )
 
   const handleEditPickFiles = () => {
@@ -1956,46 +1987,52 @@ const MessageBubbleComponent = ({
                   ) : null}
                 </>
               )}
-                            {bottomAttachments.length > 0 ? (
-                <div className="flex flex-wrap gap-2 mt-3">
-                  {bottomAttachments.map((attachment, index) => {
-                    const isImage = (attachment.content_type ?? "").startsWith("image/")
-                    if (isImage) {
+              {generatedFiles.length > 0 ? (
+                <div className="mt-4 pt-3 border-t border-border/60">
+                  <p className="mb-2 font-medium text-foreground/80 text-xs">
+                    {t("chat_generated_files")}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {generatedFiles.map((attachment, index) => {
+                      const isImage = (attachment.content_type ?? "").startsWith("image/")
+                      if (isImage) {
+                        return (
+                          <Button
+                            key={`${attachment.file_name}-${index}`}
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                            onClick={() =>
+                              onPreviewAttachment({
+                                file_name: attachment.file_name ?? "attachment",
+                                content_type: attachment.content_type ?? "application/octet-stream",
+                                data_base64: attachment.data_base64 ?? undefined,
+                                content_url: attachment.content_url ?? undefined,
+                              })
+                            }
+                          >
+                            <img
+                              src={attachmentSrc(attachment)}
+                              alt={attachment.file_name ?? undefined}
+                              className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
+                            />
+                          </Button>
+                        )
+                      }
                       return (
-                        <Button
+                        <a
                           key={`${attachment.file_name}-${index}`}
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                          onClick={() =>
-                            onPreviewAttachment({
-                              file_name: attachment.file_name,
-                              content_type: attachment.content_type,
-                              data_base64: attachment.data_base64,
-                              content_url: attachment.content_url,
-                            })
-                          }
+                          className="inline-flex items-center gap-1.5 hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                          href={attachmentHref(attachment)}
+                          download={attachment.file_name ?? undefined}
                         >
-                          <img
-                            src={attachmentSrc(attachment)}
-                            alt={attachment.file_name}
-                            className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
-                          />
-                        </Button>
+                          <Download aria-hidden="true" className="opacity-70 size-3.5 shrink-0" />
+                          {attachment.file_name}
+                        </a>
                       )
-                    }
-                    return (
-                      <a
-                        key={`${attachment.file_name}-${index}`}
-                        className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                        href={attachmentHref(attachment)}
-                        download={attachment.file_name}
-                      >
-                        {attachment.file_name}
-                      </a>
-                    )
-                  })}
+                    })}
+                  </div>
                 </div>
               ) : null}
             </>
