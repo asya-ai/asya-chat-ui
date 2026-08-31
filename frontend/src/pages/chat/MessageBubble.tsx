@@ -1848,7 +1848,10 @@ const MessageBubbleComponent = ({
                         <div key={`action-${index}`} className="space-y-2">
                           <details className="group/action text-muted-foreground text-xs">
                             <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
-                              <span aria-hidden="true" className="opacity-50 select-none">
+                              <span
+                                aria-hidden="true"
+                                className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
+                              >
                                 ›
                               </span>
                               <span className="min-w-0 wrap-break-word">{part.label}</span>
@@ -1866,7 +1869,10 @@ const MessageBubbleComponent = ({
                         {part.tool_event?.type === "reasoning" && part.tool_event.content ? (
                           <details className="group/action text-muted-foreground text-xs">
                             <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
-                              <span aria-hidden="true" className="opacity-50 select-none">
+                              <span
+                                aria-hidden="true"
+                                className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
+                              >
                                 ›
                               </span>
                               <span className="min-w-0 wrap-break-word">{part.label}</span>
