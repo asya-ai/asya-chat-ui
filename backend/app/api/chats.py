@@ -74,7 +74,7 @@ from app.services.model_capabilities import (
     supports_image_output,
 )
 from app.services.providers.base import ChatResponse, ChatUsage
-from app.services.providers.registry import get_provider
+from app.services.instance_providers import get_provider_for_org
 from app.services.system_prompts import build_system_prompt_messages
 from app.services.tools.image_tool import (
     ImageToolContext,
@@ -1606,20 +1606,13 @@ async def _maybe_update_chat_title(
         provider_config = require_provider_enabled(
             session, chat.org_id, title_model.provider
         )
-        config = None
-        if provider_config and provider_config.config_json:
-            try:
-                config = json.loads(provider_config.config_json)
-            except json.JSONDecodeError:
-                pass
         # Fresh client: not the reply stream, no reasoning, no chat prompt cache.
-        title_provider = get_provider(
+        title_provider = get_provider_for_org(
+            session,
+            chat.org_id,
             title_model.provider,
-            api_key=provider_config.api_key_override if provider_config else None,
-            base_url=provider_config.base_url_override if provider_config else None,
-            endpoint=provider_config.endpoint_override if provider_config else None,
+            org_config=provider_config,
             prefer_responses_api=title_model.uses_responses_api is True,
-            config=config,
             openrouter_endpoint=title_model.openrouter_endpoint,
             prompt_cache_enabled=False,
         )
@@ -4816,18 +4809,12 @@ async def create_message(
     )
 
     provider_config = require_provider_enabled(session, chat.org_id, model.provider)
-    config = None
-    if provider_config and provider_config.config_json:
-        try:
-            config = json.loads(provider_config.config_json)
-        except json.JSONDecodeError:
-            pass
     prompt_cache_enabled = not chat.is_incognito
-    provider = get_provider(
+    provider = get_provider_for_org(
+        session,
+        chat.org_id,
         model.provider,
-        api_key=provider_config.api_key_override if provider_config else None,
-        base_url=provider_config.base_url_override if provider_config else None,
-        endpoint=provider_config.endpoint_override if provider_config else None,
+        org_config=provider_config,
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=f"chat:{chat.id}" if prompt_cache_enabled else None,
         prompt_cache_retention=(
@@ -4835,7 +4822,6 @@ async def create_message(
         ),
         prompt_cache_enabled=prompt_cache_enabled,
         prefer_responses_api=model.uses_responses_api is True,
-        config=config,
         openrouter_endpoint=model.openrouter_endpoint,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
@@ -5668,18 +5654,12 @@ async def edit_message(
     )
 
     provider_config = require_provider_enabled(session, chat.org_id, model.provider)
-    config = None
-    if provider_config and provider_config.config_json:
-        try:
-            config = json.loads(provider_config.config_json)
-        except json.JSONDecodeError:
-            pass
     prompt_cache_enabled = not chat.is_incognito
-    provider = get_provider(
+    provider = get_provider_for_org(
+        session,
+        chat.org_id,
         model.provider,
-        api_key=provider_config.api_key_override if provider_config else None,
-        base_url=provider_config.base_url_override if provider_config else None,
-        endpoint=provider_config.endpoint_override if provider_config else None,
+        org_config=provider_config,
         reasoning_effort=payload.reasoning_effort or model.reasoning_effort,
         prompt_cache_key=f"chat:{chat.id}" if prompt_cache_enabled else None,
         prompt_cache_retention=(
@@ -5687,7 +5667,6 @@ async def edit_message(
         ),
         prompt_cache_enabled=prompt_cache_enabled,
         prefer_responses_api=model.uses_responses_api is True,
-        config=config,
         openrouter_endpoint=model.openrouter_endpoint,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)

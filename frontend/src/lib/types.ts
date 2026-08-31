@@ -421,6 +421,8 @@ export type EnvKeyDiagnosis = {
   required: boolean
   detail?: string | null
   value?: string | null
+  stored_in_db?: boolean
+  can_remove_from_env?: boolean
 }
 
 export type DiskUsageInfo = {
@@ -562,6 +564,7 @@ export type ProviderConfig = {
   endpoint_override?: string | null
   api_key_override?: string
   config_json?: string | null
+  config_json_set?: boolean
   has_global_config: boolean
 }
 
@@ -571,6 +574,39 @@ export type ProviderConfigUpdate = {
   api_key_override?: string | null
   base_url_override?: string | null
   endpoint_override?: string | null
+  config_json?: string | null
+}
+
+export type InstanceProvider = {
+  provider: string
+  display_name: string | null
+  provider_type: "builtin" | "openai_compatible"
+  is_enabled: boolean
+  api_key_set: boolean
+  base_url: string | null
+  endpoint: string | null
+  config_json_set: boolean
+  migrated_from_env: boolean
+  is_configured: boolean
+}
+
+export type InstanceProviderCreate = {
+  provider: string
+  display_name?: string | null
+  provider_type?: "builtin" | "openai_compatible"
+  api_key?: string | null
+  base_url?: string | null
+  endpoint?: string | null
+  config_json?: string | null
+  is_enabled?: boolean
+}
+
+export type InstanceProviderUpdate = {
+  display_name?: string | null
+  is_enabled?: boolean
+  api_key?: string | null
+  base_url?: string | null
+  endpoint?: string | null
   config_json?: string | null
 }
 

@@ -17,7 +17,16 @@ from groq import Groq
 from openai import OpenAI
 
 from app.core.config import settings
+from app.services.instance_providers import ResolvedCredentials
 from app.services.model_capabilities import infer_capabilities_for_model
+
+_MODEL_SUGGESTIONS_CACHE: tuple[float, list[dict[str, object]]] | None = None
+_MODEL_SUGGESTIONS_CACHE_TTL_SECONDS = 300
+
+
+def invalidate_model_suggestions_cache() -> None:
+    global _MODEL_SUGGESTIONS_CACHE
+    _MODEL_SUGGESTIONS_CACHE = None
 
 
 _VERTEX_KNOWN_GEMINI_MODELS = (
@@ -32,8 +41,6 @@ _VERTEX_KNOWN_GEMINI_MODELS = (
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite-001",
 )
-_MODEL_SUGGESTIONS_CACHE_TTL_SECONDS = 300
-_MODEL_SUGGESTIONS_CACHE: tuple[float, list[dict[str, object]]] | None = None
 _OPENROUTER_ENDPOINTS_CACHE_TTL_SECONDS = 300
 _OPENROUTER_ENDPOINTS_CACHE: dict[str, tuple[float, list[dict[str, object]], str | None]] = {}
 
@@ -149,11 +156,15 @@ def _extract_vertex_scopes(config: dict[str, object]) -> list[str]:
     return []
 
 
-def _openai_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.openai_api_key:
+def _openai_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    api_key = (creds.api_key if creds else None) or settings.openai_api_key
+    base_url = (creds.base_url if creds else None) or settings.openai_base_url
+    if not api_key:
         return [], "OPENAI_API_KEY not set"
     try:
-        client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url)
         models = client.models.list()
         items = []
         for model in models.data:
@@ -188,11 +199,15 @@ def _openai_models() -> tuple[list[dict[str, object]], str | None]:
         return [], f"OpenAI error: {exc}"
 
 
-def _groq_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.groq_api_key:
+def _groq_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    api_key = (creds.api_key if creds else None) or settings.groq_api_key
+    base_url = (creds.base_url if creds else None) or settings.groq_base_url
+    if not api_key:
         return [], "GROQ_API_KEY not set"
     try:
-        client = Groq(api_key=settings.groq_api_key, base_url=settings.groq_base_url)
+        client = Groq(api_key=api_key, base_url=base_url)
         models = client.models.list()
         items = []
         for model in models.data:
@@ -212,11 +227,14 @@ def _groq_models() -> tuple[list[dict[str, object]], str | None]:
         return [], f"Groq error: {exc}"
 
 
-def _gemini_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.gemini_api_key:
+def _gemini_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    api_key = (creds.api_key if creds else None) or settings.gemini_api_key
+    if not api_key:
         return [], "GEMINI_API_KEY not set"
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = genai.Client(api_key=api_key)
         items = []
         for model in client.models.list():
             name = _normalize_gemini_name(getattr(model, "name", "") or "")
@@ -254,13 +272,15 @@ def _gemini_models() -> tuple[list[dict[str, object]], str | None]:
         return [], f"Gemini error: {exc}"
 
 
-def _anthropic_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.anthropic_api_key:
+def _anthropic_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    api_key = (creds.api_key if creds else None) or settings.anthropic_api_key
+    base_url = (creds.base_url if creds else None) or settings.anthropic_base_url
+    if not api_key:
         return [], "ANTHROPIC_API_KEY not set"
     try:
-        client = Anthropic(
-            api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url
-        )
+        client = Anthropic(api_key=api_key, base_url=base_url)
         models = client.models.list()
         items = []
         for model in models.data:
@@ -285,10 +305,14 @@ def _anthropic_models() -> tuple[list[dict[str, object]], str | None]:
         return [], f"Anthropic error: {exc}"
 
 
-def _azure_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.azure_openai_api_key or not settings.azure_openai_endpoint:
+def _azure_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    api_key = (creds.api_key if creds else None) or settings.azure_openai_api_key
+    endpoint = (creds.endpoint if creds else None) or settings.azure_openai_endpoint
+    if not api_key or not endpoint:
         return [], "AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not set"
-    endpoint = settings.azure_openai_endpoint.strip().rstrip("/")
+    endpoint = endpoint.strip().rstrip("/")
     endpoint = re.sub(r"/openai(?:/.*)?$", "", endpoint, flags=re.IGNORECASE)
     if not endpoint.startswith("http"):
         return [], "AZURE_OPENAI_ENDPOINT must be a full URL (https://...)"
@@ -307,7 +331,7 @@ def _azure_models() -> tuple[list[dict[str, object]], str | None]:
         url = f"{endpoint}/openai/deployments?api-version={api_version}"
         request = urllib.request.Request(
             url,
-            headers={"api-key": settings.azure_openai_api_key},
+            headers={"api-key": api_key},
         )
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -358,12 +382,15 @@ def _azure_models() -> tuple[list[dict[str, object]], str | None]:
     )
 
 
-def _openrouter_models() -> tuple[list[dict[str, object]], str | None]:
-    if not settings.openrouter_api_key:
+def _openrouter_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    api_key = (creds.api_key if creds else None) or settings.openrouter_api_key
+    if not api_key:
         return [], "OPENROUTER_API_KEY not set"
     try:
         client = OpenAI(
-            api_key=settings.openrouter_api_key,
+            api_key=api_key,
             base_url="https://openrouter.ai/api/v1",
         )
         models = client.models.list()
@@ -482,9 +509,11 @@ def fetch_openrouter_endpoints(
         return [], f"OpenRouter error: {exc}"
 
 
-def _vertex_models() -> tuple[list[dict[str, object]], str | None]:
-    vertex_config: dict[str, object] = {}
-    if settings.gemini_vertex_json:
+def _vertex_models(
+    creds: ResolvedCredentials | None = None,
+) -> tuple[list[dict[str, object]], str | None]:
+    vertex_config: dict[str, object] = dict(creds.config or {}) if creds and creds.config else {}
+    if not vertex_config and settings.gemini_vertex_json:
         try:
             parsed = json.loads(settings.gemini_vertex_json)
             if isinstance(parsed, dict):
@@ -600,6 +629,31 @@ def _dedupe(items: Iterable[dict[str, object]]) -> list[dict[str, object]]:
     return results
 
 
+def _openai_compatible_models(
+    creds: ResolvedCredentials,
+) -> tuple[list[dict[str, object]], str | None]:
+    if not creds.api_key or not creds.base_url:
+        return [], "API key and base URL required"
+    try:
+        client = OpenAI(api_key=creds.api_key, base_url=creds.base_url)
+        models = client.models.list()
+        items = []
+        for model in models.data:
+            inferred_input, inferred_output = _infer_image_support(model.id)
+            items.append(
+                {
+                    "model_name": model.id,
+                    "display_name": model.id,
+                    "context_length": getattr(model, "context_length", None),
+                    "supports_image_input": inferred_input,
+                    "supports_image_output": inferred_output,
+                }
+            )
+        return items, None
+    except Exception as exc:  # pragma: no cover - external API call
+        return [], f"Provider error: {exc}"
+
+
 def get_model_suggestions(*, use_cache: bool = True) -> list[dict[str, object]]:
     global _MODEL_SUGGESTIONS_CACHE
     now = time.time()
@@ -608,25 +662,36 @@ def get_model_suggestions(*, use_cache: bool = True) -> list[dict[str, object]]:
         if expires_at > now:
             return copy.deepcopy(cached)
 
-    providers = [
-        ("openai", _openai_models),
-        ("azure", _azure_models),
-        ("gemini", _gemini_models),
-        ("groq", _groq_models),
-        ("anthropic", _anthropic_models),
-        ("openrouter", _openrouter_models),
-        ("vertex", _vertex_models),
-    ]
+    from app.db.session import SessionLocal
+    from app.services.instance_providers import list_provider_ids, resolve_instance_credentials
+
+    provider_fns = {
+        "openai": _openai_models,
+        "azure": _azure_models,
+        "gemini": _gemini_models,
+        "groq": _groq_models,
+        "anthropic": _anthropic_models,
+        "openrouter": _openrouter_models,
+        "vertex": _vertex_models,
+    }
     results: list[dict[str, object]] = []
-    for provider, fn in providers:
-        models, error = fn()
-        results.append(
-            {
-                "provider": provider,
-                "models": _dedupe(models),
-                "error": error,
-            }
-        )
+    with SessionLocal() as session:
+        for provider in list_provider_ids(session):
+            creds = resolve_instance_credentials(session, provider)
+            fn = provider_fns.get(provider)
+            if fn:
+                models, error = fn(creds)
+            elif creds.provider_type == "openai_compatible":
+                models, error = _openai_compatible_models(creds)
+            else:
+                continue
+            results.append(
+                {
+                    "provider": provider,
+                    "models": _dedupe(models),
+                    "error": error,
+                }
+            )
     if use_cache:
         _MODEL_SUGGESTIONS_CACHE = (now + _MODEL_SUGGESTIONS_CACHE_TTL_SECONDS, results)
     return copy.deepcopy(results)

@@ -19,6 +19,9 @@ import type {
   CoworkDocument,
   ProviderConfig,
   ProviderConfigUpdate,
+  InstanceProvider,
+  InstanceProviderCreate,
+  InstanceProviderUpdate,
   OrgAuthSettings,
   OrgAuthSettingsUpdate,
   UsageSlice,
@@ -524,6 +527,24 @@ export const usageApi = {
 
 export const systemDiagnosisApi = {
   get: () => apiFetch<SystemDiagnosis>("/admin/system-diagnosis"),
+}
+
+export const instanceProviderApi = {
+  list: () => apiFetch<InstanceProvider[]>("/admin/instance-providers"),
+  create: (payload: InstanceProviderCreate) =>
+    apiFetch<InstanceProvider>("/admin/instance-providers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  update: (provider: string, payload: InstanceProviderUpdate) =>
+    apiFetch<InstanceProvider>(`/admin/instance-providers/${encodeURIComponent(provider)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  remove: (provider: string) =>
+    apiFetch<void>(`/admin/instance-providers/${encodeURIComponent(provider)}`, {
+      method: "DELETE",
+    }),
 }
 
 export const modelApi = {

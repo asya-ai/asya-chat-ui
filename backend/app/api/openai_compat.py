@@ -17,7 +17,7 @@ from app.services.org_service import require_provider_enabled
 from app.services.team_service import allowed_model_ids
 from app.services.model_capabilities import persist_responses_api_discovery
 from app.services.providers.base import ChatToolSpec
-from app.services.providers.registry import get_provider
+from app.services.instance_providers import get_provider_for_org
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 logger = logging.getLogger(__name__)
@@ -500,11 +500,11 @@ async def chat_completions(
 
     provider_config = require_provider_enabled(session, org_id, model.provider)
     prompt_cache_key = f"api:{org_id}:{auth.user.id}"
-    provider = get_provider(
+    provider = get_provider_for_org(
+        session,
+        org_id,
         model.provider,
-        api_key=provider_config.api_key_override if provider_config else None,
-        base_url=provider_config.base_url_override if provider_config else None,
-        endpoint=provider_config.endpoint_override if provider_config else None,
+        org_config=provider_config,
         reasoning_effort=model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,

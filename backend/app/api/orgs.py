@@ -135,7 +135,7 @@ class ProviderConfigRead(BaseModel):
     api_key_override_set: bool
     base_url_override: str | None
     endpoint_override: str | None
-    config_json: str | None
+    config_json_set: bool
     has_global_config: bool
 
 
@@ -148,12 +148,17 @@ class ProviderConfigUpdate(BaseModel):
     config_json: str | None = None
 
 
-from app.core.config import settings
+from app.services.instance_providers import (
+    has_instance_provider_config,
+    list_provider_ids,
+)
 
-PROVIDERS = ["openai", "azure", "gemini", "groq", "anthropic", "openrouter", "vertex"]
 
+def _has_global_config(session: Session, provider: str) -> bool:
+    if has_instance_provider_config(session, provider):
+        return True
+    from app.core.config import settings
 
-def _has_global_config(provider: str) -> bool:
     match provider:
         case "openai":
             return bool(settings.openai_api_key)
@@ -755,7 +760,7 @@ def list_provider_configs(
     ).all()
     by_provider = {config.provider: config for config in configs}
     results: list[ProviderConfigRead] = []
-    for provider in PROVIDERS:
+    for provider in list_provider_ids(session):
         config = by_provider.get(provider)
         results.append(
             ProviderConfigRead(
@@ -764,8 +769,8 @@ def list_provider_configs(
                 api_key_override_set=bool(config and config.api_key_override),
                 base_url_override=config.base_url_override if config else None,
                 endpoint_override=config.endpoint_override if config else None,
-                config_json=config.config_json if config else None,
-                has_global_config=_has_global_config(provider),
+                config_json_set=bool(config and config.config_json),
+                has_global_config=_has_global_config(session, provider),
             )
         )
     return results
@@ -872,8 +877,10 @@ def update_provider_configs(
 
     _ensure_org_admin_or_super(session, org_uuid, current_user)
 
+    allowed_providers = set(list_provider_ids(session))
+
     for item in payload:
-        if item.provider not in PROVIDERS:
+        if item.provider not in allowed_providers:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Unsupported provider",
@@ -899,7 +906,7 @@ def update_provider_configs(
         if item.endpoint_override is not None:
             config.endpoint_override = item.endpoint_override.strip() or None
         if item.config_json is not None:
-            config.config_json = item.config_json.strip() or None
+            config.config_json = encrypt_secret(item.config_json.strip() or None)
         session.add(config)
 
     session.commit()

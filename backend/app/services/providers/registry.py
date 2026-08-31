@@ -21,7 +21,18 @@ def get_provider(
     config: dict | None = None,
     extra_body: dict | None = None,
     openrouter_endpoint: str | None = None,
+    openai_compatible: bool = False,
 ) -> ChatProvider:
+    if openai_compatible:
+        return OpenAIProvider(
+            api_key=api_key,
+            base_url=base_url,
+            reasoning_effort=reasoning_effort,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
+            prompt_cache_enabled=prompt_cache_enabled,
+            prefer_responses_api=prefer_responses_api,
+        )
     match provider:
         case "openai":
             return OpenAIProvider(

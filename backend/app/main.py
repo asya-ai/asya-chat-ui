@@ -36,7 +36,28 @@ for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from app.db.session import SessionLocal
+    from app.services.instance_providers import migrate_env_providers
     from app.services.mcp import refresh_mcp_cache
+
+    try:
+        with SessionLocal() as session:
+            migrated = migrate_env_providers(session)
+            if migrated:
+                logging.getLogger(__name__).info(
+                    "Migrated instance provider credentials from env: %s",
+                    ", ".join(migrated),
+                )
+            from app.services.instance_providers import reencrypt_plaintext_instance_secrets
+
+            reencrypt_plaintext_instance_secrets(session)
+            from app.services.instance_providers import reencrypt_plaintext_org_provider_secrets
+
+            reencrypt_plaintext_org_provider_secrets(session)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to migrate instance provider credentials from env"
+        )
 
     try:
         await refresh_mcp_cache(force=True)

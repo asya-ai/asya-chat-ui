@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.api.admin import router as admin_router
+from app.api.instance_providers import router as instance_providers_router
 from app.api.auth import router as auth_router
 from app.api.api_keys import router as api_keys_router
 from app.api.agents import router as agents_router
@@ -18,6 +19,7 @@ from app.models import User
 
 api_router = APIRouter()
 api_router.include_router(admin_router)
+api_router.include_router(instance_providers_router)
 api_router.include_router(auth_router)
 api_router.include_router(api_keys_router)
 api_router.include_router(agents_router)

@@ -437,7 +437,7 @@ export const OrgPage = () => {
               config.api_key_override ||
               config.base_url_override ||
               config.endpoint_override ||
-              config.config_json
+              config.config_json_set
             ) {
               mode = "override"
             } else if (!config.has_global_config) {
@@ -732,8 +732,9 @@ export const OrgPage = () => {
   }
 
   const providerOptions = useMemo(() => {
-    return [...PROVIDERS]
-  }, [])
+    const fromSuggestions = modelSuggestions.map((item) => item.provider)
+    return Array.from(new Set([...PROVIDERS, ...fromSuggestions]))
+  }, [modelSuggestions])
   const currentProviderSuggestions = useMemo(() => {
     const entry = modelSuggestions.find((item) => item.provider === modelProvider)
     return entry?.models ?? []
@@ -987,7 +988,8 @@ export const OrgPage = () => {
         // If "override", mode "override".
         return {
           ...up,
-          api_key_override: "", // Always clear on save as it's secret
+          api_key_override: "",
+          config_json: "",
           mode: config.mode,
         }
       })
@@ -1086,6 +1088,12 @@ export const OrgPage = () => {
       href: "/settings/models",
       visible: isSuperAdmin,
       active: activeSection === "models",
+    },
+    {
+      label: t("instance_providers_title"),
+      href: "/settings/providers",
+      visible: isSuperAdmin,
+      active: location.pathname.startsWith("/settings/providers"),
     },
     {
       label: t("diagnosis_title"),
@@ -2198,7 +2206,11 @@ export const OrgPage = () => {
                     />
                     {config.provider === "vertex" ? (
                       <Textarea
-                        placeholder={t("org_provider_vertex_config_placeholder")}
+                        placeholder={
+                          config.config_json_set
+                            ? t("org_provider_override_set")
+                            : t("org_provider_vertex_config_placeholder")
+                        }
                         value={config.config_json ?? ""}
                         onChange={(event) =>
                           updateProviderField(

@@ -21,7 +21,7 @@ from app.services.org_service import (
     require_super_admin,
 )
 from app.services.team_service import allowed_model_ids, seed_default_team_model
-from app.services.providers.registry import get_provider
+from app.services.instance_providers import get_provider_for_org
 
 router = APIRouter(prefix="/models", tags=["models"])
 _VERTEX_INVOCATION_CACHE_TTL_SECONDS = 600
@@ -147,20 +147,11 @@ def _normalize_provider_model_name(provider: str, model_name: str) -> str:
 
 def _validate_vertex_model_invokable(session: Session, org_id: UUID, model_name: str) -> None:
     provider_config = require_provider_enabled(session, org_id, "vertex")
-    config: dict = {}
-    if provider_config and provider_config.config_json:
-        try:
-            parsed = json.loads(provider_config.config_json)
-            if isinstance(parsed, dict):
-                config = parsed
-        except Exception:
-            config = {}
-    provider = get_provider(
+    provider = get_provider_for_org(
+        session,
+        org_id,
         "vertex",
-        api_key=provider_config.api_key_override if provider_config else None,
-        base_url=provider_config.base_url_override if provider_config else None,
-        endpoint=provider_config.endpoint_override if provider_config else None,
-        config=config,
+        org_config=provider_config,
     )
     try:
         provider.client.models.generate_content(

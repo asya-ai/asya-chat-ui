@@ -222,6 +222,12 @@ export const DiagnosisPage = () => {
       active: location.pathname.startsWith("/settings/models"),
     },
     {
+      label: t("instance_providers_title"),
+      href: "/settings/providers",
+      visible: isSuperAdmin,
+      active: location.pathname.startsWith("/settings/providers"),
+    },
+    {
       label: t("diagnosis_title"),
       href: "/settings/diagnosis",
       visible: isSuperAdmin,
@@ -708,6 +714,16 @@ export const DiagnosisPage = () => {
                           <span className="ml-2 text-xs text-muted-foreground">
                             ({t("diagnosis_required")})
                           </span>
+                        ) : null}
+                        {item.can_remove_from_env ? (
+                          <Badge variant="secondary" className="ml-2 align-middle">
+                            {t("diagnosis_can_remove_env")}
+                          </Badge>
+                        ) : null}
+                        {item.stored_in_db && !item.can_remove_from_env ? (
+                          <Badge variant="outline" className="ml-2 align-middle">
+                            {t("diagnosis_migrated_env_badge")}
+                          </Badge>
                         ) : null}
                       </TableCell>
                       <TableCell>

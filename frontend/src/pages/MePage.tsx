@@ -275,6 +275,12 @@ export const MePage = () => {
       active: location.pathname.startsWith("/settings/models"),
     },
     {
+      label: t("instance_providers_title"),
+      href: "/settings/providers",
+      visible: isSuperAdmin,
+      active: location.pathname.startsWith("/settings/providers"),
+    },
+    {
       label: t("diagnosis_title"),
       href: "/settings/diagnosis",
       visible: isSuperAdmin,

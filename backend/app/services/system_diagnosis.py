@@ -53,6 +53,8 @@ class EnvKeyDiagnosis(BaseModel):
     required: bool = False
     detail: str | None = None
     value: str | None = None
+    stored_in_db: bool = False
+    can_remove_from_env: bool = False
 
 
 class DiskUsageInfo(BaseModel):
@@ -1715,54 +1717,78 @@ def _provider_snapshot(
 
 
 def _collect_providers() -> list[ProviderSnapshot]:
-    return [
-        _provider_snapshot(
-            "openai",
-            configured=bool(settings.openai_api_key),
-            list_fn=_openai_models,
-        ),
-        _provider_snapshot(
-            "azure",
-            configured=bool(settings.azure_openai_api_key and settings.azure_openai_endpoint),
-            list_fn=_azure_models,
-        ),
-        _provider_snapshot(
-            "gemini",
-            configured=bool(settings.gemini_api_key),
-            list_fn=_gemini_models,
-        ),
-        _provider_snapshot(
-            "groq",
-            configured=bool(settings.groq_api_key),
-            list_fn=_groq_models,
-        ),
-        _provider_snapshot(
-            "anthropic",
-            configured=bool(settings.anthropic_api_key),
-            list_fn=_anthropic_models,
-        ),
-        _provider_snapshot(
-            "openrouter",
-            configured=bool(settings.openrouter_api_key),
-            list_fn=_openrouter_models,
-        ),
-        _provider_snapshot(
-            "vertex",
-            configured=bool(
-                settings.google_vertex_project
-                or (
-                    settings.gemini_vertex_json
-                    and settings.gemini_vertex_json.strip() not in {"", "{}"}
+    from app.db.session import SessionLocal
+    from app.services.instance_providers import (
+        list_provider_ids,
+        provider_is_configured,
+        resolve_instance_credentials,
+    )
+    from app.services.model_suggestions import _openai_compatible_models
+
+    provider_fns = {
+        "openai": _openai_models,
+        "azure": _azure_models,
+        "gemini": _gemini_models,
+        "groq": _groq_models,
+        "anthropic": _anthropic_models,
+        "openrouter": _openrouter_models,
+        "vertex": _vertex_models,
+    }
+
+    def _make_list_fn(list_fn, creds):
+        if list_fn:
+            return lambda: list_fn(creds)
+        if creds.provider_type == "openai_compatible":
+            return lambda: _openai_compatible_models(creds)
+        return None
+
+    snapshots: list[ProviderSnapshot] = []
+    with SessionLocal() as session:
+        for provider in list_provider_ids(session):
+            creds = resolve_instance_credentials(session, provider)
+            configured = provider_is_configured(creds, provider)
+            list_fn = _make_list_fn(provider_fns.get(provider), creds)
+            snapshots.append(
+                _provider_snapshot(
+                    provider,
+                    configured=configured,
+                    list_fn=list_fn,
                 )
-            ),
-            list_fn=_vertex_models,
-        ),
+            )
+
+    snapshots.append(
         _provider_snapshot(
             "perplexity",
             configured=bool(settings.perplexity_api_key),
             check_fn=_check_perplexity,
-        ),
-    ]
+        )
+    )
+    return snapshots
+
+
+def _annotate_migrated_env_keys(keys: list[EnvKeyDiagnosis]) -> list[EnvKeyDiagnosis]:
+    from app.db.session import SessionLocal
+    from app.services.instance_providers import env_key_stored_in_db
+
+    with SessionLocal() as session:
+        annotated: list[EnvKeyDiagnosis] = []
+        for item in keys:
+            stored = env_key_stored_in_db(session, item.key)
+            can_remove = stored and item.status in {"ok", "invalid"}
+            detail = item.detail
+            if can_remove:
+                suffix = "Imported to database — you can remove this from .env"
+                detail = f"{detail}. {suffix}" if detail else suffix
+            annotated.append(
+                item.model_copy(
+                    update={
+                        "stored_in_db": stored,
+                        "can_remove_from_env": can_remove,
+                        "detail": detail,
+                    }
+                )
+            )
+        return annotated
 
 
 def _probe_mcp_server(server: Any) -> McpServerCheck:
@@ -2024,7 +2050,7 @@ def diagnose_system() -> SystemDiagnosis:
             elif kind == "workers":
                 workers = value
 
-    keys = [item for item in results if item is not None]
+    keys = _annotate_migrated_env_keys([item for item in results if item is not None])
     summary = {"ok": 0, "invalid": 0, "missing": 0}
     for item in keys:
         summary[item.status] = summary.get(item.status, 0) + 1

@@ -16,6 +16,7 @@ from sqlalchemy import or_
 
 from app.core.config import settings
 from app.models import ChatMessage, ChatMessageAttachment, ChatModel, OrgModel, OrgProviderConfig
+from app.services.instance_providers import resolve_effective_credentials
 from app.services.org_service import require_provider_enabled
 from app.services.file_storage import attachment_bytes
 from app.services.providers.base import ChatUsage
@@ -256,24 +257,17 @@ async def generate_image(
 
     if model.provider in {"openai", "azure"}:
         provider_config = require_provider_enabled(session, context.org_id, model.provider)
+        creds = resolve_effective_credentials(session, model.provider, provider_config)
         if model.provider == "azure":
             client = AsyncAzureOpenAI(
-                api_key=provider_config.api_key_override
-                if provider_config
-                else settings.azure_openai_api_key,
+                api_key=creds.api_key,
                 api_version=settings.azure_openai_api_version,
-                azure_endpoint=provider_config.endpoint_override
-                if provider_config and provider_config.endpoint_override
-                else settings.azure_openai_endpoint,
+                azure_endpoint=creds.endpoint,
             )
         else:
             client = AsyncOpenAI(
-                api_key=provider_config.api_key_override
-                if provider_config
-                else settings.openai_api_key,
-                base_url=provider_config.base_url_override
-                if provider_config
-                else settings.openai_base_url,
+                api_key=creds.api_key,
+                base_url=creds.base_url or settings.openai_base_url,
             )
         try:
             request_kwargs: dict[str, Any] = {
@@ -308,7 +302,8 @@ async def generate_image(
 
     if model.provider == "gemini":
         provider_config = require_provider_enabled(session, context.org_id, model.provider)
-        client = genai.Client(api_key=provider_config.api_key_override if provider_config else settings.gemini_api_key)
+        creds = resolve_effective_credentials(session, model.provider, provider_config)
+        client = genai.Client(api_key=creds.api_key)
         response = client.models.generate_content(
             model=model.model_name,
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
@@ -451,24 +446,17 @@ async def edit_image(
 
     if model.provider in {"openai", "azure"}:
         provider_config = require_provider_enabled(session, context.org_id, model.provider)
+        creds = resolve_effective_credentials(session, model.provider, provider_config)
         if model.provider == "azure":
             client = AsyncAzureOpenAI(
-                api_key=provider_config.api_key_override
-                if provider_config
-                else settings.azure_openai_api_key,
+                api_key=creds.api_key,
                 api_version=settings.azure_openai_api_version,
-                azure_endpoint=provider_config.endpoint_override
-                if provider_config and provider_config.endpoint_override
-                else settings.azure_openai_endpoint,
+                azure_endpoint=creds.endpoint,
             )
         else:
             client = AsyncOpenAI(
-                api_key=provider_config.api_key_override
-                if provider_config
-                else settings.openai_api_key,
-                base_url=provider_config.base_url_override
-                if provider_config
-                else settings.openai_base_url,
+                api_key=creds.api_key,
+                base_url=creds.base_url or settings.openai_base_url,
             )
         try:
             image_bytes = base64.b64decode(image_base64)
@@ -542,7 +530,8 @@ async def edit_image(
 
     if model.provider == "gemini":
         provider_config = require_provider_enabled(session, context.org_id, model.provider)
-        client = genai.Client(api_key=provider_config.api_key_override if provider_config else settings.gemini_api_key)
+        creds = resolve_effective_credentials(session, model.provider, provider_config)
+        client = genai.Client(api_key=creds.api_key)
         mime_type = image_content_type or "image/png"
         response = client.models.generate_content(
             model=model.model_name,

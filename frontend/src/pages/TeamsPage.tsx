@@ -246,6 +246,12 @@ export const TeamsPage = () => {
       active: false,
     },
     {
+      label: t("instance_providers_title"),
+      href: "/settings/providers",
+      visible: isSuperAdmin,
+      active: false,
+    },
+    {
       label: t("diagnosis_title"),
       href: "/settings/diagnosis",
       visible: isSuperAdmin,

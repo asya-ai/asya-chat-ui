@@ -78,7 +78,7 @@ from app.services.langchain_runtime import (
 )
 from app.services.generation_event_bus import publish_generation_event
 from app.services.providers.base import ChatUsage
-from app.services.providers.registry import get_provider
+from app.services.instance_providers import get_provider_for_org
 from app.services.tools.image_tool import (
     ImageToolContext,
     edit_image,
@@ -630,12 +630,6 @@ async def _run_generation(task_id: UUID) -> None:
 
         provider: Any | None = None
         provider_config = require_provider_enabled(session, chat.org_id, model.provider)
-        config = None
-        if provider_config and provider_config.config_json:
-            try:
-                config = json.loads(provider_config.config_json)
-            except json.JSONDecodeError:
-                config = None
 
         prompt_cache_enabled = not chat.is_incognito
         requested_reasoning_effort = (
@@ -643,11 +637,11 @@ async def _run_generation(task_id: UUID) -> None:
             if isinstance(task.metadata_json, dict)
             else None
         )
-        provider = get_provider(
+        provider = get_provider_for_org(
+            session,
+            chat.org_id,
             model.provider,
-            api_key=provider_config.api_key_override if provider_config else None,
-            base_url=provider_config.base_url_override if provider_config else None,
-            endpoint=provider_config.endpoint_override if provider_config else None,
+            org_config=provider_config,
             reasoning_effort=requested_reasoning_effort or model.reasoning_effort,
             prompt_cache_key=f"chat:{chat.id}" if prompt_cache_enabled else None,
             prompt_cache_retention=(
@@ -655,7 +649,6 @@ async def _run_generation(task_id: UUID) -> None:
             ),
             prompt_cache_enabled=prompt_cache_enabled,
             prefer_responses_api=model.uses_responses_api is True,
-            config=config,
             openrouter_endpoint=model.openrouter_endpoint,
         )
 

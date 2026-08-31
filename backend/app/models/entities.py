@@ -259,6 +259,24 @@ class OrgProviderConfig(SQLModel, table=True):
     org: Org = Relationship()
 
 
+class InstanceProviderConfig(SQLModel, table=True):
+    __tablename__ = "instance_provider_configs"
+    __table_args__ = (UniqueConstraint("provider", name="uq_instance_provider_configs_provider"),)
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    provider: str = Field(index=True)
+    display_name: Optional[str] = Field(default=None)
+    provider_type: str = Field(default="builtin", index=True)
+    is_enabled: bool = Field(default=True)
+    api_key: Optional[str] = Field(default=None)
+    base_url: Optional[str] = Field(default=None)
+    endpoint: Optional[str] = Field(default=None)
+    config_json: Optional[str] = Field(default=None)
+    migrated_from_env: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class Chat(SQLModel, table=True):
     __tablename__ = "chats"
 
