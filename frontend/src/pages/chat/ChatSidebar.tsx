@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { Link, useNavigate, useParams } from "@tanstack/react-router"
 import { ChevronDown, ChevronRight, FileText, Loader2, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
 import { agentApi, promptApi } from "@/lib/api"
@@ -122,7 +122,7 @@ export const ChatSidebar = ({
   onRequestClose,
 }: ChatSidebarProps) => {
   const navigate = useNavigate()
-  const { chatId: routeChatId } = useParams()
+  const { chatId: routeChatId } = useParams({ strict: false })
   const { locale, t } = useI18n()
   const { data: orgs = [] } = useOrgsMine()
   const orgId = orgStore.get() ?? orgs[0]?.id ?? null
@@ -366,7 +366,7 @@ export const ChatSidebar = ({
 
   const selectAgent = (agent: Agent) => {
     onRequestClose?.()
-    navigate(`/projects/${encodeURIComponent(agent.id)}`)
+    navigate({ href: `/projects/${encodeURIComponent(agent.id)}` })
   }
 
   const openCreateProject = () => {
@@ -392,7 +392,7 @@ export const ChatSidebar = ({
       setCreateOpen(false)
       setHasNewName(false)
       onRequestClose?.()
-      navigate(`/projects/${created.id}`)
+      navigate({ href: `/projects/${created.id}` })
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : t("project_create_failed"))
     } finally {
@@ -420,7 +420,7 @@ export const ChatSidebar = ({
     composerDraftStore.clear(chatIdToDelete)
     setDeleteConfirmChat(null)
     if (currentChatId === chatIdToDelete) {
-      navigate("/chat", { replace: true })
+      navigate({ to: "/chat/{-$chatId}", replace: true })
     }
   }
 

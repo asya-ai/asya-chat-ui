@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useLocation, useNavigate } from "react-router"
+import { useLocation, useNavigate } from "@tanstack/react-router"
 
 import { apiKeyApi, authApi, memoryApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -114,7 +114,7 @@ export const MePage = () => {
       .catch(() => null)
       .finally(() => {
         clearToken()
-        navigate("/login", { replace: true })
+        navigate({ to: "/login", replace: true })
       })
   }
 
@@ -293,7 +293,7 @@ export const MePage = () => {
       title={t("me_title")}
       items={navItems}
       actions={
-        <Button variant="outline" onClick={() => navigate("/chat")}>
+        <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })}>
           {t("common_back_to_chat")}
         </Button>
       }

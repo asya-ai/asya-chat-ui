@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type SetStateAction } from "react"
-import { useLocation, useNavigate } from "react-router"
+import { useLocation, useNavigate } from "@tanstack/react-router"
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { authApi, orgApi, usageApi } from "@/lib/api"
@@ -102,7 +102,7 @@ export const UsagePage = () => {
   useEffect(() => {
     if (!authChecked) return
     if (!isSuperAdmin && !orgId) {
-      navigate("/settings")
+      navigate({ to: "/settings" })
       return
     }
     const month = selectedMonth === "all" ? undefined : selectedMonth
@@ -584,7 +584,7 @@ export const UsagePage = () => {
               })}
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => navigate("/chat")}>
+          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })}>
             {t("common_back_to_chat")}
           </Button>
         </div>

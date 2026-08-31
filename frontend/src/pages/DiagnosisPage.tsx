@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useLocation, useNavigate } from "react-router"
+import { useLocation, useNavigate } from "@tanstack/react-router"
 
 import { authApi, systemDiagnosisApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
@@ -121,14 +121,14 @@ export const DiagnosisPage = () => {
       })
       .catch(() => {
         setAuthChecked(true)
-        navigate("/settings/me")
+        navigate({ to: "/settings/me" })
       })
   }, [navigate])
 
   useEffect(() => {
     if (!authChecked) return
     if (!isSuperAdmin) {
-      navigate("/settings/me")
+      navigate({ to: "/settings/me" })
       return
     }
     void loadDiagnosis()
@@ -246,7 +246,7 @@ export const DiagnosisPage = () => {
           <Button variant="outline" onClick={() => void loadDiagnosis()} disabled={loading}>
             {loading ? t("diagnosis_checking") : t("diagnosis_refresh")}
           </Button>
-          <Button variant="outline" onClick={() => navigate("/chat")}>
+          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })}>
             {t("common_back_to_chat")}
           </Button>
         </div>

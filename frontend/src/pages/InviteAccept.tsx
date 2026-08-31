@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
-import { useNavigate, useSearchParams } from "react-router"
+import { useNavigate, useLocation } from "@tanstack/react-router"
 
 import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -14,8 +14,11 @@ import { Input } from "@/components/ui/input"
 
 export const InviteAcceptPage = () => {
   const navigate = useNavigate()
-  const [params] = useSearchParams()
-  const token = useMemo(() => params.get("token") ?? "", [params])
+  const location = useLocation()
+  const token = useMemo(
+    () => new URLSearchParams(location.searchStr).get("token") ?? "",
+    [location.searchStr]
+  )
   const { setToken } = useAuth()
   const { t } = useI18n()
   const [inviteEmail, setInviteEmail] = useState<string>("")
@@ -46,7 +49,7 @@ export const InviteAcceptPage = () => {
     try {
       const data = await authApi.acceptInvite(token, password)
       setToken(data.access_token)
-      navigate("/chat")
+      navigate({ to: "/chat/{-$chatId}" })
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_invite_failed"))
     } finally {

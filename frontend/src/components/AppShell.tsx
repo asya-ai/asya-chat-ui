@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import { useNavigate } from "react-router"
+import { useNavigate } from "@tanstack/react-router"
 import { Menu, PanelLeftOpen } from "lucide-react"
 
 import { useI18n } from "@/lib/i18n-context"
@@ -31,7 +31,7 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
     <Button
       variant="ghost"
       className="h-14 w-full justify-start gap-1.5 p-1.5 text-left"
-      onClick={() => navigate("/settings/me")}
+      onClick={() => navigate({ to: "/settings/me" })}
     >
       {currentUser?.avatar_url ? (
         <img
@@ -72,15 +72,15 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
       activeSection={activeSection}
       onNewChat={() => {
         onClose?.()
-        navigate("/chat")
+        navigate({ to: "/chat/{-$chatId}" })
       }}
       onOpenHistory={() => {
         onClose?.()
-        navigate("/history")
+        navigate({ to: "/history" })
       }}
       onOpenProjects={() => {
         onClose?.()
-        navigate("/projects")
+        navigate({ to: "/projects" })
       }}
       onRequestClose={onClose}
       footer={footer}

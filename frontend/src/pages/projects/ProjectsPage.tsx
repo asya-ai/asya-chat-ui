@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate } from "react-router"
+import { useNavigate } from "@tanstack/react-router"
 import { FolderOpen, Plus, Search } from "lucide-react"
 
 import { agentApi } from "@/lib/api"
@@ -71,7 +71,7 @@ export const ProjectsPage = () => {
       })
       setCreateOpen(false)
       setHasNewName(false)
-      navigate(`/projects/${created.id}`)
+      navigate({ href: `/projects/${created.id}` })
     } catch (err) {
       setError(err instanceof Error ? err.message : t("project_create_failed"))
     } finally {
@@ -152,11 +152,11 @@ export const ProjectsPage = () => {
               key={project.id}
               role="button"
               tabIndex={0}
-              onClick={() => navigate(`/projects/${project.id}`)}
+              onClick={() => navigate({ href: `/projects/${project.id}` })}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault()
-                  navigate(`/projects/${project.id}`)
+                  navigate({ href: `/projects/${project.id}` })
                 }
               }}
               className="cursor-pointer gap-2 p-4 transition-colors hover:border-primary/60 hover:bg-accent"

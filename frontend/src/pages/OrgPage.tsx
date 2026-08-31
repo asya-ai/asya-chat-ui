@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useLocation, useNavigate } from "react-router"
+import { useLocation, useNavigate } from "@tanstack/react-router"
 
 import { authApi, modelApi, orgApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
@@ -289,11 +289,11 @@ export const OrgPage = () => {
   useEffect(() => {
     if (!authChecked) return
     if (!isSuperAdmin && !isAdmin) {
-      navigate("/settings/me")
+      navigate({ to: "/settings/me" })
       return
     }
     if (!isSuperAdmin && location.pathname !== "/settings/users") {
-      navigate("/settings/users")
+      navigate({ to: "/settings/users" })
     }
   }, [authChecked, isAdmin, isSuperAdmin, navigate, location.pathname])
 
@@ -1125,7 +1125,7 @@ export const OrgPage = () => {
               </SelectContent>
             </Select>
           ) : null}
-          <Button variant="outline" onClick={() => navigate("/chat")} disabled={!selectedOrg}>
+          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })} disabled={!selectedOrg}>
             {t("common_back_to_chat")}
           </Button>
         </div>

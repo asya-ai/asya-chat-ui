@@ -4,12 +4,14 @@ This guide covers building and pushing the four Asya Chat UI images to Docker Hu
 
 ## Images
 
-| Image | Dockerfile | Context | Purpose |
-| --- | --- | --- | --- |
-| `asyaai/asya-chat-ui-backend` | `backend/Dockerfile` | `backend/` | API, migrate, worker, beat |
-| `asyaai/asya-chat-ui-web` | `nginx/Dockerfile` | `frontend/` (+ `nginx/` additional context) | nginx + production frontend |
-| `asyaai/asya-chat-ui-scraper` | `scraper/Dockerfile` | `scraper/` | Puppeteer scrape service |
-| `asyaai/asya-chat-ui-executor` | `backend/executor/Dockerfile` | `backend/executor/` | Python code-execution sandbox |
+
+| Image                          | Dockerfile                    | Context                                     | Purpose                       |
+| ------------------------------ | ----------------------------- | ------------------------------------------- | ----------------------------- |
+| `asyaai/asya-chat-ui-backend`  | `backend/Dockerfile`          | `backend/`                                  | API, migrate, worker, beat    |
+| `asyaai/asya-chat-ui-web`      | `nginx/Dockerfile`            | `frontend/` (+ `nginx/` additional context) | nginx + production frontend   |
+| `asyaai/asya-chat-ui-scraper`  | `scraper/Dockerfile`          | `scraper/`                                  | Puppeteer scrape service      |
+| `asyaai/asya-chat-ui-executor` | `backend/executor/Dockerfile` | `backend/executor/`                         | Python code-execution sandbox |
+
 
 Publish tags:
 
@@ -27,13 +29,12 @@ All release images should include `linux/amd64` and `linux/arm64`.
 docker login -u asyaai
 ```
 
-3. Create these public Hub repositories if they do not exist yet:
-   - `asya-chat-ui-backend`
-   - `asya-chat-ui-web`
-   - `asya-chat-ui-scraper`
-   - `asya-chat-ui-executor`
-
-4. A Buildx builder that supports multi-platform builds and attestations:
+1. Create these public Hub repositories if they do not exist yet:
+  - `asya-chat-ui-backend`
+  - `asya-chat-ui-web`
+  - `asya-chat-ui-scraper`
+  - `asya-chat-ui-executor`
+2. A Buildx builder that supports multi-platform builds and attestations:
 
 ```bash
 docker buildx inspect chatui-publisher >/dev/null 2>&1 ||
@@ -45,6 +46,8 @@ docker buildx inspect chatui-publisher >/dev/null 2>&1 ||
 
 docker buildx use chatui-publisher
 ```
+
+
 
 ## Secret safety
 
@@ -73,8 +76,10 @@ Run from the repository root. Replace the version as needed.
 
 ```bash
 cd /path/to/chatUI
-export VERSION=v0.2.3
+export VERSION=v0.2.8
 ```
+
+
 
 ### 1) Web, scraper, executor
 
@@ -106,6 +111,8 @@ docker buildx build \
   -t asyaai/asya-chat-ui-executor:latest \
   --sbom=true --provenance=mode=max --push backend/executor
 ```
+
+
 
 ### 2) Backend (build architectures separately)
 
@@ -140,6 +147,8 @@ docker buildx imagetools create \
   asyaai/asya-chat-ui-backend:latest-amd64 \
   asyaai/asya-chat-ui-backend:latest-arm64
 ```
+
+
 
 ### 3) Verify
 
@@ -183,13 +192,17 @@ Then retry the failed architecture. Avoid pruning volumes that hold production d
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `push access denied` / `insufficient_scope` | Not logged in or Hub repo missing | `docker login -u asyaai`; create the Hub repositories |
-| `Attestation is not supported for the docker driver` | Using the default Docker driver | Use the `chatui-publisher` `docker-container` builder |
-| `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` | Corepack pulled a different pnpm major | Pin `packageManager` in `frontend/package.json` |
-| Alembic `KeyError` / missing revision | Broken migration graph | Fix `down_revision` links; confirm `uv run alembic heads` |
-| Backend export fails with disk full | Docker VM out of space | Prune BuildKit/cache; rebuild one architecture at a time |
+
+| Symptom                                              | Likely cause                           | Fix                                                       |
+| ---------------------------------------------------- | -------------------------------------- | --------------------------------------------------------- |
+| `push access denied` / `insufficient_scope`          | Not logged in or Hub repo missing      | `docker login -u asyaai`; create the Hub repositories     |
+| `Attestation is not supported for the docker driver` | Using the default Docker driver        | Use the `chatui-publisher` `docker-container` builder     |
+| `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`                  | Corepack pulled a different pnpm major | Pin `packageManager` in `frontend/package.json`           |
+| Alembic `KeyError` / missing revision                | Broken migration graph                 | Fix `down_revision` links; confirm `uv run alembic heads` |
+| Backend export fails with disk full                  | Docker VM out of space                 | Prune BuildKit/cache; rebuild one architecture at a time  |
+
+
+
 
 ## Checklist
 

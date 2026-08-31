@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { useLocation, useNavigate, useParams } from "react-router"
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { ApiError, agentApi, chatApi, configApi, promptApi } from "@/lib/api"
@@ -26,14 +26,21 @@ import type {
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
+import { cn } from "@/lib/utils"
 import { ProviderIcon } from "@/components/ProviderIcon"
 import { PromptFormDialog } from "@/components/PromptFormDialog"
 import { getProviderIconCandidates } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { Image as ImageIcon, Menu, PanelLeftOpen, Plus } from "lucide-react"
+import { Check, ChevronDown, Image as ImageIcon, Menu, PanelLeftOpen, Plus } from "lucide-react"
 import { toast } from "sonner"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -419,10 +426,10 @@ export const ChatPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const [attachmentLimits, setAttachmentLimits] = useState(DEFAULT_ATTACHMENT_LIMITS)
-  const { chatId, shareToken: shareTokenParam } = useParams()
+  const { chatId, shareToken: shareTokenParam } = useParams({ strict: false })
   const activeAgentIdFromQuery = useMemo(
-    () => new URLSearchParams(location.search).get("agent"),
-    [location.search]
+    () => new URLSearchParams(location.searchStr).get("agent"),
+    [location.searchStr]
   )
   const [orgId, setOrgId] = useState<string | null>(orgStore.get())
   const [agents, setAgents] = useState<Agent[]>([])
@@ -1479,7 +1486,7 @@ export const ChatPage = () => {
       orgStore.clear()
       setOrgId(null)
       if (chatId) {
-        navigate("/chat", { replace: true })
+        navigate({ to: "/chat/{-$chatId}", replace: true })
       }
       return
     }
@@ -1500,13 +1507,12 @@ export const ChatPage = () => {
       .resolveShared(shareTokenParam)
       .then((resolved) => {
         if (cancelled) return
-        navigate(`/chat/${resolved.chat_id}`, {
-          replace: true,
-        })
+        navigate({ href: `/chat/${resolved.chat_id}`, replace: true })
       })
       .catch(() => {
         if (cancelled) return
-        navigate("/chat", {
+        navigate({
+          to: "/chat/{-$chatId}",
           replace: true,
           state: { blockedSharedChat: true },
         })
@@ -1518,28 +1524,26 @@ export const ChatPage = () => {
 
   useEffect(() => {
     if (!chatId) return
-    const params = new URLSearchParams(location.search)
+    const params = new URLSearchParams(location.searchStr)
     if (!params.has("share")) return
     params.delete("share")
     const nextSearch = params.toString()
-    navigate(
-      {
-        pathname: location.pathname,
-        search: nextSearch ? `?${nextSearch}` : "",
-      },
-      { replace: true }
-    )
-  }, [chatId, location.pathname, location.search, navigate])
+    navigate({
+      href: `${location.pathname}${nextSearch ? `?${nextSearch}` : ""}`,
+      replace: true,
+    })
+  }, [chatId, location.pathname, location.searchStr, navigate])
 
   useEffect(() => {
     if (!chatId) return
     if (!(messagesError instanceof ApiError)) return
     if (messagesError.status === 404) {
-      navigate("/chat", { replace: true })
+      navigate({ to: "/chat/{-$chatId}", replace: true })
       return
     }
     if (messagesError.status !== 403 || messagesError.detail !== "CHAT_NOT_SHARED") return
-    navigate("/chat", {
+    navigate({
+      to: "/chat/{-$chatId}",
       replace: true,
       state: { blockedSharedChat: true },
     })
@@ -1549,16 +1553,19 @@ export const ChatPage = () => {
     const state = location.state as { blockedSharedChat?: boolean } | null
     if (!state?.blockedSharedChat) return
     setBlockedLinkDialogOpen(true)
-    navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
-  }, [location.pathname, location.search, location.state, navigate])
+    navigate({
+      href: `${location.pathname}${location.searchStr}`,
+      replace: true,
+      state: {},
+    })
+  }, [location.pathname, location.searchStr, location.state, navigate])
 
   useEffect(() => {
     if (selectableChatModels.length === 0) return
     const availableModels = selectableChatModels.filter(
       (model) => model.is_available !== false
     )
-    // Prefer available models so a stale selection doesn't stick on a disabled item
-    // (Radix Select gets weird when the value points at a disabled SelectItem).
+    // Prefer available models so a stale selection doesn't stick on a disabled item.
     const pool = availableModels.length > 0 ? availableModels : selectableChatModels
     if (selectedModel && pool.some((model) => model.id === selectedModel)) return
     const stored = modelStore.get()
@@ -1950,9 +1957,9 @@ export const ChatPage = () => {
   }, [visibleMessages, autoScrollEnabled, scrollToBottom, scrollToMessageStart])
 
   const deepLinkedMessageId = useMemo(() => {
-    const params = new URLSearchParams(location.search)
+    const params = new URLSearchParams(location.searchStr)
     return params.get("message")
-  }, [location.search])
+  }, [location.searchStr])
 
   useEffect(() => {
     if (!chatId || !deepLinkedMessageId || isMessagesLoading) return
@@ -2007,12 +2014,13 @@ export const ChatPage = () => {
     // Admin may have changed availability since this tab loaded; refresh so the
     // picker doesn't keep disabled/stale models selected.
     void refetchModels()
-    navigate(
-      isAgentMode && activeAgentId
-        ? `/chat?agent=${encodeURIComponent(activeAgentId)}`
-        : "/chat",
-      { replace: true }
-    )
+    navigate({
+      href:
+        isAgentMode && activeAgentId
+          ? `/chat?agent=${encodeURIComponent(activeAgentId)}`
+          : "/chat",
+      replace: true,
+    })
   }
 
   const createChat = async (): Promise<Chat | null> => {
@@ -2025,12 +2033,13 @@ export const ChatPage = () => {
     setSessionOwnedChatIds(rememberSessionOwnedChatId(chat.id))
     pendingChatIdRef.current = chat.id
     justCreatedChatIdRef.current = chat.id
-    navigate(
-      isAgentMode && activeAgentId
-        ? `/chat/${chat.id}?agent=${encodeURIComponent(activeAgentId)}`
-        : `/chat/${chat.id}`,
-      { replace: true }
-    )
+    navigate({
+      href:
+        isAgentMode && activeAgentId
+          ? `/chat/${chat.id}?agent=${encodeURIComponent(activeAgentId)}`
+          : `/chat/${chat.id}`,
+      replace: true,
+    })
     replaceChatMessagesFor(chat.id, [])
     refetchChats().catch(() => null)
     return chat
@@ -2244,7 +2253,7 @@ export const ChatPage = () => {
     if (chatId === chatIdToDelete) {
       replaceCurrentChatMessages([])
       setToolEvents([])
-      navigate("/chat", { replace: true })
+      navigate({ to: "/chat/{-$chatId}", replace: true })
     }
   }
 
@@ -3372,11 +3381,11 @@ export const ChatPage = () => {
 
   const handleSelectChat = useCallback(
     (chat: Chat, onSelect?: () => void) => {
-      navigate(
-        chat.agent_id
+      navigate({
+        href: chat.agent_id
           ? `/chat/${chat.id}?agent=${encodeURIComponent(chat.agent_id)}`
-          : `/chat/${chat.id}`
-      )
+          : `/chat/${chat.id}`,
+      })
       onSelect?.()
       window.setTimeout(() => {
         composerInputRef.current?.focus()
@@ -3415,7 +3424,7 @@ export const ChatPage = () => {
     <Button
       variant="ghost"
       className="justify-start gap-1.5 p-1.5 w-full h-14 text-left"
-      onClick={() => navigate("/settings/me")}
+      onClick={() => navigate({ to: "/settings/me" })}
     >
       {currentUser?.avatar_url ? (
         <img
@@ -3465,11 +3474,11 @@ export const ChatPage = () => {
           onNewChat={startNewChat}
           onOpenHistory={() => {
             setSidebarOpen(false)
-            navigate("/history")
+            navigate({ to: "/history" })
           }}
           onOpenProjects={() => {
             setSidebarOpen(false)
-            navigate("/projects")
+            navigate({ to: "/projects" })
           }}
           onToggleShareChat={toggleShareChat}
           onInsertPrompt={insertPromptIntoComposer}
@@ -3519,8 +3528,8 @@ export const ChatPage = () => {
           activeChatId={chatId}
           activeAgentId={activeAgentId}
           onNewChat={startNewChat}
-          onOpenHistory={() => navigate("/history")}
-          onOpenProjects={() => navigate("/projects")}
+          onOpenHistory={() => navigate({ to: "/history" })}
+          onOpenProjects={() => navigate({ to: "/projects" })}
           onToggleShareChat={toggleShareChat}
           onInsertPrompt={insertPromptIntoComposer}
           onPromptCountChange={setPromptCount}
@@ -3612,7 +3621,7 @@ export const ChatPage = () => {
                           <button
                             type="button"
                             onClick={() =>
-                              navigate(`/projects/${encodeURIComponent(activeAgentId)}`)
+                              navigate({ href: `/projects/${encodeURIComponent(activeAgentId)}` })
                             }
                             className="font-medium text-foreground hover:underline"
                           >
@@ -3627,7 +3636,7 @@ export const ChatPage = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => navigate("/chat")}
+                        onClick={() => navigate({ to: "/chat/{-$chatId}" })}
                       >
                         {t("project_leave")}
                       </Button>
@@ -3684,89 +3693,178 @@ export const ChatPage = () => {
                 isDragActive={isDragActive}
                 pendingAttachments={pendingAttachments}
                 attachmentError={attachmentError}
-                webSearchEnabled={webSearchEnabled}
-                codeExecutionEnabled={codeExecutionEnabled}
                 inputRef={composerInputRef}
                 showModelSelect
                 hasPrompts={promptCount > 0}
                 onDraftChange={handleComposerDraftChange}
                 modelSelect={
-                  <Select value={selectedModel} onValueChange={setSelectedModel}>
-                    <SelectTrigger
-                      className="bg-transparent shadow-none border-0 w-auto min-w-0 [&_[data-slot=select-value]]:min-w-0 max-w-full h-9 overflow-hidden"
-                      aria-label={t("chat_select_model")}
-                    >
-                      <SelectValue placeholder={t("chat_best_available_model")} />
-                    </SelectTrigger>
-                    <SelectContent className="z-100 max-h-96">
-                      {selectableChatModels.map((model) => {
-                        const hasProviderIcon =
-                          getProviderIconCandidates(
-                            model.provider,
-                            model.model_name
-                          ).length > 0
-                        return (
-                          <SelectItem
-                            key={model.id}
-                            value={model.id}
-                            disabled={model.is_available === false}
-                          >
-                            <span className="inline-flex items-center gap-2 min-w-0">
-                              {hasProviderIcon ? (
-                                <ProviderIcon
-                                  provider={model.provider}
-                                  modelName={model.model_name}
-                                  className="size-5 shrink-0"
-                                />
-                              ) : isImageOutputModel(model) ? (
-                                <ImageIcon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                              ) : null}
-                              <span className="truncate">{model.display_name}</span>
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-9 max-w-full min-w-0 gap-1.5 px-2 font-normal"
+                        aria-label={t("chat_select_model")}
+                        disabled={isSharedView}
+                      >
+                        {selectedChatModel ? (
+                          <>
+                            {getProviderIconCandidates(
+                              selectedChatModel.provider,
+                              selectedChatModel.model_name
+                            ).length > 0 ? (
+                              <ProviderIcon
+                                provider={selectedChatModel.provider}
+                                modelName={selectedChatModel.model_name}
+                                className="size-5 shrink-0"
+                              />
+                            ) : isImageOutputModel(selectedChatModel) ? (
+                              <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                            ) : null}
+                            <span className="min-w-0 truncate">
+                              {selectedChatModel.display_name}
                             </span>
-                          </SelectItem>
-                        )
-                      })}
-                      <div className="mt-1 px-2 pt-2 pb-1 border-t">
-                        <div className="flex justify-between items-center mb-1 text-[11px] text-muted-foreground">
-                          <span>{t("chat_thinking_level")}</span>
-                          <span>{selectedReasoningEffort ?? t("chat_thinking_level_auto")}</span>
-                        </div>
-                        <div className="reasoning-slider">
-                          <div className="reasoning-slider__track">
-                            {providerReasoningLevels.map((level, index) => {
-                              const stopCount = Math.max(providerReasoningLevels.length - 1, 1)
-                              const leftPercent = (index / stopCount) * 100
-                              return (
-                                <div
-                                  key={`${level}-${index}`}
-                                  className={
-                                    index === activeReasoningStopIndex
-                                      ? "reasoning-slider__dot reasoning-slider__dot--active"
-                                      : "reasoning-slider__dot"
-                                  }
-                                  style={{ left: `${leftPercent}%` }}
-                                />
-                              )
-                            })}
+                          </>
+                        ) : (
+                          <span className="min-w-0 truncate text-muted-foreground">
+                            {t("chat_best_available_model")}
+                          </span>
+                        )}
+                        <ChevronDown
+                          aria-hidden="true"
+                          className="size-4 shrink-0 opacity-50"
+                        />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="end"
+                      className="z-100 flex w-72 flex-col overflow-hidden p-0"
+                    >
+                      <div className="max-h-56 overflow-y-auto overscroll-contain p-1">
+                        {selectableChatModels.map((model) => {
+                          const hasProviderIcon =
+                            getProviderIconCandidates(
+                              model.provider,
+                              model.model_name
+                            ).length > 0
+                          const isSelected = model.id === selectedModel
+                          return (
+                            <DropdownMenuItem
+                              key={model.id}
+                              disabled={model.is_available === false}
+                              className="cursor-pointer gap-2"
+                              onClick={() => setSelectedModel(model.id)}
+                            >
+                              <span className="inline-flex min-w-0 flex-1 items-center gap-2">
+                                {hasProviderIcon ? (
+                                  <ProviderIcon
+                                    provider={model.provider}
+                                    modelName={model.model_name}
+                                    className="size-5 shrink-0"
+                                  />
+                                ) : isImageOutputModel(model) ? (
+                                  <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                ) : null}
+                                <span className="truncate">{model.display_name}</span>
+                              </span>
+                              {isSelected ? (
+                                <Check aria-hidden="true" className="size-4 shrink-0" />
+                              ) : (
+                                <span className="size-4 shrink-0" aria-hidden="true" />
+                              )}
+                            </DropdownMenuItem>
+                          )
+                        })}
+                      </div>
+                      <div
+                        className="shrink-0 space-y-3 border-t px-3 py-2"
+                        onPointerDown={(event) => event.preventDefault()}
+                      >
+                        <div>
+                          <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span>{t("chat_thinking_level")}</span>
+                            <span>
+                              {selectedReasoningEffort ?? t("chat_thinking_level_auto")}
+                            </span>
                           </div>
-                          <input
-                            type="range"
-                            min={0}
-                            max={Math.max(providerReasoningLevels.length - 1, 0)}
-                            step={1}
-                            value={activeReasoningStopIndex}
-                            onChange={(event) => {
-                              const index = Number(event.target.value)
-                              const maxIndex = Math.max(providerReasoningLevels.length - 1, 0)
-                              setReasoningStopIndex(Math.max(0, Math.min(index, maxIndex)))
-                            }}
-                            className="reasoning-slider__input"
-                            aria-label={t("chat_thinking_level")}
-                          />
+                          <div className="reasoning-slider">
+                            <div className="reasoning-slider__track">
+                              {providerReasoningLevels.map((level, index) => {
+                                const stopCount = Math.max(
+                                  providerReasoningLevels.length - 1,
+                                  1
+                                )
+                                const leftPercent = (index / stopCount) * 100
+                                return (
+                                  <div
+                                    key={`${level}-${index}`}
+                                    className={
+                                      index === activeReasoningStopIndex
+                                        ? "reasoning-slider__dot reasoning-slider__dot--active"
+                                        : "reasoning-slider__dot"
+                                    }
+                                    style={{ left: `${leftPercent}%` }}
+                                  />
+                                )
+                              })}
+                            </div>
+                            <input
+                              type="range"
+                              min={0}
+                              max={Math.max(providerReasoningLevels.length - 1, 0)}
+                              step={1}
+                              value={activeReasoningStopIndex}
+                              onChange={(event) => {
+                                const index = Number(event.target.value)
+                                const maxIndex = Math.max(
+                                  providerReasoningLevels.length - 1,
+                                  0
+                                )
+                                setReasoningStopIndex(
+                                  Math.max(0, Math.min(index, maxIndex))
+                                )
+                              }}
+                              className="reasoning-slider__input"
+                              aria-label={t("chat_thinking_level")}
+                              disabled={isSharedView}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <label
+                            className={cn(
+                              "flex cursor-pointer items-center justify-between gap-3 text-sm",
+                              isSharedView && "pointer-events-none opacity-50"
+                            )}
+                          >
+                            <span>{t("chat_web_search")}</span>
+                            <Switch
+                              size="sm"
+                              checked={webSearchEnabled}
+                              disabled={isSharedView}
+                              onCheckedChange={setWebSearchEnabled}
+                              aria-label={t("chat_web_search")}
+                            />
+                          </label>
+                          <label
+                            className={cn(
+                              "flex cursor-pointer items-center justify-between gap-3 text-sm",
+                              isSharedView && "pointer-events-none opacity-50"
+                            )}
+                          >
+                            <span>{t("org_code_execution")}</span>
+                            <Switch
+                              size="sm"
+                              checked={codeExecutionEnabled}
+                              disabled={isSharedView}
+                              onCheckedChange={setCodeExecutionEnabled}
+                              aria-label={t("org_code_execution")}
+                            />
+                          </label>
                         </div>
                       </div>
-                    </SelectContent>
-                  </Select>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 }
                 onSend={sendMessage}
                 onStop={stopGeneration}
@@ -3778,8 +3876,6 @@ export const ChatPage = () => {
                 onDragOver={handleComposerDragOver}
                 onDragLeave={handleComposerDragLeave}
                 onDrop={handleComposerDrop}
-                onWebSearchEnabledChange={setWebSearchEnabled}
-                onCodeExecutionEnabledChange={setCodeExecutionEnabled}
                 onInsertPromptRequest={() => {
                   void openInsertPromptPicker()
                 }}
@@ -3825,7 +3921,7 @@ export const ChatPage = () => {
                 onClose={() => setSourcesPanelSources(null)}
                 onNavigateInternal={(path) => {
                   setSourcesPanelSources(null)
-                  navigate(path)
+                  navigate({ href: path })
                 }}
               />
             ) : null}

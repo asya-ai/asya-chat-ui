@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react"
-import { Link } from "react-router"
+import { Link } from "@tanstack/react-router"
 import { useI18n } from "@/lib/i18n-context"
 
 import {
@@ -38,7 +38,7 @@ export const SettingsShell = ({ title, items, actions, children }: SettingsShell
     >
       <Sidebar className="border-0 bg-sidebar p-2">
         <SidebarContent className="gap-3 px-0 py-2">
-          <Link to="/chat" className="flex items-center gap-2 px-1.5 py-2">
+          <Link to="/chat/{-$chatId}" className="flex items-center gap-2 px-1.5 py-2">
             <img src="/favicon.svg" alt="Eldigen" className="size-9 object-contain" />
             <span className="font-heading text-4xl leading-9">Chat</span>
           </Link>

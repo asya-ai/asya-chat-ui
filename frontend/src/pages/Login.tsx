@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
-import { useNavigate, Link, useSearchParams } from "react-router"
+import { useNavigate, Link, useLocation } from "@tanstack/react-router"
 
 import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -36,7 +36,8 @@ export const LoginPage = () => {
   const [stage, setStage] = useState<Stage>("org")
   const [orgSelectionRequired, setOrgSelectionRequired] = useState(true)
   const hasError = Boolean(error)
-  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  const searchParams = useMemo(() => new URLSearchParams(location.searchStr), [location.searchStr])
   // Undocumented break-glass: /login?direct=1 forces password login when SSO is stuck.
   const directLogin = searchParams.get("direct") === "1"
 
@@ -170,7 +171,7 @@ export const LoginPage = () => {
       }
       const data = await authApi.login(identifier, password, orgValue, clientHost)
       setToken(data.access_token)
-      navigate("/chat")
+      navigate({ to: "/chat/{-$chatId}" })
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_login_failed"))
     } finally {

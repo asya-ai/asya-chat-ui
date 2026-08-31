@@ -13,18 +13,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import { ArrowUp, MoreHorizontal, Plus, Square, X } from "lucide-react"
+import { ArrowUp, Plus, Square, X } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { cn } from "@/lib/utils"
@@ -41,8 +33,6 @@ type ChatComposerProps = {
   isDragActive: boolean
   pendingAttachments: ChatMessageAttachmentInput[]
   attachmentError?: string | null
-  webSearchEnabled: boolean
-  codeExecutionEnabled: boolean
   ref?: Ref<ChatComposerHandle>
   inputRef?: React.RefObject<HTMLTextAreaElement | null>
   modelSelect?: ReactNode
@@ -58,8 +48,6 @@ type ChatComposerProps = {
   onDragOver: (event: React.DragEvent<HTMLDivElement>) => void
   onDragLeave: (event: React.DragEvent<HTMLDivElement>) => void
   onDrop: (event: React.DragEvent<HTMLDivElement>) => void
-  onWebSearchEnabledChange: (enabled: boolean) => void
-  onCodeExecutionEnabledChange: (enabled: boolean) => void
   onInsertPromptRequest?: () => void
   onDraftChange?: (value: string) => void
   sendLabel: string
@@ -75,8 +63,6 @@ export const ChatComposer = ({
   isDragActive,
   pendingAttachments,
   attachmentError,
-  webSearchEnabled,
-  codeExecutionEnabled,
   ref,
   inputRef,
   modelSelect,
@@ -92,8 +78,6 @@ export const ChatComposer = ({
   onDragOver,
   onDragLeave,
   onDrop,
-  onWebSearchEnabledChange,
-  onCodeExecutionEnabledChange,
   onInsertPromptRequest,
   onDraftChange,
   sendLabel,
@@ -143,36 +127,6 @@ export const ChatComposer = ({
   }
 
   const canSend = !readOnly && (hasText || pendingAttachments.length > 0)
-  const toolsDisabled = readOnly
-
-  const toolToggle = (
-    label: string,
-    checked: boolean,
-    onCheckedChange: (enabled: boolean) => void
-  ) => (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <label
-          className={cn(
-            "inline-flex min-w-0 cursor-pointer items-center gap-2 text-sm",
-            toolsDisabled && "pointer-events-none opacity-50"
-          )}
-        >
-          <Switch
-            size="sm"
-            checked={checked}
-            disabled={toolsDisabled}
-            onCheckedChange={onCheckedChange}
-            aria-label={label}
-          />
-          <span className="hidden truncate text-xs text-foreground/80 @2xl/composer:inline-block">
-            {label}
-          </span>
-        </label>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
-  )
 
   return (
     <div
@@ -389,79 +343,10 @@ export const ChatComposer = ({
                 <Plus aria-hidden="true" className="size-4" />
               </Button>
             )}
-
-            <div className="hidden min-w-0 items-center gap-2 @lg/composer:flex">
-              {toolToggle(
-                t("chat_web_search"),
-                webSearchEnabled,
-                onWebSearchEnabledChange
-              )}
-              {toolToggle(
-                t("org_code_execution"),
-                codeExecutionEnabled,
-                onCodeExecutionEnabledChange
-              )}
-            </div>
-
-            <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-9 shrink-0 text-muted-foreground @lg/composer:hidden"
-                  disabled={toolsDisabled}
-                  aria-label={t("common_more")}
-                >
-                  <MoreHorizontal aria-hidden="true" className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-72">
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onSelect={(event) => event.preventDefault()}
-                  onClick={() => onWebSearchEnabledChange(!webSearchEnabled)}
-                >
-                  <span className="flex-1">{t("chat_web_search")}</span>
-                  <Switch
-                    size="sm"
-                    checked={webSearchEnabled}
-                    onCheckedChange={onWebSearchEnabledChange}
-                    aria-label={t("chat_web_search")}
-                  />
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onSelect={(event) => event.preventDefault()}
-                  onClick={() =>
-                    onCodeExecutionEnabledChange(!codeExecutionEnabled)
-                  }
-                >
-                  <span className="flex-1">{t("org_code_execution")}</span>
-                  <Switch
-                    size="sm"
-                    checked={codeExecutionEnabled}
-                    onCheckedChange={onCodeExecutionEnabledChange}
-                    aria-label={t("org_code_execution")}
-                  />
-                </DropdownMenuItem>
-                {showModelSelect && modelSelect ? (
-                  <>
-                    <DropdownMenuSeparator className="md:hidden" />
-                    <DropdownMenuLabel className="md:hidden">
-                      {t("chat_select_model")}
-                    </DropdownMenuLabel>
-                    <div className="px-1 pb-1 md:hidden [&_[data-slot=select-trigger]]:h-9 [&_[data-slot=select-trigger]]:w-full [&_[data-slot=select-trigger]]:max-w-none">
-                      {modelSelect}
-                    </div>
-                  </>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
           <div className="flex min-w-0 shrink items-center gap-1">
             {showModelSelect && modelSelect && !(loading && !canSend) ? (
-              <div className="hidden min-w-0 max-w-54 overflow-hidden md:block">
+              <div className="min-w-0 max-w-54 overflow-hidden">
                 {modelSelect}
               </div>
             ) : null}

@@ -78,6 +78,9 @@ const SHADOW_RESET_CSS = `
 }
 `
 
+const SLIDE_WIDTH = 1280
+const SLIDE_HEIGHT = 720
+
 /** Preview-only layout: stack every slide like PDF pages. */
 const PREVIEW_LAYOUT_CSS = `
 .cowork-marp-host {
@@ -99,8 +102,6 @@ div.marpit {
   margin: 0 !important;
   padding: 0 !important;
 }
-/* Card chrome lives on HTML, not the Marp SVG. A white SVG backdrop plus
-   border-radius leaks a 1px seam on dark slides (subpixel + anti-alias). */
 .cowork-marp-slide {
   display: block;
   width: 100%;
@@ -108,21 +109,37 @@ div.marpit {
   margin: 0 auto;
   overflow: hidden;
   border-radius: 0.5rem;
-  line-height: 0;
+  position: relative;
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.06),
     0 8px 24px rgb(0 0 0 / 0.08);
 }
-.cowork-marp-host .marpit > .cowork-marp-slide > svg[data-marpit-svg],
-div.marpit > .cowork-marp-slide > svg[data-marpit-svg] {
-  display: block !important;
-  width: 100% !important;
-  max-width: none !important;
+.cowork-marp-scaler {
+  transform-origin: top left;
+  width: ${SLIDE_WIDTH}px;
+}
+.cowork-marp-host .marpit > .cowork-marp-slide > .cowork-marp-scaler > section,
+div.marpit > .cowork-marp-slide > .cowork-marp-scaler > section {
+  box-sizing: border-box !important;
+  width: ${SLIDE_WIDTH}px !important;
   height: auto !important;
+  min-height: ${SLIDE_HEIGHT}px !important;
   max-height: none !important;
   margin: 0 !important;
-  background: transparent !important;
-  overflow: hidden;
+  overflow: visible !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color-scheme: light;
+}
+@supports not (color: light-dark(black, white)) {
+  .cowork-marp-host .marpit > section,
+  .cowork-marp-host .marpit > .cowork-marp-slide .cowork-marp-scaler > section {
+    --color-background: #fff8e1;
+    --color-background-stripe: rgba(69, 90, 100, 0.1);
+    --color-foreground: #455a64;
+    --color-dimmed: #6a7a7d;
+    --color-highlight: #0288d1;
+  }
 }
 .cowork-marp-mermaid {
   display: flex;
@@ -158,6 +175,49 @@ const ensureMarpFrontMatter = (markdown: string) => {
   const trimmed = markdown.trimStart()
   if (trimmed.startsWith("---")) return markdown
   return `${DEFAULT_MARP_FRONT_MATTER}\n\n${markdown}`
+}
+
+const patchMarpCssForSlideWrappers = (css: string) =>
+  css.replace(
+    /div\.marpit > section/g,
+    "div.marpit > section, div.marpit > .cowork-marp-slide > .cowork-marp-scaler > section"
+  )
+
+const fitPresentationSlides = (root: ParentNode) => {
+  const cleanups: (() => void)[] = []
+
+  for (const wrap of root.querySelectorAll<HTMLElement>(".cowork-marp-slide")) {
+    const scaler = wrap.querySelector<HTMLElement>(".cowork-marp-scaler")
+    const section = scaler?.querySelector<HTMLElement>("section")
+    if (!scaler || !section) continue
+
+    const apply = () => {
+      const containerWidth = wrap.clientWidth
+      if (containerWidth <= 0) return
+
+      scaler.style.transform = "none"
+      const contentHeight = Math.max(section.scrollHeight, SLIDE_HEIGHT)
+      const contentWidth = Math.max(section.scrollWidth, SLIDE_WIDTH)
+      const widthScale = containerWidth / SLIDE_WIDTH
+      const contentScale = Math.min(1, SLIDE_HEIGHT / contentHeight, SLIDE_WIDTH / contentWidth)
+      const scale = widthScale * contentScale
+
+      scaler.style.transformOrigin = "top left"
+      scaler.style.transform = `scale(${scale})`
+      wrap.style.height = `${contentHeight * scale}px`
+    }
+
+    apply()
+
+    const observer = new ResizeObserver(apply)
+    observer.observe(wrap)
+    observer.observe(section)
+    cleanups.push(() => observer.disconnect())
+  }
+
+  return () => {
+    for (const cleanup of cleanups) cleanup()
+  }
 }
 
 const ensureShadowRoot = (host: HTMLElement): ShadowRoot => {
@@ -256,6 +316,7 @@ export const CoworkPresentationEditor = ({
   const isDark = theme === "dark"
   const [mode, setMode] = useState<PresentationMode>("slides")
   const previewHostRef = useRef<HTMLDivElement | null>(null)
+  const slideFitCleanupRef = useRef<(() => void) | null>(null)
   const browserCleanupRef = useRef<(() => void) | null>(null)
 
   const marp = useMemo(
@@ -263,8 +324,9 @@ export const CoworkPresentationEditor = ({
       new Marp({
         html: true,
         script: false,
-        // App owns SVG chrome (radius/shadow); don't let theme ::backdrop paint it.
-        inlineSVG: { backdropSelector: false },
+        // Match export path: HTML sections scale reliably; inline SVG foreignObject
+        // breaks inside shadow DOM (browser polyfill + subpixel backdrop seams).
+        inlineSVG: false,
       }),
     []
   )
@@ -294,18 +356,23 @@ export const CoworkPresentationEditor = ({
     if (!host || mode !== "slides") return
 
     const shadow = ensureShadowRoot(host)
+    // Marp CSS first so @charset/@import stay valid; reset/layout override after.
     shadow.innerHTML = [
-      `<style>${SHADOW_RESET_CSS}\n${rendered.css}\n${PREVIEW_LAYOUT_CSS}</style>`,
+      `<style>${patchMarpCssForSlideWrappers(rendered.css)}</style>`,
+      `<style>${SHADOW_RESET_CSS}\n${PREVIEW_LAYOUT_CSS}</style>`,
       `<div class="cowork-marp-host">${rendered.html}</div>`,
     ].join("")
 
-    for (const svg of shadow.querySelectorAll(
-      ".cowork-marp-host .marpit > svg[data-marpit-svg]"
+    for (const section of shadow.querySelectorAll(
+      ".cowork-marp-host .marpit > section"
     )) {
       const wrap = document.createElement("div")
       wrap.className = "cowork-marp-slide"
-      svg.replaceWith(wrap)
-      wrap.appendChild(svg)
+      const scaler = document.createElement("div")
+      scaler.className = "cowork-marp-scaler"
+      section.replaceWith(wrap)
+      wrap.appendChild(scaler)
+      scaler.appendChild(section)
     }
 
     let cancelled = false
@@ -315,18 +382,22 @@ export const CoworkPresentationEditor = ({
         renderMermaidInRoot(shadow),
       ])
       if (cancelled || !previewHostRef.current?.shadowRoot) return
+
       browserCleanupRef.current?.()
-      const root = previewHostRef.current.shadowRoot
-      const api = browser(root)
+      const api = browser(previewHostRef.current.shadowRoot)
       requestAnimationFrame(() => {
         if (cancelled) return
         api.update()
+        slideFitCleanupRef.current?.()
+        slideFitCleanupRef.current = fitPresentationSlides(shadow)
       })
       browserCleanupRef.current = () => api.cleanup()
     })()
 
     return () => {
       cancelled = true
+      slideFitCleanupRef.current?.()
+      slideFitCleanupRef.current = null
       browserCleanupRef.current?.()
       browserCleanupRef.current = null
     }

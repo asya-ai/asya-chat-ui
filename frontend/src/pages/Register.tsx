@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
-import { useNavigate, Link } from "react-router"
+import { useNavigate, Link } from "@tanstack/react-router"
 
 import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -45,7 +45,7 @@ export const RegisterPage = () => {
     try {
       const data = await authApi.register(email, password)
       setToken(data.access_token)
-      navigate("/chat")
+      navigate({ to: "/chat/{-$chatId}" })
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_register_failed"))
     } finally {

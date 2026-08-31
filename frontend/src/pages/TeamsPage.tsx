@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useLocation, useNavigate } from "react-router"
+import { useLocation, useNavigate } from "@tanstack/react-router"
 
 import { authApi, orgApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
@@ -63,7 +63,7 @@ export const TeamsPage = () => {
   useEffect(() => {
     if (!authChecked) return
     if (!isSuperAdmin && !isAdmin) {
-      navigate("/settings/me")
+      navigate({ to: "/settings/me" })
     }
   }, [authChecked, isAdmin, isSuperAdmin, navigate])
 
@@ -279,7 +279,7 @@ export const TeamsPage = () => {
               </SelectContent>
             </Select>
           ) : null}
-          <Button variant="outline" onClick={() => navigate("/chat")} disabled={!selectedOrg}>
+          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })} disabled={!selectedOrg}>
             {t("common_back_to_chat")}
           </Button>
         </div>

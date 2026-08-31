@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate, useParams } from "react-router"
+import { useNavigate, useParams } from "@tanstack/react-router"
 import {
   ArrowLeft,
   FileText,
@@ -82,7 +82,7 @@ const ROLE_KEYS = {
 
 export const ProjectPage = () => {
   const navigate = useNavigate()
-  const { projectId } = useParams<{ projectId: string }>()
+  const { projectId } = useParams({ strict: false })
   const { t, tCount } = useI18n()
   const orgId = orgStore.get() ?? ""
 
@@ -213,7 +213,7 @@ export const ProjectPage = () => {
 
   const startChat = () => {
     if (!projectId) return
-    navigate(`/chat?agent=${encodeURIComponent(projectId)}`)
+    navigate({ href: `/chat?agent=${encodeURIComponent(projectId)}` })
   }
 
   const notify = (message: string) => {
@@ -327,7 +327,7 @@ export const ProjectPage = () => {
     withBusy(async () => {
       if (!project) return
       await agentApi.remove(project.id)
-      navigate("/projects")
+      navigate({ to: "/projects" })
     })
 
   const openShare = () => {
@@ -419,7 +419,7 @@ export const ProjectPage = () => {
             <div className="flex h-15 shrink-0 items-center px-3">{sidebarControls}</div>
             <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
               <p className="text-muted-foreground">{error ?? t("project_not_found")}</p>
-              <Button onClick={() => navigate("/projects")}>{t("project_back_to_projects")}</Button>
+              <Button onClick={() => navigate({ to: "/projects" })}>{t("project_back_to_projects")}</Button>
             </div>
           </div>
         )}
@@ -444,7 +444,7 @@ export const ProjectPage = () => {
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
-            onClick={() => navigate("/projects")}
+            onClick={() => navigate({ to: "/projects" })}
           >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
             {t("project_title")}
@@ -544,12 +544,12 @@ export const ProjectPage = () => {
                 role="button"
                 tabIndex={0}
                 onClick={() =>
-                  navigate(`/chat/${chat.id}?agent=${encodeURIComponent(project.id)}`)
+                  navigate({ href: `/chat/${chat.id}?agent=${encodeURIComponent(project.id)}` })
                 }
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault()
-                    navigate(`/chat/${chat.id}?agent=${encodeURIComponent(project.id)}`)
+                    navigate({ href: `/chat/${chat.id}?agent=${encodeURIComponent(project.id)}` })
                   }
                 }}
                 className="hover:border-primary/60 hover:bg-accent/40 flex cursor-pointer flex-row items-center justify-between gap-3 px-4 py-3 transition-colors"

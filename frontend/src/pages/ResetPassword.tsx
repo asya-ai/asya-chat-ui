@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import type { FormEvent } from "react"
-import { useNavigate, useSearchParams, Link } from "react-router"
+import { useNavigate, useLocation, Link } from "@tanstack/react-router"
 
 import { authApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
@@ -13,8 +13,11 @@ import { Input } from "@/components/ui/input"
 
 export const ResetPasswordPage = () => {
   const navigate = useNavigate()
-  const [params] = useSearchParams()
-  const token = useMemo(() => params.get("token") ?? "", [params])
+  const location = useLocation()
+  const token = useMemo(
+    () => new URLSearchParams(location.searchStr).get("token") ?? "",
+    [location.searchStr]
+  )
   const { t } = useI18n()
   const [email, setEmail] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -55,7 +58,7 @@ export const ResetPasswordPage = () => {
     try {
       await authApi.confirmPasswordReset(token, newPassword)
       setSuccess(t("auth_reset_success"))
-      setTimeout(() => navigate("/login"), 800)
+      setTimeout(() => navigate({ to: "/login" }), 800)
     } catch (err) {
       setError(err instanceof Error ? err.message : t("auth_reset_failed"))
     } finally {
