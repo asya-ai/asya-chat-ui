@@ -371,7 +371,6 @@ export const MePage = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">{t("me_action_info_none")}</SelectItem>
-                    <SelectItem value="short">{t("me_action_info_short")}</SelectItem>
                     <SelectItem value="detailed">
                       {t("me_action_info_detailed")}
                     </SelectItem>

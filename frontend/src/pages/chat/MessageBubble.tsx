@@ -1784,165 +1784,83 @@ const MessageBubbleComponent = ({
                         </div>
                       )
                     }
-                    if (actionInfoLevel === "detailed") {
-                      const toolEvent = part.tool_event
-                      const attachmentRow =
-                        actionAttachments.length > 0 ? (
-                          <div className="flex flex-wrap gap-2 pl-3">
-                            {actionAttachments.map((attachment, attachmentIndex) => {
-                              const isImage = (attachment.content_type ?? "").startsWith(
-                                "image/"
-                              )
-                              if (isImage) {
-                                return (
-                                  <Button
-                                    key={`${attachment.file_name}-${attachmentIndex}`}
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                                    onClick={() =>
-                                      onPreviewAttachment({
-                                        file_name: attachment.file_name,
-                                        content_type: attachment.content_type,
-                                        data_base64: attachment.data_base64,
-                                        content_url: attachment.content_url,
-                                      })
-                                    }
-                                  >
-                                    <img
-                                      src={attachmentSrc(attachment)}
-                                      alt={attachment.file_name}
-                                      className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
-                                    />
-                                  </Button>
-                                )
-                              }
+                    if (actionInfoLevel !== "detailed") return null
+                    const toolEvent = part.tool_event
+                    const attachmentRow =
+                      actionAttachments.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pl-3">
+                          {actionAttachments.map((attachment, attachmentIndex) => {
+                            const isImage = (attachment.content_type ?? "").startsWith(
+                              "image/"
+                            )
+                            if (isImage) {
                               return (
-                                <a
+                                <Button
                                   key={`${attachment.file_name}-${attachmentIndex}`}
-                                  className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                                  href={attachmentHref(attachment)}
-                                  download={attachment.file_name}
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                                  onClick={() =>
+                                    onPreviewAttachment({
+                                      file_name: attachment.file_name,
+                                      content_type: attachment.content_type,
+                                      data_base64: attachment.data_base64,
+                                      content_url: attachment.content_url,
+                                    })
+                                  }
                                 >
-                                  {attachment.file_name}
-                                </a>
+                                  <img
+                                    src={attachmentSrc(attachment)}
+                                    alt={attachment.file_name}
+                                    className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
+                                  />
+                                </Button>
                               )
-                            })}
-                          </div>
-                        ) : null
-                      if (!toolEvent) {
-                        return (
-                          <div key={`action-${index}`} className="space-y-2">
-                            <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
-                              <span aria-hidden="true" className="opacity-50 select-none">
-                                ›
-                              </span>
-                              <span className="min-w-0 wrap-break-word">{part.label}</span>
-                            </div>
-                            {attachmentRow}
-                          </div>
-                        )
-                      }
+                            }
+                            return (
+                              <a
+                                key={`${attachment.file_name}-${attachmentIndex}`}
+                                className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                                href={attachmentHref(attachment)}
+                                download={attachment.file_name}
+                              >
+                                {attachment.file_name}
+                              </a>
+                            )
+                          })}
+                        </div>
+                      ) : null
+                    if (!toolEvent) {
                       return (
                         <div key={`action-${index}`} className="space-y-2">
-                          <details className="group/action text-muted-foreground text-xs">
-                            <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
-                              <span
-                                aria-hidden="true"
-                                className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
-                              >
-                                ›
-                              </span>
-                              <span className="min-w-0 wrap-break-word">{part.label}</span>
-                            </summary>
-                            <div className="space-y-2 mt-2 ml-3 text-foreground">
-                              <ToolEventDetails toolEvent={toolEvent} t={t} />
-                            </div>
-                          </details>
-                          {attachmentRow}
-                        </div>
-                      )
-                    }
-                    return (
-                      <div key={`action-${index}`} className="space-y-2">
-                        {part.tool_event?.type === "reasoning" && part.tool_event.content ? (
-                          <details className="group/action text-muted-foreground text-xs">
-                            <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
-                              <span
-                                aria-hidden="true"
-                                className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
-                              >
-                                ›
-                              </span>
-                              <span className="min-w-0 wrap-break-word">{part.label}</span>
-                            </summary>
-                            <div className="space-y-2 mt-2 ml-3 text-foreground">
-                              <ToolEventDetails toolEvent={part.tool_event} t={t} />
-                            </div>
-                          </details>
-                        ) : (
                           <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
                             <span aria-hidden="true" className="opacity-50 select-none">
                               ›
                             </span>
                             <span className="min-w-0 wrap-break-word">{part.label}</span>
                           </div>
-                        )}
-                        {part.tool_event?.type === "tool_call" &&
-                        (part.tool_event.output?.status === "error" ||
-                          part.tool_event.output?.error) ? (
-                          <div className="pl-3 text-destructive/90 text-xs wrap-break-word">
-                            {t("common_error")}:{" "}
-                            {part.tool_event.output.error ||
-                              part.tool_event.output.result_preview ||
-                              t("chat_generation_failed")}
+                          {attachmentRow}
+                        </div>
+                      )
+                    }
+                    return (
+                      <div key={`action-${index}`} className="space-y-2">
+                        <details className="group/action text-muted-foreground text-xs">
+                          <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
+                            <span
+                              aria-hidden="true"
+                              className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
+                            >
+                              ›
+                            </span>
+                            <span className="min-w-0 wrap-break-word">{part.label}</span>
+                          </summary>
+                          <div className="space-y-2 mt-2 ml-3 text-foreground">
+                            <ToolEventDetails toolEvent={toolEvent} t={t} />
                           </div>
-                        ) : null}
-                        {actionAttachments.length > 0 ? (
-                          <div className="flex flex-wrap gap-2 pl-3">
-                            {actionAttachments.map((attachment, attachmentIndex) => {
-                              const isImage = (attachment.content_type ?? "").startsWith(
-                                "image/"
-                              )
-                              if (isImage) {
-                                return (
-                                  <Button
-                                    key={`${attachment.file_name}-${attachmentIndex}`}
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                                    onClick={() =>
-                                      onPreviewAttachment({
-                                        file_name: attachment.file_name,
-                                        content_type: attachment.content_type,
-                                        data_base64: attachment.data_base64,
-                                        content_url: attachment.content_url,
-                                      })
-                                    }
-                                  >
-                                    <img
-                                      src={attachmentSrc(attachment)}
-                                      alt={attachment.file_name}
-                                      className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
-                                    />
-                                  </Button>
-                                )
-                              }
-                              return (
-                                <a
-                                  key={`${attachment.file_name}-${attachmentIndex}`}
-                                  className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                                  href={attachmentHref(attachment)}
-                                  download={attachment.file_name}
-                                >
-                                  {attachment.file_name}
-                                </a>
-                              )
-                            })}
-                          </div>
-                        ) : null}
+                        </details>
+                        {attachmentRow}
                       </div>
                     )
                   })}
@@ -2022,44 +1940,18 @@ const MessageBubbleComponent = ({
                           ))}
                         </div>
                       </div>
-                    ) : actionInfoLevel === "short" ? (
-                      <div className="space-y-2 py-2" role="status" aria-live="polite">
-                        {isThinking ? (
-                          <div className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4">
-                            <span
-                              aria-hidden="true"
-                              className="opacity-[0.79] size-3.5 animate-spin figma-icon"
-                              style={{ maskImage: "url('/icon-thinking.svg')" }}
-                            />
-                            <span>{t("chat_thinking")}</span>
-                          </div>
-                        ) : null}
-                        {thinkingLabels.length > 0 ? (
-                          <div className="space-y-1 text-muted-foreground text-xs">
-                            {thinkingLabels.map((label, index) => (
-                              <div
-                                key={`${label}-${index}`}
-                                className="flex items-start gap-1.5 leading-5"
-                              >
-                                <span aria-hidden="true" className="opacity-50 select-none">
-                                  ›
-                                </span>
-                                <span className="min-w-0 wrap-break-word">{label}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
                     ) : isThinking ? (
-                      <div className="space-y-2 py-2" role="status" aria-live="polite">
-                        <div className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4">
-                          <span
-                            aria-hidden="true"
-                            className="opacity-[0.79] size-3.5 animate-spin figma-icon"
-                            style={{ maskImage: "url('/icon-thinking.svg')" }}
-                          />
-                          <span>{t("chat_thinking")}</span>
-                        </div>
+                      <div
+                        className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="opacity-[0.79] size-3.5 animate-spin figma-icon"
+                          style={{ maskImage: "url('/icon-thinking.svg')" }}
+                        />
+                        <span>{t("chat_thinking")}</span>
                       </div>
                     ) : null
                   ) : null}

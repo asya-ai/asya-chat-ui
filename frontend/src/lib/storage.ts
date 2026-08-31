@@ -23,7 +23,7 @@ const parseCoworkPanelWidthPct = (raw: string | null): number => {
   )
 }
 
-export type ActionInfoLevel = "none" | "short" | "detailed"
+export type ActionInfoLevel = "none" | "detailed"
 
 export type SidebarSectionsState = {
   pinned: boolean
@@ -60,10 +60,10 @@ const parseSidebarSections = (raw: string | null): SidebarSectionsState => {
 }
 
 const parseActionInfoLevel = (raw: string | null): ActionInfoLevel => {
-  if (raw === "none" || raw === "short" || raw === "detailed") return raw
-  // Legacy boolean toggle: on → detailed, off/unset → short.
-  if (raw === "1") return "detailed"
-  return "short"
+  if (raw === "none" || raw === "detailed") return raw
+  // Legacy values: short / boolean on → detailed, off/unset → hidden.
+  if (raw === "short" || raw === "1") return "detailed"
+  return "none"
 }
 
 export const tokenStore = {
