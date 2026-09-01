@@ -110,6 +110,8 @@ export const ProjectPage = () => {
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState("")
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deletingProject, setDeletingProject] = useState(false)
+  const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [shareQuery, setShareQuery] = useState("")
   const [shareSelected, setShareSelected] = useState<AgentShareSuggestion | null>(null)
@@ -301,13 +303,20 @@ export const ProjectPage = () => {
       notify(t("project_reindex_started"))
     })
 
-  const handleDeleteSource = (sourceId: string) =>
-    withBusy(async () => {
-      if (!project) return
+  const handleDeleteSource = async (sourceId: string) => {
+    if (!project || deletingSourceId) return
+    try {
+      setDeletingSourceId(sourceId)
+      setError(null)
       await agentApi.removeSource(project.id, sourceId)
       await loadSources()
       notify(t("project_file_removed"))
-    })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    } finally {
+      setDeletingSourceId(null)
+    }
+  }
 
   const handleRename = () =>
     withBusy(async () => {
@@ -323,12 +332,20 @@ export const ProjectPage = () => {
       notify(t("project_renamed"))
     })
 
-  const handleDeleteProject = () =>
-    withBusy(async () => {
-      if (!project) return
+  const handleDeleteProject = async () => {
+    if (!project || deletingProject) return
+    try {
+      setDeletingProject(true)
+      setError(null)
       await agentApi.remove(project.id)
+      setDeleteOpen(false)
       navigate({ to: "/projects" })
-    })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    } finally {
+      setDeletingProject(false)
+    }
+  }
 
   const openShare = () => {
     setShareOpen(true)
@@ -667,8 +684,8 @@ export const ProjectPage = () => {
                             size="icon"
                             className="text-destructive h-8 w-8"
                             aria-label={t("project_delete_file_aria")}
-                            disabled={busy}
-                            onClick={() => handleDeleteSource(source.id)}
+                            disabled={deletingSourceId === source.id}
+                            onClick={() => void handleDeleteSource(source.id)}
                           >
                             <Trash2 className="h-4 w-4" aria-hidden="true" />
                           </Button>
@@ -781,7 +798,11 @@ export const ProjectPage = () => {
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
               {t("common_cancel")}
             </Button>
-            <Button variant="destructive" onClick={handleDeleteProject} disabled={busy}>
+            <Button
+              variant="destructive"
+              onClick={() => void handleDeleteProject()}
+              disabled={deletingProject}
+            >
               {t("common_delete")}
             </Button>
           </DialogFooter>

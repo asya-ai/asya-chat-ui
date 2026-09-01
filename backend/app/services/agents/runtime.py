@@ -90,6 +90,7 @@ def summarize_source_text(text: str, max_len: int = 320) -> str | None:
 
 
 def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | None]:
+    source_id = source.id
     try:
         source.status = AgentSourceStatus.indexing
         source.error_message = None
@@ -108,12 +109,23 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
             session.exec(delete(AgentEmbedding).where(AgentEmbedding.chunk_id.in_(existing_chunk_ids)))
         session.exec(delete(AgentChunk).where(AgentChunk.source_id == source.id))
 
-        pieces = chunk_text(source.content_text)
+        content_text = source.content_text or ""
+        agent_id = source.agent_id
+        prior_metadata = dict(source.metadata_json or {})
+        session.commit()
+
+        pieces = chunk_text(content_text)
+        dense_vectors = _encode_documents(pieces) if pieces else None
+
+        source = session.get(AgentSource, source_id)
+        if not source:
+            return 0, None
+
         created_chunks: list[AgentChunk] = []
         for idx, piece in enumerate(pieces):
             chunk = AgentChunk(
-                agent_id=source.agent_id,
-                source_id=source.id,
+                agent_id=agent_id,
+                source_id=source_id,
                 chunk_index=idx,
                 content=piece,
                 token_count_estimate=estimate_tokens(piece),
@@ -122,7 +134,6 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
             created_chunks.append(chunk)
         session.flush()
 
-        dense_vectors = _encode_documents([chunk.content for chunk in created_chunks])
         if dense_vectors is not None:
             for chunk, vector in zip(created_chunks, dense_vectors):
                 session.add(
@@ -132,8 +143,8 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
                         embedding=vector.astype(np.float32).tolist(),
                     )
                 )
-        metadata = dict(source.metadata_json or {})
-        metadata["summary"] = summarize_source_text(source.content_text)
+        metadata = prior_metadata
+        metadata["summary"] = summarize_source_text(content_text)
         source.metadata_json = metadata
         source.status = AgentSourceStatus.ready
         source.updated_at = datetime.utcnow()
@@ -141,6 +152,9 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
         session.flush()
         return len(pieces), None
     except Exception as exc:
+        source = session.get(AgentSource, source_id)
+        if not source:
+            return 0, None
         source.status = AgentSourceStatus.failed
         source.error_message = str(exc)[:500]
         source.updated_at = datetime.utcnow()
