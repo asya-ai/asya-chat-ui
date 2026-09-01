@@ -1,10 +1,12 @@
 import {
   useCallback,
+  useEffect,
   useImperativeHandle,
   useRef,
   useState,
   type ReactNode,
   type Ref,
+  type PointerEvent as ReactPointerEvent,
 } from "react"
 
 import type { ChatMessageAttachmentInput } from "@/lib/types"
@@ -19,7 +21,20 @@ import { Textarea } from "@/components/ui/textarea"
 import { ArrowUp, Plus, Square, X } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
+import { composerTextareaHeightStore } from "@/lib/storage"
 import { cn } from "@/lib/utils"
+
+const getMaxComposerTextareaHeight = () => {
+  if (typeof window === "undefined") {
+    return Math.round(800 * composerTextareaHeightStore.maxHeightVh)
+  }
+  return Math.round(window.innerHeight * composerTextareaHeightStore.maxHeightVh)
+}
+
+const clampComposerTextareaHeight = (px: number) => {
+  const max = getMaxComposerTextareaHeight()
+  return Math.min(max, Math.max(composerTextareaHeightStore.min, Math.round(px)))
+}
 
 export type ChatComposerHandle = {
   getValue: () => string
@@ -88,9 +103,70 @@ export const ChatComposer = ({
   const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const heightPxRef = useRef(clampComposerTextareaHeight(composerTextareaHeightStore.get()))
+  const resizeStartYRef = useRef(0)
+  const resizeStartHeightRef = useRef(0)
   const [hasText, setHasText] = useState(false)
+  const [textareaHeightPx, setTextareaHeightPx] = useState(() =>
+    clampComposerTextareaHeight(composerTextareaHeightStore.get())
+  )
+  const [isResizing, setIsResizing] = useState(false)
   const onDraftChangeRef = useRef(onDraftChange)
   onDraftChangeRef.current = onDraftChange
+
+  useEffect(() => {
+    heightPxRef.current = textareaHeightPx
+  }, [textareaHeightPx])
+
+  useEffect(() => {
+    if (!isResizing) return
+    const previousCursor = globalThis.document.body.style.cursor
+    const previousUserSelect = globalThis.document.body.style.userSelect
+    globalThis.document.body.style.cursor = "row-resize"
+    globalThis.document.body.style.userSelect = "none"
+    return () => {
+      globalThis.document.body.style.cursor = previousCursor
+      globalThis.document.body.style.userSelect = previousUserSelect
+    }
+  }, [isResizing])
+
+  const stopResizing = () => {
+    setIsResizing(false)
+    composerTextareaHeightStore.set(heightPxRef.current)
+  }
+
+  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (centered || event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    resizeStartYRef.current = event.clientY
+    resizeStartHeightRef.current = heightPxRef.current
+    setIsResizing(true)
+  }
+
+  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return
+    const delta = resizeStartYRef.current - event.clientY
+    const next = clampComposerTextareaHeight(resizeStartHeightRef.current + delta)
+    heightPxRef.current = next
+    setTextareaHeightPx(next)
+  }
+
+  const handleResizePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    stopResizing()
+  }
+
+  const handleResizeDoubleClick = () => {
+    if (centered) return
+    const next = composerTextareaHeightStore.default
+    heightPxRef.current = next
+    setTextareaHeightPx(next)
+    composerTextareaHeightStore.set(next)
+  }
 
   const assignTextareaRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -134,7 +210,7 @@ export const ChatComposer = ({
         "z-10",
         centered
           ? "absolute inset-x-0 top-15 bottom-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col items-center justify-center gap-8 px-4 max-md:justify-end max-md:gap-6"
-          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] pb-[calc(1rem+env(safe-area-inset-bottom))]"
+          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] shrink-0 pb-[calc(1rem+env(safe-area-inset-bottom))]"
       )}
     >
       {centered ? (
@@ -155,33 +231,58 @@ export const ChatComposer = ({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
-        <Textarea
-          ref={assignTextareaRef}
-          defaultValue=""
-          onChange={(event) => syncDraft(event.target.value)}
-          onPaste={onPasteAttachments}
-          onKeyDown={(event) => {
-            if (!shouldSubmitOnEnter(event)) return
+        {!centered ? (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize message input"
+            aria-valuemin={composerTextareaHeightStore.min}
+            aria-valuemax={getMaxComposerTextareaHeight()}
+            aria-valuenow={textareaHeightPx}
+            title="Drag to resize · double-click to reset"
+            className={cn(
+              "flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center justify-center",
+              "before:h-1 before:w-10 before:rounded-full before:bg-border before:transition-colors",
+              "hover:before:bg-muted-foreground/40",
+              isResizing && "before:bg-primary"
+            )}
+            onPointerDown={handleResizePointerDown}
+            onPointerMove={handleResizePointerMove}
+            onPointerUp={handleResizePointerUp}
+            onPointerCancel={handleResizePointerUp}
+            onDoubleClick={handleResizeDoubleClick}
+          />
+        ) : null}
+        <div
+          style={centered ? undefined : { minHeight: textareaHeightPx }}
+          className={cn(!centered && "shrink-0")}
+        >
+          <Textarea
+            ref={assignTextareaRef}
+            defaultValue=""
+            onChange={(event) => syncDraft(event.target.value)}
+            onPaste={onPasteAttachments}
+            onKeyDown={(event) => {
+              if (!shouldSubmitOnEnter(event)) return
 
-            event.preventDefault()
-            if (canSend) {
-              onSend()
-            }
-          }}
-          placeholder={placeholder}
-          rows={centered ? 1 : 2}
-          className={cn(
-            // Grow with content via field-sizing-content up to 75vh, then scroll.
-            // Cap harder on phones so the field doesn't fight the virtual keyboard.
-            "min-h-13 max-h-[75vh] max-md:max-h-[36dvh] bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
-            centered
-              ? "-mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
-              : "px-1.5 py-1",
-            "placeholder:text-muted-foreground",
-            "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
-          )}
-          disabled={readOnly}
-        />
+              event.preventDefault()
+              if (canSend) {
+                onSend()
+              }
+            }}
+            placeholder={placeholder}
+            rows={centered ? 1 : 2}
+            className={cn(
+              "bg-transparent shadow-none border-0 text-base resize-none",
+              centered
+                ? "min-h-13 max-h-[50vh] max-md:max-h-[50dvh] overflow-y-auto -mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
+                : "field-sizing-content min-h-13 max-h-[50vh] max-md:max-h-[50dvh] overflow-y-auto px-1.5 py-1",
+              "placeholder:text-muted-foreground",
+              "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+            )}
+            disabled={readOnly}
+          />
+        </div>
         {attachmentError ? (
           <p className="px-1.5 text-destructive text-sm" role="alert">
             {attachmentError}

@@ -8,8 +8,12 @@ const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
 const ACTION_INFO_LEVEL_KEY = "chatui_toolcall_logs_visible"
 const SIDEBAR_SECTIONS_KEY = "chatui_sidebar_sections"
 const COWORK_PANEL_WIDTH_KEY = "chatui_cowork_panel_width_pct"
+const COMPOSER_TEXTAREA_HEIGHT_KEY = "chatui_composer_textarea_height"
 
 const DEFAULT_COWORK_PANEL_WIDTH_PCT = 50
+const DEFAULT_COMPOSER_TEXTAREA_HEIGHT = 88
+const MIN_COMPOSER_TEXTAREA_HEIGHT = 52
+const COMPOSER_TEXTAREA_MAX_HEIGHT_VH = 0.5
 const MIN_COWORK_PANEL_WIDTH_PCT = 24
 const MAX_COWORK_PANEL_WIDTH_PCT = 76
 
@@ -138,4 +142,25 @@ export const coworkPanelWidthStore = {
       String(parseCoworkPanelWidthPct(String(pct)))
     ),
   clear: () => localStorage.removeItem(COWORK_PANEL_WIDTH_KEY),
+}
+
+const parseComposerTextareaHeight = (raw: string | null): number => {
+  if (raw == null) return DEFAULT_COMPOSER_TEXTAREA_HEIGHT
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return DEFAULT_COMPOSER_TEXTAREA_HEIGHT
+  return Math.max(MIN_COMPOSER_TEXTAREA_HEIGHT, Math.round(value))
+}
+
+export const composerTextareaHeightStore = {
+  default: DEFAULT_COMPOSER_TEXTAREA_HEIGHT,
+  min: MIN_COMPOSER_TEXTAREA_HEIGHT,
+  maxHeightVh: COMPOSER_TEXTAREA_MAX_HEIGHT_VH,
+  get: (): number =>
+    parseComposerTextareaHeight(localStorage.getItem(COMPOSER_TEXTAREA_HEIGHT_KEY)),
+  set: (px: number) =>
+    localStorage.setItem(
+      COMPOSER_TEXTAREA_HEIGHT_KEY,
+      String(parseComposerTextareaHeight(String(px)))
+    ),
+  clear: () => localStorage.removeItem(COMPOSER_TEXTAREA_HEIGHT_KEY),
 }
