@@ -453,6 +453,8 @@ export const ChatPage = () => {
     modelStore.get() ?? undefined
   )
   const [reasoningStopIndex, setReasoningStopIndex] = useState(0)
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const modelMenuListRef = useRef<HTMLDivElement>(null)
   const [loadingByChat, setLoadingByChat] = useState<Record<string, boolean>>({})
   const chatIdRef = useRef(chatId)
   chatIdRef.current = chatId
@@ -731,6 +733,14 @@ export const ChatPage = () => {
     const effortIndex = providerReasoningLevels.indexOf(selectedReasoningEffort ?? "")
     return effortIndex >= 0 ? effortIndex : reasoningStopIndex
   }, [providerReasoningLevels, selectedReasoningEffort, reasoningStopIndex])
+
+  useEffect(() => {
+    if (!modelMenuOpen || !selectedModel || !modelMenuListRef.current) return
+    const selectedEl = modelMenuListRef.current.querySelector(
+      `[data-model-id="${selectedModel}"]`
+    )
+    selectedEl?.scrollIntoView({ block: "nearest" })
+  }, [modelMenuOpen, selectedModel])
   const rejectUnsupportedImageAttachments = useCallback(
     (
       items: Array<{ content_type?: string | null }>,
@@ -3706,7 +3716,11 @@ export const ChatPage = () => {
                 hasPrompts={promptCount > 0}
                 onDraftChange={handleComposerDraftChange}
                 modelSelect={
-                  <DropdownMenu modal={false}>
+                  <DropdownMenu
+                    modal={false}
+                    open={modelMenuOpen}
+                    onOpenChange={setModelMenuOpen}
+                  >
                     <DropdownMenuTrigger asChild>
                       <Button
                         type="button"
@@ -3746,9 +3760,12 @@ export const ChatPage = () => {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent
                       align="end"
-                      className="z-100 flex w-72 flex-col overflow-hidden p-0"
+                      className="z-100 flex w-72 min-h-0 max-h-(--radix-dropdown-menu-content-available-height) flex-col overflow-hidden p-0"
                     >
-                      <div className="max-h-56 overflow-y-auto overscroll-contain p-1">
+                      <div
+                        ref={modelMenuListRef}
+                        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
+                      >
                         {selectableChatModels.map((model) => {
                           const hasProviderIcon =
                             getProviderIconCandidates(
@@ -3759,6 +3776,7 @@ export const ChatPage = () => {
                           return (
                             <DropdownMenuItem
                               key={model.id}
+                              data-model-id={model.id}
                               disabled={model.is_available === false}
                               className="cursor-pointer gap-2"
                               onClick={() => setSelectedModel(model.id)}
