@@ -3,6 +3,13 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "@tanstack/react-router"
 
 import { authApi, modelApi, orgApi } from "@/lib/api"
+import {
+  invalidateModelCaches,
+  invalidateOrgsMine,
+  patchModelInCache,
+  patchOrgInMineCache,
+  removeOrgFromMineCache,
+} from "@/hooks/use-chat-query"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
 import { SettingsShell } from "@/components/SettingsShell"
@@ -199,6 +206,7 @@ export const OrgPage = () => {
           display_order: model.display_order ?? 0,
         }))
       )
+      invalidateModelCaches(queryClient)
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common_save_failed"))
     }
@@ -506,6 +514,7 @@ export const OrgPage = () => {
     const org = await orgApi.create(name)
     setName("")
     setOrgs((prev) => [...prev, org])
+    invalidateOrgsMine(queryClient)
   }
 
   const sendInvite = async () => {
@@ -632,7 +641,7 @@ export const OrgPage = () => {
       is_active: true,
     })
     await modelApi.setOrgModels(selectedOrg, [{ model_id: model.id, is_enabled: true }])
-    await queryClient.invalidateQueries({ queryKey: ["models"] })
+    invalidateModelCaches(queryClient)
     setModels((prev) => [...prev, model])
     if (selectedOrg) {
       setAccessByOrgId((prev) => ({
@@ -648,6 +657,7 @@ export const OrgPage = () => {
 
   const removeModel = async (modelId: string) => {
     await modelApi.remove(modelId)
+    invalidateModelCaches(queryClient)
     setModels((prev) => prev.filter((model) => model.id !== modelId))
     setAccessByOrgId((prev) =>
       Object.fromEntries(
@@ -673,6 +683,7 @@ export const OrgPage = () => {
     const trimmed = editingName.trim()
     if (!trimmed) return
     const updated = await modelApi.rename(modelId, trimmed)
+    patchModelInCache(queryClient, updated)
     setModels((prev) =>
       prev.map((model) =>
         model.id === modelId ? { ...model, display_name: updated.display_name } : model
@@ -683,6 +694,7 @@ export const OrgPage = () => {
 
   const updateReasoningEffort = async (modelId: string, value: string) => {
     const updated = await modelApi.update(modelId, { reasoning_effort: value })
+    patchModelInCache(queryClient, updated)
     setModels((prev) =>
       prev.map((model) =>
         model.id === modelId ? { ...model, reasoning_effort: updated.reasoning_effort } : model
@@ -694,6 +706,7 @@ export const OrgPage = () => {
     const updated = await modelApi.update(modelId, {
       openrouter_endpoint: value === OPENROUTER_ENDPOINT_AUTO ? "" : value,
     })
+    patchModelInCache(queryClient, updated)
     setModels((prev) =>
       prev.map((model) =>
         model.id === modelId
@@ -716,7 +729,7 @@ export const OrgPage = () => {
     })
     try {
       await modelApi.setOrgModels(orgId, [{ model_id: modelId, is_enabled: !wasEnabled }])
-      await queryClient.invalidateQueries({ queryKey: ["models"] })
+      invalidateModelCaches(queryClient)
     } catch (err) {
       setAccessByOrgId((prev) => {
         const current = prev[orgId] ?? []
@@ -802,6 +815,7 @@ export const OrgPage = () => {
     if (!renameOrgId || !renameOrgName.trim()) return
     const updated = await orgApi.update(renameOrgId, { name: renameOrgName.trim() })
     setOrgs((prev) => prev.map((org) => (org.id === updated.id ? updated : org)))
+    patchOrgInMineCache(queryClient, updated)
     closeRenameDialog()
   }
 
@@ -844,6 +858,7 @@ export const OrgPage = () => {
       chat_retention_days: chatRetentionDays,
     })
     setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    patchOrgInMineCache(queryClient, updated)
     setRetentionDraftsByOrgId((prev) => ({
       ...prev,
       [updated.id]: {
@@ -897,6 +912,7 @@ export const OrgPage = () => {
       cost_ceiling_usd: costCeilingUsd,
     })
     setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    patchOrgInMineCache(queryClient, updated)
     setCostCeilingDraftsByOrgId((prev) => ({
       ...prev,
       [updated.id]:
@@ -931,6 +947,7 @@ export const OrgPage = () => {
   const toggleOrgFrozen = async (org: Org) => {
     const updated = await orgApi.update(org.id, { is_frozen: !org.is_frozen })
     setOrgs((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    patchOrgInMineCache(queryClient, updated)
   }
 
   const openDeleteDialog = (orgId: string) => {
@@ -945,6 +962,7 @@ export const OrgPage = () => {
     if (!deleteOrgId) return
     await orgApi.remove(deleteOrgId)
     setOrgs((prev) => prev.filter((org) => org.id !== deleteOrgId))
+    removeOrgFromMineCache(queryClient, deleteOrgId)
     if (selectedOrg === deleteOrgId) {
       orgStore.clear()
       setSelectedOrg(null)

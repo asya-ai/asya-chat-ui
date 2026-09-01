@@ -5,6 +5,7 @@ const LOCALE_KEY = "chatui_locale"
 const LOGIN_ORG_KEY = "chatui_login_org"
 const WEB_SEARCH_ENABLED_KEY = "chatui_web_search_enabled"
 const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
+const REASONING_EFFORT_BY_MODEL_KEY = "chatui_reasoning_effort_by_model"
 const ACTION_INFO_LEVEL_KEY = "chatui_toolcall_logs_visible"
 const SIDEBAR_SECTIONS_KEY = "chatui_sidebar_sections"
 const COWORK_PANEL_WIDTH_KEY = "chatui_cowork_panel_width_pct"
@@ -112,6 +113,38 @@ export const codeExecutionEnabledStore = {
   set: (enabled: boolean) =>
     localStorage.setItem(CODE_EXECUTION_ENABLED_KEY, enabled ? "1" : "0"),
   clear: () => localStorage.removeItem(CODE_EXECUTION_ENABLED_KEY),
+}
+
+const parseReasoningEffortByModel = (raw: string | null): Record<string, string> => {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object") return {}
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string"
+      )
+    )
+  } catch {
+    return {}
+  }
+}
+
+export const reasoningEffortStore = {
+  get: (modelId: string): string | null => {
+    const map = parseReasoningEffortByModel(
+      localStorage.getItem(REASONING_EFFORT_BY_MODEL_KEY)
+    )
+    return map[modelId] ?? null
+  },
+  set: (modelId: string, effort: string) => {
+    const map = parseReasoningEffortByModel(
+      localStorage.getItem(REASONING_EFFORT_BY_MODEL_KEY)
+    )
+    map[modelId] = effort
+    localStorage.setItem(REASONING_EFFORT_BY_MODEL_KEY, JSON.stringify(map))
+  },
+  clear: () => localStorage.removeItem(REASONING_EFFORT_BY_MODEL_KEY),
 }
 
 export const actionInfoLevelStore = {

@@ -1,25 +1,24 @@
-import { useEffect, useMemo } from "react"
-import { useNavigate, useLocation } from "@tanstack/react-router"
+import { useEffect } from "react"
+import { useNavigate } from "@tanstack/react-router"
 
 import { useAuth } from "@/lib/auth-context"
 
+const readCallbackToken = () =>
+  new URLSearchParams(window.location.search).get("token")
+
 export const SsoCallbackPage = () => {
-  const location = useLocation()
-  const token = useMemo(
-    () => new URLSearchParams(location.searchStr).get("token"),
-    [location.searchStr]
-  )
   const navigate = useNavigate()
   const { setToken } = useAuth()
 
   useEffect(() => {
+    const token = readCallbackToken()
     if (!token) {
       navigate({ to: "/login", replace: true })
       return
     }
     setToken(token)
-    navigate({ to: "/chat/{-$chatId}", replace: true })
-  }, [navigate, setToken, token])
+    navigate({ href: "/chat", replace: true })
+  }, [navigate, setToken])
 
   return null
 }

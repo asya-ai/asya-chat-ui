@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.models import ChatModel, OrgModel, UsageEvent
 from app.services.tools.image_tool import image_usage_token_fields

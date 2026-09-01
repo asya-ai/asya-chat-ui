@@ -12,7 +12,7 @@ import {
   Upload,
 } from "lucide-react"
 
-import { agentApi, chatApi, modelApi } from "@/lib/api"
+import { agentApi, modelApi } from "@/lib/api"
 import { useI18n, type TranslationKey } from "@/lib/i18n-context"
 import type {
   Agent,
@@ -20,10 +20,10 @@ import type {
   AgentShareSuggestion,
   AgentSource,
   AgentSourceStatus,
-  Chat,
   ChatModel,
 } from "@/lib/types"
 import { orgStore } from "@/lib/storage"
+import { useChats, useDeleteAgent, useUpdateAgent } from "@/hooks/use-chat-query"
 import { readFilesAsAttachments } from "@/lib/file-utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -85,11 +85,17 @@ export const ProjectPage = () => {
   const { projectId } = useParams({ strict: false })
   const { t, tCount } = useI18n()
   const orgId = orgStore.get() ?? ""
+  const updateAgentMutation = useUpdateAgent(orgId || null)
+  const deleteAgentMutation = useDeleteAgent(orgId || null)
+  const { data: allChats = [] } = useChats(orgId || null)
+  const chats = useMemo(
+    () => allChats.filter((chat) => chat.agent_id === projectId),
+    [allChats, projectId]
+  )
 
   const [project, setProject] = useState<Agent | null>(null)
   const [models, setModels] = useState<ChatModel[]>([])
   const [sources, setSources] = useState<AgentSource[]>([])
-  const [chats, setChats] = useState<Chat[]>([])
   const [shares, setShares] = useState<AgentShare[]>([])
   const [tab, setTab] = useState<Tab>("chats")
   const [loading, setLoading] = useState(true)
@@ -142,12 +148,6 @@ export const ProjectPage = () => {
     setSources(await agentApi.listSources(projectId))
   }
 
-  const loadChats = async () => {
-    if (!orgId) return
-    const all = await chatApi.list(orgId)
-    setChats(all.filter((chat) => chat.agent_id === projectId))
-  }
-
   useEffect(() => {
     if (!projectId) return
     void (async () => {
@@ -161,7 +161,6 @@ export const ProjectPage = () => {
         }
         await Promise.all([
           loadSources(),
-          loadChats(),
           orgId
             ? modelApi
                 .list(orgId)
@@ -242,13 +241,16 @@ export const ProjectPage = () => {
         setError(t("project_name_required"))
         return
       }
-      await agentApi.update(project.id, {
-        name: instrNameRef.current?.value.trim() ?? "",
-        description: instrDescriptionRef.current?.value.trim() || null,
-        master_prompt: instrPromptRef.current?.value.trim() || null,
-        preferred_model_id: instrModelId || null,
+      const updated = await updateAgentMutation.mutateAsync({
+        agentId: project.id,
+        payload: {
+          name: instrNameRef.current?.value.trim() ?? "",
+          description: instrDescriptionRef.current?.value.trim() || null,
+          master_prompt: instrPromptRef.current?.value.trim() || null,
+          preferred_model_id: instrModelId || null,
+        },
       })
-      await loadProject()
+      setProject(updated)
       notify(t("project_instructions_saved"))
     })
 
@@ -326,9 +328,12 @@ export const ProjectPage = () => {
         setError(t("project_name_required"))
         return
       }
-      await agentApi.update(project.id, { name })
+      const updated = await updateAgentMutation.mutateAsync({
+        agentId: project.id,
+        payload: { name },
+      })
+      setProject(updated)
       setRenameOpen(false)
-      await loadProject()
       notify(t("project_renamed"))
     })
 
@@ -337,7 +342,7 @@ export const ProjectPage = () => {
     try {
       setDeletingProject(true)
       setError(null)
-      await agentApi.remove(project.id)
+      await deleteAgentMutation.mutateAsync(project.id)
       setDeleteOpen(false)
       navigate({ to: "/projects" })
     } catch (err) {

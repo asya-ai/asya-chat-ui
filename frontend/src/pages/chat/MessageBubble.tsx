@@ -35,6 +35,7 @@ import { jsPDF } from "jspdf"
 import { exportCoworkMarkdown } from "@/pages/chat/exportCoworkMarkdown"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
+import { sanitizeMermaidChart } from "@/lib/sanitizeMermaid"
 import type { ActionInfoLevel } from "@/lib/storage"
 import type {
   ChatMessage,
@@ -305,8 +306,11 @@ const completeStreamingMarkdownTables = (markdown: string): string => {
 }
 
 const toMermaidChart = (content: string, language?: string | null): string | null => {
+  const normalize = (chart: string) => sanitizeMermaidChart(chart.trim())
+
   if (language?.toLowerCase() === "mermaid") {
-    return content.trim()
+    const chart = content.trim()
+    return chart ? normalize(chart) : null
   }
 
   const trimmed = content.trim()
@@ -314,11 +318,11 @@ const toMermaidChart = (content: string, language?: string | null): string | nul
 
   if (/^mermaid\s*[\r\n]+/i.test(trimmed)) {
     const chart = trimmed.replace(/^mermaid\s*[\r\n]+/i, "").trim()
-    return chart || null
+    return chart ? normalize(chart) : null
   }
 
   if (MERMAID_START_PATTERN.test(trimmed)) {
-    return trimmed
+    return normalize(trimmed)
   }
 
   return null
@@ -1124,7 +1128,11 @@ const MermaidDiagram = ({
       setRenderError(null)
       try {
         const mermaid = await loadMermaid()
-        const { svg, bindFunctions } = await mermaid.render(nextMermaidRenderId(), chart)
+        const chartToRender = sanitizeMermaidChart(chart)
+        const { svg, bindFunctions } = await mermaid.render(
+          nextMermaidRenderId(),
+          chartToRender
+        )
         if (cancelled || !containerRef.current) return
         containerRef.current.innerHTML = svg
         bindFunctions?.(containerRef.current)

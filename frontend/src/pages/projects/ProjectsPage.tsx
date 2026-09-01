@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { FolderOpen, Plus, Search } from "lucide-react"
 
-import { agentApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
-import type { Agent } from "@/lib/types"
+import { orgStore } from "@/lib/storage"
+import { useAgents, useCreateAgent } from "@/hooks/use-chat-query"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -22,29 +22,15 @@ import {
 export const ProjectsPage = () => {
   const navigate = useNavigate()
   const { t } = useI18n()
-  const [projects, setProjects] = useState<Agent[]>([])
+  const orgId = orgStore.get()
+  const { data: projects = [], isLoading, error: loadError } = useAgents(orgId)
+  const createAgentMutation = useCreateAgent(orgId)
   const [query, setQuery] = useState("")
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
-  const [creating, setCreating] = useState(false)
   const [hasNewName, setHasNewName] = useState(false)
   const newNameRef = useRef<HTMLInputElement | null>(null)
   const newInstructionsRef = useRef<HTMLTextAreaElement | null>(null)
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        setLoading(true)
-        setError(null)
-        setProjects(await agentApi.list())
-      } catch (err) {
-        setError(err instanceof Error ? err.message : t("project_load_failed"))
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [t])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -63,9 +49,8 @@ export const ProjectsPage = () => {
       return
     }
     try {
-      setCreating(true)
       setError(null)
-      const created = await agentApi.create({
+      const created = await createAgentMutation.mutateAsync({
         name,
         master_prompt: newInstructionsRef.current?.value.trim() || null,
       })
@@ -74,10 +59,11 @@ export const ProjectsPage = () => {
       navigate({ href: `/projects/${created.id}` })
     } catch (err) {
       setError(err instanceof Error ? err.message : t("project_create_failed"))
-    } finally {
-      setCreating(false)
     }
   }
+
+  const displayError =
+    error ?? (loadError instanceof Error ? loadError.message : loadError ? t("project_load_failed") : null)
 
   return (
     <AppShell activeSection="projects">
@@ -113,13 +99,13 @@ export const ProjectsPage = () => {
         />
       </div>
 
-      {error ? (
+      {displayError ? (
         <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{displayError}</AlertDescription>
         </Alert>
       ) : null}
 
-      {loading ? (
+      {isLoading ? (
         <p className="text-muted-foreground text-sm">{t("project_loading")}</p>
       ) : filtered.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-[var(--radius-card)] border border-dashed bg-card py-20 text-center">
@@ -218,7 +204,10 @@ export const ProjectsPage = () => {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               {t("common_cancel")}
             </Button>
-            <Button onClick={handleCreate} disabled={creating || !hasNewName}>
+            <Button
+              onClick={handleCreate}
+              disabled={createAgentMutation.isPending || !hasNewName}
+            >
               {t("project_create_action")}
             </Button>
           </DialogFooter>

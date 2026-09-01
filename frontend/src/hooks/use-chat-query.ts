@@ -1,8 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 
-import { authApi, chatApi, modelApi, orgApi } from "@/lib/api"
+import { agentApi, authApi, chatApi, modelApi, orgApi, promptApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
-import type { Chat, ChatMessage } from "@/lib/types"
+import type { Agent, Chat, ChatMessage, ChatModel, Org, Prompt } from "@/lib/types"
 
 const chatKeys = {
   all: ["chats"] as const,
@@ -21,6 +21,55 @@ const orgKeys = {
 
 const meKeys = {
   me: ["auth", "me"] as const,
+}
+
+const agentKeys = {
+  all: ["agents"] as const,
+}
+
+const promptKeys = {
+  all: ["prompts"] as const,
+  list: (contextAgentId: string | null) => [...promptKeys.all, contextAgentId ?? "none"] as const,
+}
+
+const upsertPromptInContextCache = (
+  queryClient: QueryClient,
+  contextAgentId: string | null,
+  prompt: Prompt
+) => {
+  queryClient.setQueryData<Prompt[]>(promptKeys.list(contextAgentId), (prev) => {
+    const matchesContext =
+      !prompt.agent_id ||
+      (contextAgentId != null && prompt.agent_id === contextAgentId)
+    const without = (prev ?? []).filter((item) => item.id !== prompt.id)
+    return matchesContext ? [prompt, ...without] : without
+  })
+}
+
+export const patchModelInCache = (queryClient: QueryClient, updated: ChatModel) => {
+  queryClient.setQueriesData<ChatModel[]>({ queryKey: modelKeys.all }, (prev) =>
+    prev?.map((model) => (model.id === updated.id ? { ...model, ...updated } : model)) ?? prev
+  )
+}
+
+export const invalidateModelCaches = (queryClient: QueryClient) => {
+  void queryClient.invalidateQueries({ queryKey: modelKeys.all })
+}
+
+export const patchOrgInMineCache = (queryClient: QueryClient, updated: Org) => {
+  queryClient.setQueryData<Org[]>(orgKeys.mine, (prev) =>
+    prev?.map((org) => (org.id === updated.id ? { ...org, ...updated } : org)) ?? prev
+  )
+}
+
+export const removeOrgFromMineCache = (queryClient: QueryClient, orgId: string) => {
+  queryClient.setQueryData<Org[]>(orgKeys.mine, (prev) =>
+    prev?.filter((org) => org.id !== orgId) ?? prev
+  )
+}
+
+export const invalidateOrgsMine = (queryClient: QueryClient) => {
+  void queryClient.invalidateQueries({ queryKey: orgKeys.mine })
 }
 
 export const useMe = () => {
@@ -85,6 +134,103 @@ export const useModels = (orgId: string | null) =>
     enabled: Boolean(orgId),
     staleTime: 30_000,
   })
+
+export const useAgents = (orgId: string | null) =>
+  useQuery({
+    queryKey: agentKeys.all,
+    queryFn: () => agentApi.list(),
+    enabled: Boolean(orgId),
+    staleTime: 15_000,
+  })
+
+export const useCreateAgent = (_orgId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      name: string
+      description?: string | null
+      preferred_model_id?: string | null
+      master_prompt?: string | null
+    }) => agentApi.create(payload),
+    onSuccess: (created) => {
+      queryClient.setQueryData<Agent[]>(agentKeys.all, (prev) =>
+        prev ? [created, ...prev] : [created]
+      )
+    },
+  })
+}
+
+export const useUpdateAgent = (_orgId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      agentId,
+      payload,
+    }: {
+      agentId: string
+      payload: Parameters<typeof agentApi.update>[1]
+    }) => agentApi.update(agentId, payload),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Agent[]>(agentKeys.all, (prev) =>
+        prev
+          ? prev.map((agent) => (agent.id === updated.id ? { ...agent, ...updated } : agent))
+          : prev
+      )
+    },
+  })
+}
+
+export const useDeleteAgent = (_orgId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (agentId: string) => agentApi.remove(agentId),
+    onSuccess: (_result, agentId) => {
+      queryClient.setQueryData<Agent[]>(agentKeys.all, (prev) =>
+        prev ? prev.filter((agent) => agent.id !== agentId) : prev
+      )
+    },
+  })
+}
+
+export const usePrompts = (contextAgentId: string | null) =>
+  useQuery({
+    queryKey: promptKeys.list(contextAgentId),
+    queryFn: () => promptApi.list({ context_agent_id: contextAgentId }),
+    staleTime: 15_000,
+  })
+
+export const useSavePrompt = (contextAgentId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      promptId,
+      payload,
+      clearAgent,
+    }: {
+      promptId?: string
+      payload: Parameters<typeof promptApi.create>[0]
+      clearAgent?: boolean
+    }) =>
+      promptId
+        ? promptApi.update(promptId, { ...payload, clear_agent: clearAgent })
+        : promptApi.create(payload),
+    onSuccess: (saved) => {
+      upsertPromptInContextCache(queryClient, contextAgentId, saved)
+    },
+  })
+}
+
+export const useDeletePrompt = () => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (promptId: string) => promptApi.remove(promptId),
+    onSuccess: (_result, promptId) => {
+      queryClient.setQueriesData<Prompt[]>({ queryKey: promptKeys.all }, (prev) =>
+        prev?.filter((prompt) => prompt.id !== promptId) ?? prev
+      )
+    },
+  })
+}
 
 export const useCreateChat = (orgId: string | null) => {
   const queryClient = useQueryClient()

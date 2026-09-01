@@ -8,6 +8,7 @@ import { oneDark } from "@codemirror/theme-one-dark"
 
 import { Button } from "@/components/ui/button"
 import { getTheme, type ThemeMode } from "@/lib/theme"
+import { sanitizeMermaidChart } from "@/lib/sanitizeMermaid"
 import { cn } from "@/lib/utils"
 
 type CoworkPresentationEditorProps = {
@@ -277,7 +278,7 @@ const mermaidSourceFromCodeEl = (codeEl: HTMLElement): string | null => {
   if (!/%%\{\s*init\s*:/i.test(source)) {
     source = `%%{init: {'theme':'dark'}}%%\n${source}`
   }
-  return source
+  return sanitizeMermaidChart(source)
 }
 
 const renderMermaidInRoot = async (root: ParentNode) => {

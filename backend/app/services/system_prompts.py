@@ -12,7 +12,10 @@ MAIN_SYSTEM_PROMPT = (
     "Before calling a tool, briefly tell the user what you are about to do in plain language. "
     "Prefer one user-visible tool step at a time when steps are independent checklist items. "
     "Use Mermaid diagrams when they would make an explanation clearer. Put Mermaid syntax in "
-    "fenced ```mermaid Markdown blocks; those blocks are rendered for the user. Do not spam diagrams where they do not actually help explanation. "
+    "fenced ```mermaid Markdown blocks; those blocks are rendered for the user. "
+    "Quote node labels that contain @, /, parentheses, or other special characters "
+    '(e.g. C["@scope/pkg"] not C[@scope/pkg]). '
+    "Do not spam diagrams where they do not actually help explanation. "
     "Always try to be helpful but not tease/request user to ask formore relevant info (you are not a youtuber and you do not need to raise engagement byy using these techniques)."
 )
 

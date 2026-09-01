@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Trash2 } from "lucide-react"
 
 import { orgApi, promptApi } from "@/lib/api"
+import { useSavePrompt } from "@/hooks/use-chat-query"
 import { useI18n } from "@/lib/i18n-context"
 import type { Agent, MyTeam, Prompt, PromptSharedUser, PromptVisibility } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -41,10 +42,11 @@ type PromptFormDialogProps = {
   onOpenChange: (open: boolean) => void
   orgId: string | null
   projects: Agent[]
+  contextAgentId?: string | null
   initial?: Partial<PromptFormValues> & { id?: string }
   title: string
   description?: string
-  onSaved: (prompt: Prompt) => void
+  onSaved?: (prompt: Prompt) => void
 }
 
 const defaultVisibility = (
@@ -66,9 +68,11 @@ export const PromptFormDialog = ({
   initial,
   title,
   description,
+  contextAgentId = null,
   onSaved,
 }: PromptFormDialogProps) => {
   const { t } = useI18n()
+  const savePromptMutation = useSavePrompt(contextAgentId)
   const nameRef = useRef<HTMLInputElement | null>(null)
   const descRef = useRef<HTMLInputElement | null>(null)
   const bodyRef = useRef<HTMLTextAreaElement | null>(null)
@@ -218,13 +222,12 @@ export const PromptFormDialog = ({
         user_ids: visibility === "users" ? selectedUsers.map((user) => user.user_id) : [],
         agent_id: agentId,
       }
-      const saved = initial?.id
-        ? await promptApi.update(initial.id, {
-            ...payload,
-            clear_agent: agentId === null,
-          })
-        : await promptApi.create(payload)
-      onSaved(saved)
+      const saved = await savePromptMutation.mutateAsync({
+        promptId: initial?.id,
+        payload,
+        clearAgent: agentId === null,
+      })
+      onSaved?.(saved)
       onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common_save_failed"))

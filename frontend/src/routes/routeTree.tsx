@@ -24,6 +24,11 @@ const indexRoute = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
+  beforeLoad: () => {
+    if (tokenStore.get()) {
+      throw redirect({ to: "/chat/{-$chatId}" })
+    }
+  },
   component: lazyRouteComponent(() =>
     import("@/pages/Login").then((mod) => ({ default: mod.LoginPage }))
   ),

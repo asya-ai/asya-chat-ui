@@ -1,5 +1,64 @@
+from uuid import uuid4
+
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.models import ChatModel, Org, OrgModel
 from app.services.model_pricing import estimate_token_cost_usd
-from app.services.tool_usage import merge_tool_usage_fields, perplexity_usage_fields
+from app.services.tool_usage import (
+    merge_tool_usage_fields,
+    perplexity_usage_fields,
+    resolve_service_model_id,
+)
+
+
+def _session() -> Session:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(
+        engine,
+        tables=[
+            Org.__table__,
+            ChatModel.__table__,
+            OrgModel.__table__,
+        ],
+    )
+    return Session(engine)
+
+
+def test_resolve_service_model_id_returns_chat_model_uuid():
+    with _session() as session:
+        org = Org(name=f"Org-{uuid4().hex[:8]}")
+        session.add(org)
+        session.commit()
+        session.refresh(org)
+
+        model_id = resolve_service_model_id(
+            session,
+            org.id,
+            "perplexity",
+            "sonar-pro",
+            display_name="Perplexity sonar-pro",
+        )
+        session.commit()
+
+        model = session.exec(
+            select(ChatModel).where(ChatModel.id == model_id)
+        ).first()
+        assert model is not None
+        assert model.provider == "perplexity"
+        assert model.model_name == "sonar-pro"
+
+        org_link = session.exec(
+            select(OrgModel).where(
+                OrgModel.org_id == org.id,
+                OrgModel.model_id == model_id,
+            )
+        ).first()
+        assert org_link is not None
 
 
 def test_perplexity_usage_fields_maps_prompt_and_completion_tokens():

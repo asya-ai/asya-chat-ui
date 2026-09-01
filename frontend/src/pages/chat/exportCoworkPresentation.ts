@@ -2,6 +2,7 @@ import { Marp } from "@marp-team/marp-core"
 import html2canvas from "html2canvas"
 import { jsPDF } from "jspdf"
 import PptxGenJS from "pptxgenjs"
+import { sanitizeMermaidChart } from "@/lib/sanitizeMermaid"
 
 export type PresentationExportFormat = "pdf" | "pptx"
 
@@ -72,7 +73,7 @@ const mermaidSourceFromCodeEl = (codeEl: HTMLElement): string | null => {
   if (!/%%\{\s*init\s*:/i.test(source)) {
     source = `%%{init: {'theme':'dark'}}%%\n${source}`
   }
-  return source
+  return sanitizeMermaidChart(source)
 }
 
 const renderMermaidInRoot = async (root: ParentNode) => {

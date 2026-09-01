@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
+import { flushSync } from "react-dom"
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, agentApi, chatApi, configApi, promptApi } from "@/lib/api"
+import { ApiError, chatApi, configApi } from "@/lib/api"
 import { chatGenerationIndicatorsStore, useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import { composerDraftStore } from "@/lib/composer-drafts"
 import {
@@ -11,12 +12,12 @@ import {
   codeExecutionEnabledStore,
   modelStore,
   orgStore,
+  reasoningEffortStore,
   webSearchEnabledStore,
   type ActionInfoLevel,
 } from "@/lib/storage"
 import type {
   Chat,
-  Agent,
   ChatModel,
   ChatMessage,
   ChatMessageAttachmentInput,
@@ -54,6 +55,7 @@ import { MessageList } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 import {
+  useAgents,
   useChatSearch,
   useChatMessages,
   useChats,
@@ -62,6 +64,7 @@ import {
   useMe,
   useModels,
   useOrgsMine,
+  usePrompts,
 } from "@/hooks/use-chat-query"
 import {
   filesToPendingAttachments,
@@ -432,7 +435,6 @@ export const ChatPage = () => {
     [location.searchStr]
   )
   const [orgId, setOrgId] = useState<string | null>(orgStore.get())
-  const [agents, setAgents] = useState<Agent[]>([])
   const [toolEvents, setToolEvents] = useState<ChatMessage[]>([])
   const cowork = useCoworkDocument(chatId)
   const isMobile = useIsMobile()
@@ -444,9 +446,7 @@ export const ChatPage = () => {
   const restoredDraftChatIdRef = useRef<string | null>(null)
   const justCreatedChatIdRef = useRef<string | null>(null)
   const skipDraftPersistRef = useRef(false)
-  const [promptCount, setPromptCount] = useState(0)
   const [insertPromptOpen, setInsertPromptOpen] = useState(false)
-  const [insertPrompts, setInsertPrompts] = useState<Prompt[]>([])
   const [savePromptOpen, setSavePromptOpen] = useState(false)
   const [savePromptBody, setSavePromptBody] = useState("")
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
@@ -529,6 +529,7 @@ export const ChatPage = () => {
   const { data: currentUser } = useMe()
   const { data: orgs = [], isLoading: orgsLoading } = useOrgsMine()
   const { data: models = [], refetch: refetchModels } = useModels(orgId)
+  const { data: agents = [] } = useAgents(orgId)
   const { data: chats = [], isFetched: chatsFetched, refetch: refetchChats } = useChats(orgId)
   const { data: searchedChats = [] } = useChatSearch(orgId, chatSearchDebounced)
   const {
@@ -547,30 +548,6 @@ export const ChatPage = () => {
         // Keep backend defaults when limits cannot be loaded.
       })
   }, [])
-
-  useEffect(() => {
-    if (!orgId) {
-      setAgents([])
-      return
-    }
-    let cancelled = false
-    agentApi
-      .list()
-      .then((items) => {
-        if (cancelled) return
-        setAgents(items)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setAgents([])
-      })
-      .finally(() => {
-        if (cancelled) return
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [orgId])
 
   useEffect(() => {
     if (isHistoryView) return
@@ -1614,6 +1591,7 @@ export const ChatPage = () => {
   }, [chatId, chats, chatsFetched, sessionOwnedChatIds])
   const activeAgentId = activeAgentIdFromQuery ?? activeChat?.agent_id ?? null
   const isAgentMode = Boolean(activeAgentId)
+  const { data: prompts = [] } = usePrompts(activeAgentId)
   const isSharedView = Boolean(
     chatId &&
       orgId &&
@@ -1665,9 +1643,11 @@ export const ChatPage = () => {
   }, [selectedModel])
 
   useEffect(() => {
+    if (!selectedChatModel) return
+    const storedEffort = reasoningEffortStore.get(selectedChatModel.id)
     setReasoningStopIndex(
       resolveReasoningStopIndex(
-        selectedChatModel?.reasoning_effort,
+        storedEffort ?? selectedChatModel.reasoning_effort,
         providerReasoningLevels
       )
     )
@@ -2048,7 +2028,9 @@ export const ChatPage = () => {
       agent_id: isAgentMode && activeAgentId ? activeAgentId : undefined,
       is_incognito: incognitoEnabled,
     })
-    setSessionOwnedChatIds(rememberSessionOwnedChatId(chat.id))
+    flushSync(() => {
+      setSessionOwnedChatIds(rememberSessionOwnedChatId(chat.id))
+    })
     pendingChatIdRef.current = chat.id
     justCreatedChatIdRef.current = chat.id
     navigate({
@@ -2667,18 +2649,9 @@ export const ChatPage = () => {
     })
   }, [])
 
-  const openInsertPromptPicker = useCallback(async () => {
-    try {
-      const items = await promptApi.list({
-        context_agent_id: activeAgentId ?? null,
-      })
-      setInsertPrompts(items)
-      setInsertPromptOpen(true)
-      setPromptCount(items.length)
-    } catch {
-      setInsertPrompts([])
-    }
-  }, [activeAgentId])
+  const openInsertPromptPicker = useCallback(() => {
+    setInsertPromptOpen(true)
+  }, [])
 
   const saveMessageAsPrompt = useCallback((msg: ChatMessage) => {
     if (msg.role !== "user") return
@@ -3500,7 +3473,6 @@ export const ChatPage = () => {
           }}
           onToggleShareChat={toggleShareChat}
           onInsertPrompt={insertPromptIntoComposer}
-          onPromptCountChange={setPromptCount}
           onRequestClose={() => setSidebarOpen(false)}
           footer={sidebarFooter}
         />
@@ -3550,7 +3522,6 @@ export const ChatPage = () => {
           onOpenProjects={() => navigate({ to: "/projects" })}
           onToggleShareChat={toggleShareChat}
           onInsertPrompt={insertPromptIntoComposer}
-          onPromptCountChange={setPromptCount}
           footer={sidebarFooter}
         />
       </aside>
@@ -3713,7 +3684,7 @@ export const ChatPage = () => {
                 attachmentError={attachmentError}
                 inputRef={composerInputRef}
                 showModelSelect
-                hasPrompts={promptCount > 0}
+                hasPrompts={prompts.length > 0}
                 onDraftChange={handleComposerDraftChange}
                 modelSelect={
                   <DropdownMenu
@@ -3804,7 +3775,16 @@ export const ChatPage = () => {
                       </div>
                       <div
                         className="shrink-0 space-y-3 border-t px-3 py-2"
-                        onPointerDown={(event) => event.preventDefault()}
+                        onPointerDown={(event) => {
+                          const target = event.target
+                          if (
+                            target instanceof Element &&
+                            target.closest("input, button, label, [role='switch']")
+                          ) {
+                            return
+                          }
+                          event.preventDefault()
+                        }}
                       >
                         <div>
                           <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
@@ -3846,9 +3826,12 @@ export const ChatPage = () => {
                                   providerReasoningLevels.length - 1,
                                   0
                                 )
-                                setReasoningStopIndex(
-                                  Math.max(0, Math.min(index, maxIndex))
-                                )
+                                const nextIndex = Math.max(0, Math.min(index, maxIndex))
+                                setReasoningStopIndex(nextIndex)
+                                const effort = providerReasoningLevels[nextIndex]
+                                if (selectedModel && effort) {
+                                  reasoningEffortStore.set(selectedModel, effort)
+                                }
                               }}
                               className="reasoning-slider__input"
                               aria-label={t("chat_thinking_level")}
@@ -4053,7 +4036,7 @@ export const ChatPage = () => {
         </Dialog>
         <InsertPromptPicker
           open={insertPromptOpen}
-          prompts={insertPrompts}
+          prompts={prompts}
           title={t("prompt_insert")}
           description={t("prompt_insert_description")}
           searchPlaceholder={t("prompt_search_placeholder")}
@@ -4079,8 +4062,8 @@ export const ChatPage = () => {
           }}
           title={t("prompt_save_message")}
           description={t("prompt_form_description")}
+          contextAgentId={activeAgentId}
           onSaved={() => {
-            setPromptCount((count) => count + 1)
             toast.success(t("prompt_saved"))
           }}
         />

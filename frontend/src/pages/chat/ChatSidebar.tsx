@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { Link, useNavigate, useParams } from "@tanstack/react-router"
 import { ChevronDown, ChevronRight, FileText, Loader2, MoreVertical, Pin, Plus, Search, X } from "lucide-react"
 
-import { agentApi, promptApi } from "@/lib/api"
 import { useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import {
   draftTitleFromText,
@@ -14,11 +13,15 @@ import { orgStore, sidebarSectionsStore } from "@/lib/storage"
 import type { Agent, Chat, Prompt } from "@/lib/types"
 import { PromptFormDialog } from "@/components/PromptFormDialog"
 import {
+  useAgents,
   useChats,
   useChatSearch,
+  useCreateAgent,
   useDeleteChat,
+  useDeletePrompt,
   useOrgsMine,
   usePinChat,
+  usePrompts,
   useRenameChat,
 } from "@/hooks/use-chat-query"
 import { Button } from "@/components/ui/button"
@@ -130,8 +133,10 @@ export const ChatSidebar = ({
   const deleteChatMutation = useDeleteChat(orgId)
   const renameChatMutation = useRenameChat(orgId)
   const pinChatMutation = usePinChat(orgId)
-  const [agents, setAgents] = useState<Agent[]>([])
-  const [prompts, setPrompts] = useState<Prompt[]>([])
+  const createAgentMutation = useCreateAgent(orgId)
+  const deletePromptMutation = useDeletePrompt()
+  const { data: agents = [] } = useAgents(orgId)
+  const { data: prompts = [] } = usePrompts(activeAgentId ?? null)
   const [sectionsOpen, setSectionsOpen] = useState(() => sidebarSectionsStore.get())
   const [sessionQueryDebounced, setSessionQueryDebounced] = useState("")
   const [renameChat, setRenameChat] = useState<Chat | null>(null)
@@ -199,47 +204,8 @@ export const ChatSidebar = ({
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-    agentApi
-      .list()
-      .then((items) => {
-        if (!cancelled) setAgents(items)
-      })
-      .catch(() => {
-        if (!cancelled) setAgents([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [orgId])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!orgId) {
-      setPrompts([])
-      onPromptCountChange?.(0)
-      return
-    }
-    promptApi
-      .list({
-        context_agent_id: activeAgentId ?? null,
-      })
-      .then((items) => {
-        if (cancelled) return
-        setPrompts(items)
-        onPromptCountChange?.(items.length)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setPrompts([])
-        onPromptCountChange?.(0)
-      })
-    return () => {
-      cancelled = true
-    }
-    // Intentionally omit onPromptCountChange to avoid re-fetch loops from unstable parents.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, activeAgentId])
+    onPromptCountChange?.(prompts.length)
+  }, [prompts.length, onPromptCountChange])
 
   const openCreatePrompt = () => {
     setEditingPrompt(null)
@@ -247,28 +213,11 @@ export const ChatSidebar = ({
     if (!sectionsOpen.prompts) setSectionOpen("prompts", true)
   }
 
-  const handlePromptSaved = (prompt: Prompt) => {
-    setPrompts((prev) => {
-      const matchesContext =
-        !prompt.agent_id ||
-        (activeAgentId != null && prompt.agent_id === activeAgentId)
-      const without = prev.filter((item) => item.id !== prompt.id)
-      const next = matchesContext ? [prompt, ...without] : without
-      onPromptCountChange?.(next.length)
-      return next
-    })
-  }
-
   const handleDeletePrompt = async () => {
     if (!deletePromptTarget) return
     try {
       setDeletingPrompt(true)
-      await promptApi.remove(deletePromptTarget.id)
-      setPrompts((prev) => {
-        const next = prev.filter((item) => item.id !== deletePromptTarget.id)
-        onPromptCountChange?.(next.length)
-        return next
-      })
+      await deletePromptMutation.mutateAsync(deletePromptTarget.id)
       setDeletePromptTarget(null)
     } catch {
       // keep dialog open
@@ -384,11 +333,10 @@ export const ChatSidebar = ({
     try {
       setCreating(true)
       setCreateError(null)
-      const created = await agentApi.create({
+      const created = await createAgentMutation.mutateAsync({
         name,
         master_prompt: newInstructionsRef.current?.value.trim() || null,
       })
-      setAgents((prev) => [created, ...prev])
       setCreateOpen(false)
       setHasNewName(false)
       onRequestClose?.()
@@ -1107,7 +1055,7 @@ export const ChatSidebar = ({
         }
         title={editingPrompt ? t("prompt_edit") : t("prompt_create_title")}
         description={t("prompt_form_description")}
-        onSaved={handlePromptSaved}
+        contextAgentId={activeAgentId ?? null}
       />
 
       <Dialog
