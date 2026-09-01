@@ -1671,6 +1671,14 @@ export const ChatPage = () => {
     codeExecutionEnabledStore.set(codeExecutionEnabled)
   }, [codeExecutionEnabled])
 
+  // File contents are read via the code execution sandbox; turn it on when
+  // the user attaches anything so the model can access the file.
+  useEffect(() => {
+    if (pendingAttachments.length > 0 || editingAttachments.length > 0) {
+      setCodeExecutionEnabled(true)
+    }
+  }, [pendingAttachments.length, editingAttachments.length])
+
   useEffect(() => {
     window.sessionStorage.setItem("chatui_incognito_enabled", incognitoEnabled ? "1" : "0")
   }, [incognitoEnabled])
@@ -2412,7 +2420,7 @@ export const ChatPage = () => {
           content_type: item.content_type,
         })),
         webSearchEnabled,
-        codeExecutionEnabled,
+        codeExecutionEnabled || uploadedAttachments.length > 0,
         selectedReasoningEffort,
         locale,
         (event) => {
@@ -3067,7 +3075,7 @@ export const ChatPage = () => {
         content_type: attachment.content_type,
       })),
       webSearchEnabled,
-      codeExecutionEnabled,
+      codeExecutionEnabled || uploadedEditingAttachments.length > 0,
       selectedReasoningEffort,
       locale,
       (event) => {
@@ -3216,7 +3224,7 @@ export const ChatPage = () => {
         content_type: attachment.content_type,
       })),
       webSearchEnabled,
-      codeExecutionEnabled,
+      codeExecutionEnabled || uploadedRetryAttachments.length > 0,
       selectedReasoningEffort,
       locale,
       (event) => {
