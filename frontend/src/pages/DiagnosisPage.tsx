@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
-import { useLocation, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 
 import { authApi, systemDiagnosisApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
 import { SettingsShell } from "@/components/SettingsShell"
+import { SettingsPage } from "@/components/settings/SettingsPanel"
 import type {
   DependencyCheck,
   DiskUsageInfo,
@@ -88,10 +89,8 @@ const diskBarClass = (percent: number | null | undefined) => {
 
 export const DiagnosisPage = () => {
   const navigate = useNavigate()
-  const location = useLocation()
   const { t } = useI18n()
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
-  const [isAdmin, setIsAdmin] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -116,7 +115,6 @@ export const DiagnosisPage = () => {
       .me()
       .then((me) => {
         setIsSuperAdmin(me.is_super_admin)
-        setIsAdmin(me.is_admin)
         setAuthChecked(true)
       })
       .catch(() => {
@@ -195,77 +193,24 @@ export const DiagnosisPage = () => {
     return null
   }
 
-  const navItems = [
-    { label: t("me_settings"), href: "/settings/me", active: false },
-    {
-      label: t("org_section_users"),
-      href: "/settings/users",
-      visible: isAdmin,
-      active: location.pathname.startsWith("/settings/users"),
-    },
-    {
-      label: t("org_section_teams"),
-      href: "/settings/teams",
-      visible: isAdmin,
-      active: location.pathname.startsWith("/settings/teams"),
-    },
-    {
-      label: t("org_section_orgs"),
-      href: "/settings/organisation",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/organisation"),
-    },
-    {
-      label: t("org_section_models"),
-      href: "/settings/models",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/models"),
-    },
-    {
-      label: t("instance_providers_title"),
-      href: "/settings/providers",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/providers"),
-    },
-    {
-      label: t("diagnosis_title"),
-      href: "/settings/diagnosis",
-      visible: isSuperAdmin,
-      active: true,
-    },
-    {
-      label: t("usage_title"),
-      href: "/usage",
-      visible: isAdmin,
-      active: location.pathname.startsWith("/usage"),
-    },
-  ]
-
   const summary = diagnosis?.summary ?? { ok: 0, invalid: 0, missing: 0 }
 
   return (
     <SettingsShell
       title={t("diagnosis_title")}
-      items={navItems}
       actions={
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => void loadDiagnosis()} disabled={loading}>
-            {loading ? t("diagnosis_checking") : t("diagnosis_refresh")}
-          </Button>
-          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })}>
-            {t("common_back_to_chat")}
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => void loadDiagnosis()} disabled={loading}>
+          {loading ? t("diagnosis_checking") : t("diagnosis_refresh")}
+        </Button>
       }
     >
-      <div className="space-y-6">
+        <SettingsPage wide>
+          <div className="space-y-6">
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-
-        <p className="text-sm text-muted-foreground">{t("diagnosis_description")}</p>
 
         <div className="flex flex-wrap gap-3">
           <Badge variant="success">
@@ -747,6 +692,7 @@ export const DiagnosisPage = () => {
           </Card>
         ))}
       </div>
+        </SettingsPage>
     </SettingsShell>
   )
 }

@@ -3,9 +3,11 @@ import json
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.core.secret_crypto import decrypt_secret
-from app.models import InstanceProviderConfig
+from app.models import InstanceProviderConfig, InstanceProviderEnvSuppression
 from app.services.instance_providers import (
+    delete_instance_provider,
     env_key_stored_in_db,
+    is_env_import_suppressed,
     migrate_env_providers,
     provider_is_configured,
     resolve_instance_credentials,
@@ -110,3 +112,24 @@ def test_vertex_config_json_is_encrypted_at_rest(monkeypatch):
         creds = resolve_instance_credentials(session, "vertex")
         assert creds.config is not None
         assert creds.config.get("project_id") == "demo-project"
+
+
+def test_delete_instance_provider_suppresses_env_reimport(monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    SQLModel.metadata.create_all(engine)
+
+    monkeypatch.setattr(
+        "app.services.instance_providers.settings",
+        _SettingsProbe(),
+    )
+
+    with Session(engine) as session:
+        migrate_env_providers(session)
+        delete_instance_provider(session, "openai")
+        assert (
+            session.exec(select(InstanceProviderConfig)).first() is None
+        )
+        assert is_env_import_suppressed(session, "openai")
+
+        migrated_again = migrate_env_providers(session)
+        assert migrated_again == []

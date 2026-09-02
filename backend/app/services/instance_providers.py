@@ -11,7 +11,11 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.core.secret_crypto import decrypt_secret, encrypt_secret
-from app.models import InstanceProviderConfig, OrgProviderConfig
+from app.models import (
+    InstanceProviderConfig,
+    InstanceProviderEnvSuppression,
+    OrgProviderConfig,
+)
 
 BUILTIN_PROVIDERS = [
     "openai",
@@ -114,6 +118,44 @@ def get_instance_provider_config(
     return session.exec(
         select(InstanceProviderConfig).where(InstanceProviderConfig.provider == provider)
     ).first()
+
+
+def is_env_import_suppressed(session: Session, provider: str) -> bool:
+    return (
+        session.exec(
+            select(InstanceProviderEnvSuppression).where(
+                InstanceProviderEnvSuppression.provider == provider
+            )
+        ).first()
+        is not None
+    )
+
+
+def suppress_env_import(session: Session, provider: str) -> None:
+    if is_env_import_suppressed(session, provider):
+        return
+    session.add(InstanceProviderEnvSuppression(provider=provider))
+
+
+def clear_env_import_suppression(session: Session, provider: str) -> None:
+    record = session.exec(
+        select(InstanceProviderEnvSuppression).where(
+            InstanceProviderEnvSuppression.provider == provider
+        )
+    ).first()
+    if record:
+        session.delete(record)
+
+
+def delete_instance_provider(session: Session, provider: str) -> None:
+    record = get_instance_provider_config(session, provider)
+    if not record:
+        raise LookupError("Provider not found")
+    if provider in _PROVIDER_ENV_SPECS:
+        suppress_env_import(session, provider)
+    session.delete(record)
+    session.commit()
+    invalidate_provider_caches()
 
 
 def _settings_str(field: str) -> str | None:
@@ -326,6 +368,9 @@ def env_key_stored_in_db(session: Session, env_key: str) -> bool:
 
 
 def _migrate_vertex_from_env(session: Session) -> InstanceProviderConfig | None:
+    if is_env_import_suppressed(session, "vertex"):
+        return None
+
     existing = get_instance_provider_config(session, "vertex")
     if existing and _instance_has_config(existing):
         return None
@@ -355,6 +400,8 @@ def migrate_env_providers(session: Session) -> list[str]:
     migrated: list[str] = []
 
     for provider, spec in _PROVIDER_ENV_SPECS.items():
+        if is_env_import_suppressed(session, provider):
+            continue
         if provider == "vertex":
             if _migrate_vertex_from_env(session):
                 migrated.append("vertex")

@@ -12,6 +12,12 @@ import {
 } from "@/hooks/use-chat-query"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
+import {
+  SettingsEmptyState,
+  SettingsListItem,
+  SettingsPage,
+  SettingsSection,
+} from "@/components/settings/SettingsPanel"
 import { SettingsShell } from "@/components/SettingsShell"
 import type {
   ChatModel,
@@ -40,7 +46,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Database, GripVertical, Image } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Badge } from "@/components/ui/badge"
+import { Database, GripVertical, Image, MoreHorizontal } from "lucide-react"
 import {
   DndContext,
   KeyboardSensor,
@@ -850,7 +864,7 @@ export const OrgPage = () => {
       (chatRetentionDays !== null &&
         (!Number.isInteger(chatRetentionDays) || chatRetentionDays < 1))
     ) {
-      setError("Retention periods must be whole numbers of at least one day.")
+      setError(t("org_retention_invalid"))
       return
     }
     const updated = await orgApi.update(org.id, {
@@ -1081,51 +1095,6 @@ export const OrgPage = () => {
     return null
   }
 
-  const navItems = [
-    { label: t("me_settings"), href: "/settings/me", active: false },
-    {
-      label: t("org_section_users"),
-      href: "/settings/users",
-      visible: true,
-      active: activeSection === "users",
-    },
-    {
-      label: t("org_section_teams"),
-      href: "/settings/teams",
-      visible: true,
-      active: false,
-    },
-    {
-      label: t("org_section_orgs"),
-      href: "/settings/organisation",
-      visible: isSuperAdmin,
-      active: activeSection === "orgs",
-    },
-    {
-      label: t("org_section_models"),
-      href: "/settings/models",
-      visible: isSuperAdmin,
-      active: activeSection === "models",
-    },
-    {
-      label: t("instance_providers_title"),
-      href: "/settings/providers",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/providers"),
-    },
-    {
-      label: t("diagnosis_title"),
-      href: "/settings/diagnosis",
-      visible: isSuperAdmin,
-      active: false,
-    },
-    {
-      label: t("usage_title"),
-      href: "/usage",
-      visible: isAdmin,
-      active: false,
-    },
-  ]
   const showOrgSelector = !(
     isSuperAdmin &&
     (activeSection === "orgs" || activeSection === "models")
@@ -1134,30 +1103,25 @@ export const OrgPage = () => {
   return (
     <SettingsShell
       title={sectionTitle}
-      items={navItems}
       actions={
-        <div className="flex items-center gap-2">
-          {isSuperAdmin && showOrgSelector ? (
-            <Select value={selectedOrg ?? ""} onValueChange={selectOrg}>
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder={t("org_select_placeholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                {orgs.map((org) => (
-                  <SelectItem key={org.id} value={org.id}>
-                    {org.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })} disabled={!selectedOrg}>
-            {t("common_back_to_chat")}
-          </Button>
-        </div>
+        isSuperAdmin && showOrgSelector ? (
+          <Select value={selectedOrg ?? ""} onValueChange={selectOrg}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder={t("org_select_placeholder")} />
+            </SelectTrigger>
+            <SelectContent>
+              {orgs.map((org) => (
+                <SelectItem key={org.id} value={org.id}>
+                  {org.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null
       }
     >
-      <div className="space-y-6">
+        <SettingsPage wide>
+          <div className="space-y-6">
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -1167,81 +1131,62 @@ export const OrgPage = () => {
         {activeSection === "orgs" ? (
           <>
             {isSuperAdmin ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t("org_section_orgs")}</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {orgs.map((org) => (
-                    <div
+              <SettingsSection>
+                {orgs.length === 0 ? (
+                  <SettingsEmptyState title={t("org_no_orgs")} />
+                ) : (
+                  orgs.map((org) => (
+                    <SettingsListItem
                       key={org.id}
-                      className="flex flex-col gap-3 rounded-md border p-4"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="flex flex-col gap-1">
-                          <p className="font-medium">{org.name}</p>
-                          <p className="text-muted-foreground text-xs">{org.id}</p>
-                          {!org.is_active ? (
-                            <p className="text-destructive text-xs">{t("org_deleted")}</p>
-                          ) : org.is_frozen ? (
-                            <p className="text-muted-foreground text-xs">{t("org_frozen")}</p>
-                          ) : null}
-                        </div>
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openAuthForOrg(org.id)}
-                          >
-                            {t("org_auth_open")}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openProvidersForOrg(org.id)}
-                          >
-                            {t("org_provider_configure")}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setRetentionOrgId(org.id)}
-                          >
-                            Retention
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openCostCeilingDialog(org)}
-                          >
-                            {t("org_usage_limit")}
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => openRenameDialog(org)}>
-                            {t("org_rename")}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => toggleOrgFrozen(org)}
-                          >
-                            {org.is_frozen ? t("org_unfreeze") : t("org_freeze")}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openDeleteDialog(org.id)}
-                          >
-                            {t("common_delete")}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {orgs.length === 0 ? (
-                    <p className="text-muted-foreground text-sm">{t("org_no_orgs")}</p>
-                  ) : null}
-                </CardContent>
-              </Card>
+                      title={org.name}
+                      subtitle={org.id}
+                      meta={
+                        !org.is_active ? (
+                          <Badge variant="destructive">{t("org_deleted")}</Badge>
+                        ) : org.is_frozen ? (
+                          <Badge variant="secondary">{t("org_frozen")}</Badge>
+                        ) : null
+                      }
+                      actions={
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="icon" aria-label={t("common_more")}>
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-52">
+                            <DropdownMenuItem onClick={() => openAuthForOrg(org.id)}>
+                              {t("org_auth_open")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openProvidersForOrg(org.id)}>
+                              {t("org_provider_configure")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setRetentionOrgId(org.id)}>
+                              {t("org_retention")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openCostCeilingDialog(org)}>
+                              {t("org_usage_limit")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openRenameDialog(org)}>
+                              {t("org_rename")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => toggleOrgFrozen(org)}>
+                              {org.is_frozen ? t("org_unfreeze") : t("org_freeze")}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => openDeleteDialog(org.id)}
+                            >
+                              {t("common_delete")}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      }
+                    />
+                  ))
+                )}
+              </SettingsSection>
             ) : null}
 
             {isSuperAdmin ? (
@@ -1508,10 +1453,7 @@ export const OrgPage = () => {
 
         {activeSection === "users" ? (
           <Card>
-            <CardHeader>
-              <CardTitle>{t("org_section_users")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-4 pt-6">
               <div className="flex flex-col gap-3">
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <Input
@@ -2283,9 +2225,9 @@ export const OrgPage = () => {
       <Dialog open={Boolean(retentionOrg)} onOpenChange={(open) => (!open ? setRetentionOrgId(null) : null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Retention policy</DialogTitle>
+            <DialogTitle>{t("org_retention_title")}</DialogTitle>
             <DialogDescription>
-              Set how long inactive chat files and chat history are retained for {retentionOrg?.name}.
+              {t("org_retention_description", { name: retentionOrg?.name ?? "" })}
             </DialogDescription>
           </DialogHeader>
           {retentionOrg ? (
@@ -2472,6 +2414,7 @@ export const OrgPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        </SettingsPage>
     </SettingsShell>
   )
 }

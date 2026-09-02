@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
-import { useLocation, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 
 import { SettingsShell } from "@/components/SettingsShell"
+import { SettingsPage } from "@/components/settings/SettingsPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -32,7 +33,6 @@ const emptyDraft = (): ProviderDraft => ({
 
 export const InstanceProvidersPage = () => {
   const navigate = useNavigate()
-  const location = useLocation()
   const { t } = useI18n()
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
@@ -152,43 +152,16 @@ export const InstanceProvidersPage = () => {
     }
   }
 
-  const removeCustomProvider = async (provider: string) => {
+  const removeProvider = async (item: InstanceProvider) => {
+    if (!window.confirm(t("instance_providers_remove_confirm"))) return
     setError(null)
     try {
-      await instanceProviderApi.remove(provider)
+      await instanceProviderApi.remove(item.provider)
       await loadProviders()
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common_error"))
     }
   }
-
-  const navItems = [
-    { label: t("me_settings"), href: "/settings/me" },
-    {
-      label: t("org_section_orgs"),
-      href: "/settings/organisation",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/organisation"),
-    },
-    {
-      label: t("org_section_models"),
-      href: "/settings/models",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/models"),
-    },
-    {
-      label: t("instance_providers_title"),
-      href: "/settings/providers",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/providers"),
-    },
-    {
-      label: t("diagnosis_title"),
-      href: "/settings/diagnosis",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/diagnosis"),
-    },
-  ]
 
   const builtinProviders = providers.filter((item) => item.provider_type === "builtin")
   const customProviders = providers.filter((item) => item.provider_type === "openai_compatible")
@@ -197,7 +170,6 @@ export const InstanceProvidersPage = () => {
     const draft = drafts[item.provider] ?? emptyDraft()
     const isVertex = item.provider === "vertex"
     const isAzure = item.provider === "azure"
-    const isCustom = item.provider_type === "openai_compatible"
 
     return (
       <Card key={item.provider}>
@@ -263,9 +235,9 @@ export const InstanceProvidersPage = () => {
           )}
           <div className="flex gap-2">
             <Button onClick={() => saveProvider(item)}>{t("common_save")}</Button>
-            {isCustom && item.is_configured ? (
-              <Button variant="outline" onClick={() => removeCustomProvider(item.provider)}>
-                {t("common_delete")}
+            {item.is_configured ? (
+              <Button variant="outline" onClick={() => removeProvider(item)}>
+                {t("instance_providers_remove")}
               </Button>
             ) : null}
           </div>
@@ -274,64 +246,69 @@ export const InstanceProvidersPage = () => {
     )
   }
 
+  if (!authChecked || !isSuperAdmin) {
+    return null
+  }
+
   return (
-    <SettingsShell title={t("instance_providers_title")} items={navItems}>
-      <div className="space-y-6">
-        <p className="text-sm text-muted-foreground">{t("instance_providers_description")}</p>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {loading && providers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("diagnosis_checking")}</p>
-        ) : null}
+    <SettingsShell title={t("instance_providers_title")}>
+        <SettingsPage wide>
+          <div className="space-y-6">
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            {loading && providers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("diagnosis_checking")}</p>
+            ) : null}
 
-        <div className="space-y-4">
-          <h2 className="text-base font-medium">{t("instance_providers_builtin_section")}</h2>
-          {builtinProviders.map(renderProviderForm)}
-        </div>
-
-        {customProviders.length > 0 ? (
-          <div className="space-y-4">
-            <h2 className="text-base font-medium">{t("instance_providers_custom_section")}</h2>
-            {customProviders.map(renderProviderForm)}
-          </div>
-        ) : null}
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg font-medium">{t("instance_providers_add_custom")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <Input
-                placeholder={t("instance_providers_custom_id_placeholder")}
-                value={newProvider}
-                onChange={(event) => setNewProvider(event.target.value)}
-              />
-              <Input
-                placeholder={t("instance_providers_custom_name_placeholder")}
-                value={newDisplayName}
-                onChange={(event) => setNewDisplayName(event.target.value)}
-              />
-              <Input
-                placeholder={t("org_provider_base_url")}
-                value={newBaseUrl}
-                onChange={(event) => setNewBaseUrl(event.target.value)}
-              />
-              <Input
-                type="password"
-                placeholder={t("instance_providers_api_key_placeholder")}
-                value={newApiKey}
-                onChange={(event) => setNewApiKey(event.target.value)}
-              />
+            <div className="space-y-4">
+              <h2 className="text-base font-medium">{t("instance_providers_builtin_section")}</h2>
+              {builtinProviders.map(renderProviderForm)}
             </div>
-            <Button
-              onClick={addCustomProvider}
-              disabled={!newProvider.trim() || !newBaseUrl.trim() || !newApiKey.trim()}
-            >
-              {t("instance_providers_add_custom")}
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+
+            {customProviders.length > 0 ? (
+              <div className="space-y-4">
+                <h2 className="text-base font-medium">{t("instance_providers_custom_section")}</h2>
+                {customProviders.map(renderProviderForm)}
+              </div>
+            ) : null}
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg font-medium">{t("instance_providers_add_custom")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    placeholder={t("instance_providers_custom_id_placeholder")}
+                    value={newProvider}
+                    onChange={(event) => setNewProvider(event.target.value)}
+                  />
+                  <Input
+                    placeholder={t("instance_providers_custom_name_placeholder")}
+                    value={newDisplayName}
+                    onChange={(event) => setNewDisplayName(event.target.value)}
+                  />
+                  <Input
+                    placeholder={t("org_provider_base_url")}
+                    value={newBaseUrl}
+                    onChange={(event) => setNewBaseUrl(event.target.value)}
+                  />
+                  <Input
+                    type="password"
+                    placeholder={t("instance_providers_api_key_placeholder")}
+                    value={newApiKey}
+                    onChange={(event) => setNewApiKey(event.target.value)}
+                  />
+                </div>
+                <Button
+                  onClick={addCustomProvider}
+                  disabled={!newProvider.trim() || !newBaseUrl.trim() || !newApiKey.trim()}
+                >
+                  {t("instance_providers_add_custom")}
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </SettingsPage>
     </SettingsShell>
   )
 }

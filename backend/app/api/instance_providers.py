@@ -9,6 +9,8 @@ from app.core.secret_crypto import encrypt_secret
 from app.models import InstanceProviderConfig, User
 from app.services.instance_providers import (
     BUILTIN_PROVIDERS,
+    clear_env_import_suppression,
+    delete_instance_provider as remove_instance_provider,
     get_instance_provider_config,
     invalidate_provider_caches,
     list_provider_ids,
@@ -160,6 +162,7 @@ def create_instance_provider(
         migrated_from_env=False,
     )
     session.add(record)
+    clear_env_import_suppression(session, provider)
     session.commit()
     session.refresh(record)
     invalidate_provider_caches()
@@ -202,6 +205,7 @@ def update_instance_provider(
 
     record.updated_at = datetime.utcnow()
     session.add(record)
+    clear_env_import_suppression(session, provider)
     session.commit()
     session.refresh(record)
     invalidate_provider_caches()
@@ -215,16 +219,9 @@ def delete_instance_provider(
     current_user: User = Depends(get_current_user),
 ) -> None:
     require_super_admin(current_user)
-    if provider in BUILTIN_PROVIDERS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Built-in providers cannot be deleted; disable them instead",
-        )
-    record = get_instance_provider_config(session, provider)
-    if not record:
+    try:
+        remove_instance_provider(session, provider)
+    except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Provider not found"
-        )
-    session.delete(record)
-    session.commit()
-    invalidate_provider_caches()
+        ) from exc

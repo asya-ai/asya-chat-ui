@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useMemo, useState, type SetStateAction } from "react"
-import { useLocation, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { authApi, orgApi, usageApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
 import { SettingsShell } from "@/components/SettingsShell"
+import { SettingsPage } from "@/components/settings/SettingsPanel"
 import type { Org, UsageDailyPoint, UsageSlice } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,13 +29,11 @@ const getCurrentMonth = () => {
 
 export const UsagePage = () => {
   const navigate = useNavigate()
-  const location = useLocation()
   const [rowsByModel, setRowsByModel] = useState<UsageSlice[]>([])
   const [rowsByUser, setRowsByUser] = useState<UsageSlice[]>([])
   const [rowsByOrg, setRowsByOrg] = useState<UsageSlice[]>([])
   const [orgs, setOrgs] = useState<Org[]>([])
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
-  const [isAdmin, setIsAdmin] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const orgId = orgStore.get()
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>("all")
@@ -82,7 +81,6 @@ export const UsagePage = () => {
       .me()
       .then((me) => {
         setIsSuperAdmin(me.is_super_admin)
-        setIsAdmin(me.is_admin)
       })
       .catch(() => null)
       .finally(() => setAuthChecked(true))
@@ -352,6 +350,7 @@ export const UsagePage = () => {
                   />
                 }
               />
+              <ChartLegend content={<ChartLegendContent />} />
               <Bar dataKey="cost_usd" fill="var(--color-cost_usd)" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ChartContainer>
@@ -499,58 +498,11 @@ export const UsagePage = () => {
     </Card>
   )
 
-  const navItems = [
-    { label: t("me_settings"), href: "/settings/me", active: location.pathname.startsWith("/settings/me") },
-    {
-      label: t("org_section_users"),
-      href: "/settings/users",
-      visible: isAdmin,
-      active: location.pathname.startsWith("/settings/users"),
-    },
-    {
-      label: t("org_section_teams"),
-      href: "/settings/teams",
-      visible: isAdmin,
-      active: location.pathname.startsWith("/settings/teams"),
-    },
-    {
-      label: t("org_section_orgs"),
-      href: "/settings/organisation",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/organisation"),
-    },
-    {
-      label: t("org_section_models"),
-      href: "/settings/models",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/models"),
-    },
-    {
-      label: t("instance_providers_title"),
-      href: "/settings/providers",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/providers"),
-    },
-    {
-      label: t("diagnosis_title"),
-      href: "/settings/diagnosis",
-      visible: isSuperAdmin,
-      active: location.pathname.startsWith("/settings/diagnosis"),
-    },
-    {
-      label: t("usage_title"),
-      href: "/usage",
-      visible: isAdmin,
-      active: location.pathname.startsWith("/usage"),
-    },
-  ]
-
   return (
     <SettingsShell
       title={t("usage_title")}
-      items={navItems}
       actions={
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <>
           {isSuperAdmin ? (
             <Select
               value={selectedOrgId ?? "all"}
@@ -590,13 +542,11 @@ export const UsagePage = () => {
               })}
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })}>
-            {t("common_back_to_chat")}
-          </Button>
-        </div>
+        </>
       }
     >
-      <div className="flex flex-col gap-6">
+        <SettingsPage wide>
+          <div className="flex flex-col gap-6">
         <Card>
           <CardHeader>
             <CardTitle>
@@ -628,6 +578,7 @@ export const UsagePage = () => {
           })
         ) : null}
       </div>
+        </SettingsPage>
     </SettingsShell>
   )
 }

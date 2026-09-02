@@ -277,6 +277,13 @@ class InstanceProviderConfig(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class InstanceProviderEnvSuppression(SQLModel, table=True):
+    __tablename__ = "instance_provider_env_suppressions"
+
+    provider: str = Field(primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class Chat(SQLModel, table=True):
     __tablename__ = "chats"
 

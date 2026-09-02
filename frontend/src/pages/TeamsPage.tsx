@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react"
-import { useLocation, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 
 import { authApi, orgApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
 import { SettingsShell } from "@/components/SettingsShell"
+import {
+  SettingsEmptyState,
+  SettingsListItem,
+  SettingsPage,
+  SettingsSection,
+} from "@/components/settings/SettingsPanel"
 import type { Org, OrgMember, Team, TeamMember, TeamModel } from "@/lib/types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -24,7 +29,6 @@ const OIDC_NONE = "__none__"
 
 export const TeamsPage = () => {
   const navigate = useNavigate()
-  const location = useLocation()
   const { t } = useI18n()
   const [authChecked, setAuthChecked] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -219,94 +223,41 @@ export const TeamsPage = () => {
     ])
   ).sort((a, b) => a.localeCompare(b))
 
-  const navItems = [
-    { label: t("me_settings"), href: "/settings/me", active: false },
-    {
-      label: t("org_section_users"),
-      href: "/settings/users",
-      visible: true,
-      active: location.pathname.startsWith("/settings/users"),
-    },
-    {
-      label: t("org_section_teams"),
-      href: "/settings/teams",
-      visible: true,
-      active: true,
-    },
-    {
-      label: t("org_section_orgs"),
-      href: "/settings/organisation",
-      visible: isSuperAdmin,
-      active: false,
-    },
-    {
-      label: t("org_section_models"),
-      href: "/settings/models",
-      visible: isSuperAdmin,
-      active: false,
-    },
-    {
-      label: t("instance_providers_title"),
-      href: "/settings/providers",
-      visible: isSuperAdmin,
-      active: false,
-    },
-    {
-      label: t("diagnosis_title"),
-      href: "/settings/diagnosis",
-      visible: isSuperAdmin,
-      active: false,
-    },
-    {
-      label: t("usage_title"),
-      href: "/usage",
-      visible: isAdmin,
-      active: false,
-    },
-  ]
-
   return (
     <SettingsShell
       title={t("org_section_teams")}
-      items={navItems}
       actions={
-        <div className="flex items-center gap-2">
-          {isSuperAdmin ? (
-            <Select value={selectedOrg ?? ""} onValueChange={selectOrg}>
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder={t("org_select_placeholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                {orgs.map((org) => (
-                  <SelectItem key={org.id} value={org.id}>
-                    {org.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          <Button variant="outline" onClick={() => navigate({ to: "/chat/{-$chatId}" })} disabled={!selectedOrg}>
-            {t("common_back_to_chat")}
-          </Button>
-        </div>
+        isSuperAdmin ? (
+          <Select value={selectedOrg ?? ""} onValueChange={selectOrg}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder={t("org_select_placeholder")} />
+            </SelectTrigger>
+            <SelectContent>
+              {orgs.map((org) => (
+                <SelectItem key={org.id} value={org.id}>
+                  {org.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null
       }
     >
-      <div className="space-y-6">
+        <SettingsPage wide>
+          <div className="space-y-6">
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("org_teams_create")}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 sm:flex-row">
+        <SettingsSection title={t("org_teams_create")}>
+          <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:px-5">
             <Input
               placeholder={t("org_teams_name")}
               value={newTeamName}
               onChange={(event) => setNewTeamName(event.target.value)}
+              className="sm:flex-1"
             />
             <Select value={newTeamGroup} onValueChange={setNewTeamGroup}>
               <SelectTrigger className="sm:w-64">
@@ -324,53 +275,44 @@ export const TeamsPage = () => {
             <Button onClick={createTeam} disabled={!newTeamName.trim() || !selectedOrg}>
               {t("org_teams_create")}
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </SettingsSection>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("org_section_teams")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {teams.map((team) => (
-              <div
+        <SettingsSection>
+          {teams.length === 0 ? (
+            <SettingsEmptyState title={t("org_teams_no_teams")} />
+          ) : (
+            teams.map((team) => (
+              <SettingsListItem
                 key={team.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-4"
-              >
-                <div>
-                  <p className="font-medium">
-                    {team.name}
-                    {team.is_default ? (
-                      <span className="text-muted-foreground ml-2 text-xs">
-                        ({t("org_teams_default_badge")})
-                      </span>
-                    ) : null}
-                  </p>
-                  <p className="text-muted-foreground text-xs">
-                    {t("org_teams_models")}: {team.model_count}
-                    {!team.is_default
-                      ? ` · ${t("org_teams_members")}: ${team.member_count}`
-                      : ""}
-                    {team.oidc_group ? ` · ${t("org_teams_oidc_group")}: ${team.oidc_group}` : ""}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => openEdit(team)}>
-                    {t("org_teams_edit")}
-                  </Button>
-                  {!team.is_default ? (
-                    <Button variant="outline" size="sm" onClick={() => deleteTeam(team)}>
-                      {t("common_delete")}
+                title={
+                  team.is_default
+                    ? `${team.name} (${t("org_teams_default_badge")})`
+                    : team.name
+                }
+                subtitle={[
+                  `${t("org_teams_models")}: ${team.model_count}`,
+                  !team.is_default ? `${t("org_teams_members")}: ${team.member_count}` : null,
+                  team.oidc_group ? `${t("org_teams_oidc_group")}: ${team.oidc_group}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                actions={
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => openEdit(team)}>
+                      {t("org_teams_edit")}
                     </Button>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-            {teams.length === 0 ? (
-              <p className="text-muted-foreground text-sm">{t("org_teams_no_teams")}</p>
-            ) : null}
-          </CardContent>
-        </Card>
+                    {!team.is_default ? (
+                      <Button variant="outline" size="sm" onClick={() => deleteTeam(team)}>
+                        {t("common_delete")}
+                      </Button>
+                    ) : null}
+                  </>
+                }
+              />
+            ))
+          )}
+        </SettingsSection>
       </div>
 
       <Dialog open={Boolean(editingTeam)} onOpenChange={(open) => !open && setEditingTeam(null)}>
@@ -473,6 +415,7 @@ export const TeamsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        </SettingsPage>
     </SettingsShell>
   )
 }
