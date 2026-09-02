@@ -51,6 +51,7 @@ import { useCoworkDocument } from "@/pages/chat/useCoworkDocument"
 import { useIsMobile } from "@/hooks/use-mobile"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
 import { ChatComposer, type ChatComposerHandle } from "@/pages/chat/ChatComposer"
+import type { ComposerSlashCommand } from "@/lib/composer-slash-commands"
 import { MessageList } from "@/pages/chat/MessageList"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
@@ -1599,6 +1600,41 @@ export const ChatPage = () => {
       !chats.some((item) => item.id === chatId) &&
       !sessionOwnedChatIds.includes(chatId)
   )
+  const slashCommands = useMemo((): ComposerSlashCommand[] => {
+    if (isSharedView) return []
+    return [
+      {
+        id: "cowork",
+        name: "cowork",
+        description: t("slash_command_cowork_desc"),
+        keywords: ["document", "coedit", "co-edit"],
+        insertText: t("slash_command_cowork_insert"),
+      },
+      {
+        id: "search",
+        name: "search",
+        description: t("slash_command_search_desc"),
+        keywords: ["web"],
+        insertText: t("slash_command_search_insert"),
+        onSelect: () => setWebSearchEnabled(true),
+      },
+      {
+        id: "code",
+        name: "code",
+        description: t("slash_command_code_desc"),
+        keywords: ["execute", "python", "run"],
+        insertText: t("slash_command_code_insert"),
+        onSelect: () => setCodeExecutionEnabled(true),
+      },
+      {
+        id: "image",
+        name: "image",
+        description: t("slash_command_image_desc"),
+        keywords: ["picture", "photo", "draw"],
+        insertText: t("slash_command_image_insert"),
+      },
+    ]
+  }, [isSharedView, t])
   const generationIndicators = useChatGenerationIndicators()
   const currentChatLoading = Boolean(
     chatId &&
@@ -3685,6 +3721,8 @@ export const ChatPage = () => {
                 inputRef={composerInputRef}
                 showModelSelect
                 hasPrompts={prompts.length > 0}
+                prompts={prompts}
+                slashCommands={slashCommands}
                 onDraftChange={handleComposerDraftChange}
                 modelSelect={
                   <DropdownMenu

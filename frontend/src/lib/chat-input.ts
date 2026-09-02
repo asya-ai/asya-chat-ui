@@ -1,5 +1,21 @@
 import type { KeyboardEvent } from "react"
 
+export type SlashPromptTrigger = {
+  start: number
+  query: string
+}
+
+export const getSlashPromptTrigger = (
+  value: string,
+  cursor: number
+): SlashPromptTrigger | null => {
+  const before = value.slice(0, cursor)
+  const match = before.match(/(?:^|\s)\/([^\s]*)$/)
+  if (!match) return null
+  const query = match[1] ?? ""
+  return { start: cursor - query.length - 1, query }
+}
+
 export const shouldSubmitOnEnter = (
   event: KeyboardEvent<HTMLTextAreaElement>
 ): boolean => {

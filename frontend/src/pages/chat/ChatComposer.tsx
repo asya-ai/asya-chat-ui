@@ -2,14 +2,16 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ReactNode,
   type Ref,
   type PointerEvent as ReactPointerEvent,
 } from "react"
 
-import type { ChatMessageAttachmentInput } from "@/lib/types"
+import type { ChatMessageAttachmentInput, Prompt } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -17,10 +19,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { ArrowUp, Plus, Square, X } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
-import { shouldSubmitOnEnter } from "@/lib/chat-input"
+import { getSlashPromptTrigger, shouldSubmitOnEnter } from "@/lib/chat-input"
+import {
+  filterSlashCommands,
+  type ComposerSlashCommand,
+} from "@/lib/composer-slash-commands"
 import { composerTextareaHeightStore } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 
@@ -41,6 +48,10 @@ export type ChatComposerHandle = {
   setValue: (next: string) => void
 }
 
+type SlashMenuItem =
+  | { kind: "command"; command: ComposerSlashCommand }
+  | { kind: "prompt"; prompt: Prompt }
+
 type ChatComposerProps = {
   placeholder: string
   loading: boolean
@@ -53,6 +64,8 @@ type ChatComposerProps = {
   modelSelect?: ReactNode
   showModelSelect?: boolean
   hasPrompts?: boolean
+  prompts?: Prompt[]
+  slashCommands?: ComposerSlashCommand[]
   onSend: () => void
   onStop: () => void
   onFilesSelected: (files: File[]) => void
@@ -83,6 +96,8 @@ export const ChatComposer = ({
   modelSelect,
   showModelSelect = false,
   hasPrompts = false,
+  prompts = [],
+  slashCommands = [],
   onSend,
   onStop,
   onFilesSelected,
@@ -111,6 +126,9 @@ export const ChatComposer = ({
     clampComposerTextareaHeight(composerTextareaHeightStore.get())
   )
   const [isResizing, setIsResizing] = useState(false)
+  const [cursorPosition, setCursorPosition] = useState(0)
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const slashListRef = useRef<HTMLDivElement | null>(null)
   const onDraftChangeRef = useRef(onDraftChange)
   onDraftChangeRef.current = onDraftChange
 
@@ -182,6 +200,138 @@ export const ChatComposer = ({
     onDraftChangeRef.current?.(next)
   }
 
+  const updateCursorFromTextarea = (el: HTMLTextAreaElement) => {
+    setCursorPosition(el.selectionStart ?? 0)
+  }
+
+  const slashTrigger = useMemo(() => {
+    if (readOnly || (slashCommands.length === 0 && prompts.length === 0)) return null
+    const value = textareaRef.current?.value ?? ""
+    return getSlashPromptTrigger(value, cursorPosition)
+  }, [cursorPosition, prompts.length, readOnly, slashCommands.length])
+
+  const filteredCommands = useMemo(() => {
+    if (!slashTrigger) return []
+    return filterSlashCommands(slashCommands, slashTrigger.query)
+  }, [slashCommands, slashTrigger])
+
+  const filteredPrompts = useMemo(() => {
+    if (!slashTrigger) return []
+    const needle = slashTrigger.query.trim().toLowerCase()
+    if (!needle) return prompts
+    return prompts.filter(
+      (prompt) =>
+        prompt.name.toLowerCase().includes(needle) ||
+        (prompt.description ?? "").toLowerCase().includes(needle)
+    )
+  }, [prompts, slashTrigger])
+
+  const slashMenuItems = useMemo((): SlashMenuItem[] => {
+    const items: SlashMenuItem[] = filteredCommands.map((command) => ({
+      kind: "command",
+      command,
+    }))
+    for (const prompt of filteredPrompts) {
+      items.push({ kind: "prompt", prompt })
+    }
+    return items
+  }, [filteredCommands, filteredPrompts])
+
+  const slashMenuOpen = slashTrigger !== null
+
+  useEffect(() => {
+    setSlashSelectedIndex(0)
+  }, [slashTrigger?.query])
+
+  useEffect(() => {
+    if (!slashMenuOpen || slashMenuItems.length === 0) return
+    slashListRef.current
+      ?.querySelector('[data-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" })
+  }, [slashMenuItems.length, slashMenuOpen, slashSelectedIndex])
+
+  const insertSlashReplacement = (replacement: string) => {
+    if (!slashTrigger) return
+    const el = textareaRef.current
+    if (!el) return
+    const current = el.value
+    const next =
+      current.slice(0, slashTrigger.start) + replacement + current.slice(cursorPosition)
+    el.value = next
+    syncDraft(next)
+    const cursor = slashTrigger.start + replacement.length
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(cursor, cursor)
+      setCursorPosition(cursor)
+    })
+  }
+
+  const selectSlashItem = (item: SlashMenuItem) => {
+    if (item.kind === "command") {
+      item.command.onSelect?.()
+      insertSlashReplacement(item.command.insertText)
+      return
+    }
+    insertSlashReplacement(item.prompt.body)
+  }
+
+  const dismissSlashMenu = () => {
+    if (!slashTrigger) return
+    const el = textareaRef.current
+    if (!el) return
+    const current = el.value
+    const next = current.slice(0, slashTrigger.start) + current.slice(cursorPosition)
+    el.value = next
+    syncDraft(next)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(slashTrigger.start, slashTrigger.start)
+      setCursorPosition(slashTrigger.start)
+    })
+  }
+
+  const handleTextareaChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    syncDraft(event.target.value)
+    updateCursorFromTextarea(event.target)
+  }
+
+  const canSend = !readOnly && (hasText || pendingAttachments.length > 0)
+
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashMenuOpen && slashMenuItems.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault()
+        setSlashSelectedIndex((index) => Math.min(index + 1, slashMenuItems.length - 1))
+        return
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault()
+        setSlashSelectedIndex((index) => Math.max(index - 1, 0))
+        return
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault()
+        const item = slashMenuItems[slashSelectedIndex]
+        if (item) selectSlashItem(item)
+        return
+      }
+    }
+
+    if (slashMenuOpen && event.key === "Escape") {
+      event.preventDefault()
+      dismissSlashMenu()
+      return
+    }
+
+    if (!shouldSubmitOnEnter(event)) return
+
+    event.preventDefault()
+    if (canSend) {
+      onSend()
+    }
+  }
+
   useImperativeHandle(ref, () => ({
     getValue: () => textareaRef.current?.value ?? "",
     setValue: (next: string) => {
@@ -201,8 +351,6 @@ export const ChatComposer = ({
     onFilesSelected(files)
     event.target.value = ""
   }
-
-  const canSend = !readOnly && (hasText || pendingAttachments.length > 0)
 
   return (
     <div
@@ -255,21 +403,77 @@ export const ChatComposer = ({
         ) : null}
         <div
           style={centered ? undefined : { minHeight: textareaHeightPx }}
-          className={cn(!centered && "shrink-0")}
+          className={cn("relative", !centered && "shrink-0")}
         >
+          {slashMenuOpen ? (
+            <div
+              ref={slashListRef}
+              className="absolute bottom-full left-0 z-50 mb-1 flex max-h-60 w-full flex-col overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+              role="listbox"
+              aria-label={t("slash_menu_label")}
+            >
+              {slashMenuItems.length === 0 ? (
+                <p className="px-3 py-2 text-muted-foreground text-sm">{t("prompt_no_results")}</p>
+              ) : (
+                slashMenuItems.map((item, index) => {
+                  const showPromptHeader =
+                    item.kind === "prompt" &&
+                    index > 0 &&
+                    slashMenuItems[index - 1]?.kind === "command"
+                  return (
+                    <div key={item.kind === "command" ? item.command.id : item.prompt.id}>
+                      {showPromptHeader ? (
+                        <Separator className="my-1" />
+                      ) : null}
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={index === slashSelectedIndex}
+                        data-selected={index === slashSelectedIndex ? "true" : undefined}
+                        className={cn(
+                          "flex w-full flex-col items-start gap-0.5 rounded-sm px-3 py-2 text-left text-sm",
+                          index === slashSelectedIndex && "bg-accent"
+                        )}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectSlashItem(item)}
+                        onMouseEnter={() => setSlashSelectedIndex(index)}
+                      >
+                        {item.kind === "command" ? (
+                          <>
+                            <span className="w-full truncate font-medium">
+                              <span className="text-muted-foreground">/</span>
+                              {item.command.name}
+                            </span>
+                            <span className="w-full truncate text-muted-foreground text-xs">
+                              {item.command.description}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="w-full truncate font-medium">{item.prompt.name}</span>
+                            {item.prompt.description ? (
+                              <span className="w-full truncate text-muted-foreground text-xs">
+                                {item.prompt.description}
+                              </span>
+                            ) : null}
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          ) : null}
           <Textarea
             ref={assignTextareaRef}
             defaultValue=""
-            onChange={(event) => syncDraft(event.target.value)}
+            onChange={handleTextareaChange}
+            onKeyDown={handleTextareaKeyDown}
+            onKeyUp={(event) => updateCursorFromTextarea(event.currentTarget)}
+            onClick={(event) => updateCursorFromTextarea(event.currentTarget)}
+            onSelect={(event) => updateCursorFromTextarea(event.currentTarget)}
             onPaste={onPasteAttachments}
-            onKeyDown={(event) => {
-              if (!shouldSubmitOnEnter(event)) return
-
-              event.preventDefault()
-              if (canSend) {
-                onSend()
-              }
-            }}
             placeholder={placeholder}
             rows={centered ? 1 : 2}
             className={cn(
