@@ -6,7 +6,7 @@ import re
 import secrets
 from io import BytesIO
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4
 
 import json
@@ -1197,6 +1197,12 @@ def _sanitize_attachment_filename(name: str) -> str:
     base = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", base).strip("._")
     return cleaned or "file"
+
+
+def _content_disposition_header(disposition: str, filename: str) -> str:
+    ascii_name = _sanitize_attachment_filename(filename)
+    encoded = quote(filename, safe="")
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
 
 
 def _attachment_exec_path(attachment: ChatMessageAttachment) -> str:
@@ -3971,7 +3977,9 @@ def get_attachment_content(
         media_type=attachment.content_type or "application/octet-stream",
         headers={
             "Cache-Control": "private, max-age=300",
-            "Content-Disposition": f'inline; filename="{attachment.file_name}"',
+            "Content-Disposition": _content_disposition_header(
+                "inline", attachment.file_name
+            ),
         },
     )
 
@@ -4210,13 +4218,14 @@ def download_cowork_document(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     data = (doc.content or "").encode("utf-8")
-    safe_name = doc.file_name.replace('"', "")
     return Response(
         content=data,
         media_type=mime_for_document(doc),
         headers={
             "Cache-Control": "private, no-store",
-            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "Content-Disposition": _content_disposition_header(
+                "attachment", doc.file_name
+            ),
         },
     )
 
