@@ -9,9 +9,9 @@
     "@mozilla/readability": "^0.6.0",
     "body-parser": "^2.3.0",
     "express": "^5.2.1",
-    "ipaddr.js": "^2.4.0",
+    "ipaddr.js": "^2.5.0",
     "jsdom": "^30.0.1",
-    "puppeteer": "^25.4.0",
+    "puppeteer": "^25.9.0",
     "turndown": "^7.2.4"
   }
 }

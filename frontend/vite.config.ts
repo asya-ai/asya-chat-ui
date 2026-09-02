@@ -59,9 +59,9 @@ export default defineConfig({
       workbox: {
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api\//],
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,webmanifest}"],
-        // Presentation export bundle is large and lazy-loaded; keep it off the install cache.
-        globIgnores: ["**/marp-*.js"],
+        // App requires network for API; precache only the SPA shell (+ includeAssets icons).
+        // Hashed /assets/* rely on nginx immutable headers instead of SW install bulk fetch.
+        globPatterns: ["index.html"],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/api/"),
