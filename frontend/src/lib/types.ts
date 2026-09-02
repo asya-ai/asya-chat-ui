@@ -394,6 +394,7 @@ export type UsageSlice = {
   cached_tokens: number
   thinking_tokens: number
   cost_usd?: number | null
+  limit_usd?: number | null
   breakdown?: UsageSlice[]
 }
 
@@ -412,6 +413,20 @@ export type UsageDailyPoint = {
 export type UsageUserOption = {
   user_id: string
   name: string
+}
+
+export type UsageLimitInfo = {
+  used_usd: number
+  limit_usd?: number | null
+  percent_used?: number | null
+  near_limit: boolean
+  at_limit: boolean
+}
+
+export type UsageLimits = {
+  month: string
+  user: UsageLimitInfo
+  org?: UsageLimitInfo | null
 }
 
 export type EnvKeyDiagnosis = {

@@ -104,6 +104,10 @@ export const en = {
   me_action_info_detailed: "Full info",
   me_security: "Security",
   me_account: "Account",
+  me_usage_limit: "Monthly usage",
+  me_usage_limit_desc:
+    "Estimated chat spend this calendar month against your personal limit in the current organisation.",
+  me_usage_limit_used: "{used} of {limit} ({percent}%)",
   me_logout: "Log out",
   me_memory_enabled: "Memory",
   me_memory_enabled_desc: "Allow the assistant to remember important facts across conversations and search your past chats.",
@@ -298,6 +302,12 @@ export const en = {
   org_usage_limit_unlimited: "No limit",
   org_usage_limit_clear: "Clear limit",
   org_usage_limit_invalid: "Cost ceiling must be a number of at least 0.",
+  usage_limit_warning_user_title: "Approaching usage limit",
+  usage_limit_warning_user:
+    "You have used {percent}% of your monthly chat usage limit ({used} of {limit}).",
+  usage_limit_warning_org_title: "Organisation approaching usage limit",
+  usage_limit_warning_org:
+    "Organisation usage has reached {percent}% of the monthly limit ({used} of {limit}).",
   org_users_cost_ceiling: "Cost ceiling (USD)",
   org_no_orgs: "No orgs yet.",
   org_add_org: "Add organisation",
@@ -481,6 +491,8 @@ export const en = {
   usage_by_org: "By organization",
   usage_block_models: "By model",
   usage_block_users: "By user",
+  usage_limit_column: "Usage limit",
+  usage_limit_used: "{used} of {limit} ({percent}%)",
   usage_block_orgs: "By organization",
   usage_filter_month: "Month",
   usage_all_months: "All months",

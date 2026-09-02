@@ -8,9 +8,14 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
-from app.models import ChatModel, OrgModel, OrgMembership, UsageEvent, User
+from app.models import ChatModel, Org, OrgModel, OrgMembership, UsageEvent, User
 from app.services.model_pricing import estimate_token_cost_usd
-from app.services.org_service import require_org_admin
+from app.services.org_service import get_membership, require_org_admin, require_org_member
+from app.services.usage_limits import (
+    build_usage_limit_info,
+    current_usage_month_label,
+    estimate_scoped_usage_cost_usd,
+)
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 
@@ -26,6 +31,7 @@ class UsageSlice(BaseModel):
     cached_tokens: int
     thinking_tokens: int
     cost_usd: float | None = None
+    limit_usd: float | None = None
     breakdown: list["UsageSlice"] = Field(default_factory=list)
 
 
@@ -44,6 +50,20 @@ class UsageDailyPoint(BaseModel):
 class UsageUserOption(BaseModel):
     user_id: str
     name: str
+
+
+class UsageLimitInfoRead(BaseModel):
+    used_usd: float
+    limit_usd: float | None = None
+    percent_used: float | None = None
+    near_limit: bool = False
+    at_limit: bool = False
+
+
+class UsageLimitsResponse(BaseModel):
+    month: str
+    user: UsageLimitInfoRead
+    org: UsageLimitInfoRead | None = None
 
 
 class ModelUsageMeta(BaseModel):
@@ -282,6 +302,42 @@ def _finalize_group_costs(
     return rows
 
 
+def _attach_user_limits(session: Session, rows: list[UsageSlice]) -> None:
+    user_ids: list[UUID] = []
+    for row in rows:
+        if not row.id:
+            continue
+        try:
+            user_ids.append(UUID(row.id))
+        except ValueError:
+            continue
+    if not user_ids:
+        return
+    users = session.exec(select(User).where(User.id.in_(user_ids))).all()
+    ceiling_by_id = {str(user.id): user.cost_ceiling_usd for user in users}
+    for row in rows:
+        if row.id:
+            row.limit_usd = ceiling_by_id.get(row.id)
+
+
+def _attach_org_limits(session: Session, rows: list[UsageSlice]) -> None:
+    org_ids: list[UUID] = []
+    for row in rows:
+        if not row.id:
+            continue
+        try:
+            org_ids.append(UUID(row.id))
+        except ValueError:
+            continue
+    if not org_ids:
+        return
+    orgs = session.exec(select(Org).where(Org.id.in_(org_ids))).all()
+    ceiling_by_id = {str(org.id): org.cost_ceiling_usd for org in orgs}
+    for row in rows:
+        if row.id:
+            row.limit_usd = ceiling_by_id.get(row.id)
+
+
 @router.get("", response_model=list[UsageSlice])
 def usage_summary(
     org_id: str | None = None,
@@ -341,7 +397,9 @@ def usage_summary(
             parent.breakdown.append(child)
             if child.cost_usd is None and child.total_tokens:
                 missing_cost_orgs.add(dict_key)
-        return _finalize_group_costs(list(rows_by_org.values()), missing_cost_orgs)
+        rows = _finalize_group_costs(list(rows_by_org.values()), missing_cost_orgs)
+        _attach_org_limits(session, rows)
+        return rows
 
     if group_by == "user":
         stmt = (
@@ -379,7 +437,9 @@ def usage_summary(
             parent.breakdown.append(child)
             if child.cost_usd is None and child.total_tokens:
                 missing_cost_users.add(dict_key)
-        return _finalize_group_costs(list(rows_by_user.values()), missing_cost_users)
+        rows = _finalize_group_costs(list(rows_by_user.values()), missing_cost_users)
+        _attach_user_limits(session, rows)
+        return rows
 
     if group_by == "month":
         month_expr = func.date_trunc("month", UsageEvent.created_at)
@@ -624,3 +684,64 @@ def usage_daily(
     results = session.exec(stmt).all()
     model_map = _model_usage_map(session)
     return _fill_daily_points(_aggregate_daily_points(results, model_map), month)
+
+
+def _is_org_admin(session: Session, org_uuid: UUID, user: User) -> bool:
+    if user.is_super_admin:
+        return True
+    membership = get_membership(session, org_uuid, user.id)
+    if not membership or not membership.role:
+        return False
+    return membership.role.name in {"admin", "owner"}
+
+
+def _usage_limit_info_read(info) -> UsageLimitInfoRead:
+    return UsageLimitInfoRead(
+        used_usd=info.used_usd,
+        limit_usd=info.limit_usd,
+        percent_used=info.percent_used,
+        near_limit=info.near_limit,
+        at_limit=info.at_limit,
+    )
+
+
+@router.get("/limits", response_model=UsageLimitsResponse)
+def usage_limits(
+    org_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> UsageLimitsResponse:
+    org_uuid = _parse_optional_uuid(org_id, invalid_detail="Invalid org id")
+    if not org_uuid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="org_id is required",
+        )
+
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+
+    user = session.exec(select(User).where(User.id == current_user.id)).first()
+    user_used = estimate_scoped_usage_cost_usd(
+        session, org_id=org_uuid, user_id=current_user.id
+    )
+    user_info = build_usage_limit_info(
+        user_used, user.cost_ceiling_usd if user else None
+    )
+
+    org_info = None
+    if _is_org_admin(session, org_uuid, current_user):
+        org = session.exec(select(Org).where(Org.id == org_uuid)).first()
+        if org is not None:
+            org_used = estimate_scoped_usage_cost_usd(session, org_id=org_uuid)
+            org_info = build_usage_limit_info(org_used, org.cost_ceiling_usd)
+
+    return UsageLimitsResponse(
+        month=current_usage_month_label(),
+        user=_usage_limit_info_read(user_info),
+        org=_usage_limit_info_read(org_info) if org_info is not None else None,
+    )

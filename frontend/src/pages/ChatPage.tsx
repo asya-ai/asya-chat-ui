@@ -29,6 +29,7 @@ import { useI18n } from "@/lib/i18n-context"
 import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
 import { cn } from "@/lib/utils"
 import { ProviderIcon } from "@/components/ProviderIcon"
+import { UsageLimitBanners } from "@/components/UsageLimitBanners"
 import { getProviderIconCandidates } from "@/lib/providerIcons"
 import { Button } from "@/components/ui/button"
 import { PromptFormDialog } from "@/components/PromptFormDialog"
@@ -3567,6 +3568,7 @@ export const ChatPage = () => {
           desktopSidebarOpen ? "md:ml-0" : "md:ml-2"
         }`}
       >
+        {!isSharedView ? <UsageLimitBanners orgId={orgId} /> : null}
         {isHistoryView ? (
           <HistoryPanel
             groups={historyGroups}

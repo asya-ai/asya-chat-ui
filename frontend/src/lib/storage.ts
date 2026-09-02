@@ -197,3 +197,32 @@ export const composerTextareaHeightStore = {
     ),
   clear: () => localStorage.removeItem(COMPOSER_TEXTAREA_HEIGHT_KEY),
 }
+
+const USAGE_LIMIT_WARN_DISMISS_KEY = "chatui_usage_limit_warn_dismissed"
+
+const parseUsageLimitDismissed = (raw: string | null): Record<string, true> => {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object") return {}
+    return Object.fromEntries(
+      Object.keys(parsed as Record<string, unknown>).map((key) => [key, true as const])
+    )
+  } catch {
+    return {}
+  }
+}
+
+export const usageLimitWarningDismissStore = {
+  keyFor: (scope: "user" | "org", orgId: string, month: string) =>
+    `${scope}:${orgId}:${month}`,
+  isDismissed: (scope: "user" | "org", orgId: string, month: string) => {
+    const map = parseUsageLimitDismissed(localStorage.getItem(USAGE_LIMIT_WARN_DISMISS_KEY))
+    return Boolean(map[usageLimitWarningDismissStore.keyFor(scope, orgId, month)])
+  },
+  dismiss: (scope: "user" | "org", orgId: string, month: string) => {
+    const map = parseUsageLimitDismissed(localStorage.getItem(USAGE_LIMIT_WARN_DISMISS_KEY))
+    map[usageLimitWarningDismissStore.keyFor(scope, orgId, month)] = true
+    localStorage.setItem(USAGE_LIMIT_WARN_DISMISS_KEY, JSON.stringify(map))
+  },
+}

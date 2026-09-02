@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 
-import { agentApi, authApi, chatApi, modelApi, orgApi, promptApi } from "@/lib/api"
+import { agentApi, authApi, chatApi, modelApi, orgApi, promptApi, usageApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import type { Agent, Chat, ChatMessage, ChatModel, Org, Prompt } from "@/lib/types"
 
@@ -21,6 +21,10 @@ const orgKeys = {
 
 const meKeys = {
   me: ["auth", "me"] as const,
+}
+
+const usageLimitKeys = {
+  limits: (orgId: string | null) => ["usageLimits", orgId] as const,
 }
 
 const agentKeys = {
@@ -81,6 +85,15 @@ export const useMe = () => {
     staleTime: 60_000,
   })
 }
+
+export const useUsageLimits = (orgId: string | null) =>
+  useQuery({
+    queryKey: usageLimitKeys.limits(orgId),
+    queryFn: () => usageApi.limits(orgId!),
+    enabled: Boolean(orgId),
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  })
 
 export const useOrgsMine = () =>
   useQuery({

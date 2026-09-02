@@ -7,6 +7,7 @@ from app.services.providers.openai_provider import (
     _coalesce_usage_tokens,
     _extract_usage_details,
     _is_prompt_cache_param_error,
+    _is_unsupported_auto_tool_choice_error,
     _is_unsupported_reasoning_effort_error,
     _usage_chunk_from_response_usage,
 )
@@ -49,6 +50,15 @@ def test_detects_reasoning_effort_errors() -> None:
     assert _is_prompt_cache_param_error(exc) is False
 
 
+def test_detects_unsupported_auto_tool_choice_errors() -> None:
+    exc = ValueError(
+        '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set'
+    )
+
+    assert _is_unsupported_auto_tool_choice_error(exc) is True
+    assert _is_unsupported_reasoning_effort_error(exc) is False
+
+
 def test_extract_usage_details_from_chat_completions() -> None:
     from types import SimpleNamespace
 
@@ -86,6 +96,41 @@ def test_extract_usage_details_from_responses_api() -> None:
     assert chunk.usage.cached_tokens == 300
     assert chunk.usage.thinking_tokens == 25
     assert chunk.usage.input_tokens == 200
+
+
+class _FakeAutoToolChoiceChatCompletions:
+    def __init__(self, parent: "_FakeOpenAIClient") -> None:
+        self._parent = parent
+
+    async def create(self, **payload):
+        self._parent.payloads.append(dict(payload))
+        if len(self._parent.payloads) == 1:
+            raise ValueError(
+                '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set'
+            )
+        return object()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_retry_strips_unsupported_auto_tool_choice() -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client = _FakeOpenAIClient()
+    fake_client.chat.completions = _FakeAutoToolChoiceChatCompletions(fake_client)
+    provider.client = fake_client
+    payload = {
+        "model": "local-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "search", "parameters": {}}}],
+        "tool_choice": "auto",
+    }
+
+    result = await provider._create_chat_completion(payload)
+
+    assert result is not None
+    assert len(fake_client.payloads) == 2
+    assert fake_client.payloads[0]["tool_choice"] == "auto"
+    assert "tool_choice" not in fake_client.payloads[1]
+    assert fake_client.payloads[1]["tools"] == payload["tools"]
 
 
 @pytest.mark.asyncio

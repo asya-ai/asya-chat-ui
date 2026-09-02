@@ -106,6 +106,10 @@ export const lv = {
   me_action_info_detailed: "Pilna info",
   me_security: "Drošība",
   me_account: "Konts",
+  me_usage_limit: "Ikmēneša lietojums",
+  me_usage_limit_desc:
+    "Aprēķinātais čata izdevumu apjoms šajā kalendārajā mēnesī pret jūsu personīgo limitu pašreizējā organizācijā.",
+  me_usage_limit_used: "{used} no {limit} ({percent}%)",
   me_logout: "Izrakstīties",
   me_memory_enabled: "Atmiņa",
   me_memory_enabled_desc: "Ļauj asistentam atcerēties svarīgus faktus starp sarunām un meklēt iepriekšējos čatos.",
@@ -300,6 +304,12 @@ export const lv = {
   org_usage_limit_unlimited: "Bez limita",
   org_usage_limit_clear: "Noņemt limitu",
   org_usage_limit_invalid: "Izmaksu griestiem jābūt skaitlim no 0.",
+  usage_limit_warning_user_title: "Tuvojaties lietojuma limitam",
+  usage_limit_warning_user:
+    "Esat izmantojis {percent}% no ikmēneša čata lietojuma limita ({used} no {limit}).",
+  usage_limit_warning_org_title: "Organizācija tuvojas lietojuma limitam",
+  usage_limit_warning_org:
+    "Organizācijas lietojums ir sasniedzis {percent}% no ikmēneša limita ({used} no {limit}).",
   org_users_cost_ceiling: "Izmaksu griesti (USD)",
   org_no_orgs: "Nav organizāciju.",
   org_add_org: "Pievienot organizāciju",
@@ -483,6 +493,8 @@ export const lv = {
   usage_by_org: "Pēc organizācijas",
   usage_block_models: "Pēc modeļa",
   usage_block_users: "Pēc lietotāja",
+  usage_limit_column: "Lietojuma limits",
+  usage_limit_used: "{used} no {limit} ({percent}%)",
   usage_block_orgs: "Pēc organizācijas",
   usage_filter_month: "Mēnesis",
   usage_all_months: "Visi mēneši",

@@ -27,6 +27,7 @@ import type {
   UsageSlice,
   UsageDailyPoint,
   UsageUserOption,
+  UsageLimits,
   SystemDiagnosis,
   ApiKey,
   UserMemory,
@@ -522,6 +523,10 @@ export const usageApi = {
     if (filters?.modelId) params.set("model_id", filters.modelId)
     const query = params.toString()
     return apiFetch<UsageDailyPoint[]>(`/usage/daily${query ? `?${query}` : ""}`)
+  },
+  limits: (orgId: string) => {
+    const params = new URLSearchParams({ org_id: orgId })
+    return apiFetch<UsageLimits>(`/usage/limits?${params.toString()}`)
   },
 }
 

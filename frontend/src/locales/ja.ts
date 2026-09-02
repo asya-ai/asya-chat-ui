@@ -106,6 +106,10 @@ export const ja = {
   me_action_info_detailed: "完全表示",
   me_security: "セキュリティ",
   me_account: "アカウント",
+  me_usage_limit: "月次利用",
+  me_usage_limit_desc:
+    "現在の組織における、個人の月次上限に対する推定チャット利用額です。",
+  me_usage_limit_used: "{used} / {limit}（{percent}%）",
   me_logout: "ログアウト",
   me_memory_enabled: "メモリ",
   me_memory_enabled_desc: "アシスタントが会話をまたいで重要な事実を記憶し、過去のチャットを検索できるようにします。",
@@ -299,6 +303,12 @@ export const ja = {
   org_usage_limit_unlimited: "制限なし",
   org_usage_limit_clear: "上限を解除",
   org_usage_limit_invalid: "コスト上限は0以上の数値である必要があります。",
+  usage_limit_warning_user_title: "利用上限に近づいています",
+  usage_limit_warning_user:
+    "月次チャット利用上限の {percent}% を使用しました（{used} / {limit}）。",
+  usage_limit_warning_org_title: "組織の利用上限に近づいています",
+  usage_limit_warning_org:
+    "組織の月次利用上限の {percent}% に達しました（{used} / {limit}）。",
   org_users_cost_ceiling: "コスト上限（USD）",
   org_no_orgs: "組織はまだありません。",
   org_add_org: "組織を追加",
@@ -482,6 +492,8 @@ export const ja = {
   usage_by_org: "組織別",
   usage_block_models: "モデル別",
   usage_block_users: "ユーザー別",
+  usage_limit_column: "利用上限",
+  usage_limit_used: "{used} / {limit}（{percent}%）",
   usage_block_orgs: "組織別",
   usage_filter_month: "月",
   usage_all_months: "すべての月",

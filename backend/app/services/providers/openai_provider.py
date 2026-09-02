@@ -107,6 +107,28 @@ def _is_prompt_cache_param_error(exc: Exception) -> bool:
     )
 
 
+def _is_unsupported_auto_tool_choice_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        '"auto" tool choice' in message
+        or (
+            "tool choice" in message
+            and "auto" in message
+            and (
+                "enable-auto-tool-choice" in message
+                or "tool-call-parser" in message
+            )
+        )
+    )
+
+
+def _strip_auto_tool_choice(payload: dict) -> bool:
+    if payload.get("tool_choice") == "auto":
+        payload.pop("tool_choice", None)
+        return True
+    return False
+
+
 def _responses_input_text_size(items: list[dict]) -> int:
     size = 0
     for item in items:
@@ -501,6 +523,13 @@ class OpenAIProvider:
                 if self._strip_prompt_cache(payload):
                     self.logger.warning(
                         "chat.completions rejected prompt_cache params, retrying without them: %s",
+                        exc,
+                    )
+                    retry = True
+            elif _is_unsupported_auto_tool_choice_error(exc):
+                if _strip_auto_tool_choice(payload):
+                    self.logger.warning(
+                        "chat.completions rejected auto tool_choice, retrying without tool_choice: %s",
                         exc,
                     )
                     retry = True

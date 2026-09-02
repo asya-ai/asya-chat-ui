@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 from app.services.usage_limits import (
     CHAT_USAGE_LIMIT_EXCEEDED,
+    USAGE_LIMIT_WARNING_RATIO,
+    build_usage_limit_info,
     enforce_chat_usage_limits,
     estimate_scoped_usage_cost_usd,
 )
@@ -117,3 +119,35 @@ def test_enforce_chat_usage_limits_allows_under_ceiling(monkeypatch):
     )
 
     enforce_chat_usage_limits(session, org_id=org_id, user_id=user_id)
+
+
+def test_build_usage_limit_info_without_ceiling():
+    info = build_usage_limit_info(12.5, None)
+    assert info.used_usd == 12.5
+    assert info.limit_usd is None
+    assert info.percent_used is None
+    assert info.near_limit is False
+    assert info.at_limit is False
+
+
+def test_build_usage_limit_info_near_limit():
+    info = build_usage_limit_info(9.0, 10.0)
+    assert info.percent_used == pytest.approx(90.0)
+    assert info.near_limit is True
+    assert info.at_limit is False
+
+
+def test_build_usage_limit_info_at_limit():
+    info = build_usage_limit_info(10.0, 10.0)
+    assert info.at_limit is True
+    assert info.near_limit is True
+
+
+def test_build_usage_limit_info_below_warning_threshold():
+    info = build_usage_limit_info(8.9, 10.0)
+    assert info.near_limit is False
+    assert info.percent_used == pytest.approx(89.0)
+
+
+def test_usage_limit_warning_ratio():
+    assert USAGE_LIMIT_WARNING_RATIO == 0.9

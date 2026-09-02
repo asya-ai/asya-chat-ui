@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { authApi, orgApi, usageApi } from "@/lib/api"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
+import { cn } from "@/lib/utils"
 import { SettingsShell } from "@/components/SettingsShell"
 import { SettingsPage } from "@/components/settings/SettingsPanel"
 import type { Org, UsageDailyPoint, UsageSlice } from "@/lib/types"
@@ -33,6 +34,7 @@ export const UsagePage = () => {
   const [rowsByUser, setRowsByUser] = useState<UsageSlice[]>([])
   const [rowsByOrg, setRowsByOrg] = useState<UsageSlice[]>([])
   const [orgs, setOrgs] = useState<Org[]>([])
+  const [mineOrgs, setMineOrgs] = useState<Org[]>([])
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const orgId = orgStore.get()
@@ -87,6 +89,11 @@ export const UsagePage = () => {
   }, [])
 
   useEffect(() => {
+    if (isSuperAdmin) return
+    orgApi.mine().then(setMineOrgs).catch(() => null)
+  }, [isSuperAdmin])
+
+  useEffect(() => {
     if (!isSuperAdmin) return
     orgApi.list().then(setOrgs).catch(() => null)
   }, [isSuperAdmin])
@@ -96,6 +103,36 @@ export const UsagePage = () => {
       ? null
       : selectedOrgId
     : orgId
+
+  const scopedOrg = useMemo(() => {
+    if (!scopedOrgId) return null
+    const source = isSuperAdmin ? orgs : mineOrgs
+    return source.find((org) => org.id === scopedOrgId) ?? null
+  }, [isSuperAdmin, mineOrgs, orgs, scopedOrgId])
+
+  const showMonthlyLimits = selectedMonth !== "all"
+
+  const orgUsedUsd = useMemo(() => {
+    let total = 0
+    let hasCost = false
+    for (const row of rowsByUser) {
+      if (typeof row.cost_usd === "number") {
+        total += row.cost_usd
+        hasCost = true
+      }
+    }
+    return hasCost ? total : null
+  }, [rowsByUser])
+
+  const hasUserLimits = useMemo(
+    () => showMonthlyLimits && rowsByUser.some((row) => row.limit_usd != null),
+    [rowsByUser, showMonthlyLimits]
+  )
+
+  const hasOrgLimits = useMemo(
+    () => showMonthlyLimits && rowsByOrg.some((row) => row.limit_usd != null),
+    [rowsByOrg, showMonthlyLimits]
+  )
 
   useEffect(() => {
     if (!authChecked) return
@@ -195,6 +232,61 @@ export const UsagePage = () => {
       minimumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
       maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
     }).format(value)
+  }
+
+  const formatLimitUsed = (
+    used: number | null | undefined,
+    limit: number | null | undefined
+  ) => {
+    if (limit == null) return "—"
+    const usedValue = used ?? 0
+    const percent = limit > 0 ? Math.round((usedValue / limit) * 100) : 100
+    return t("usage_limit_used", {
+      used: formatCost(usedValue),
+      limit: formatCost(limit),
+      percent,
+    })
+  }
+
+  const renderOrgLimitProgress = () => {
+    if (!showMonthlyLimits || !scopedOrgId || scopedOrg?.cost_ceiling_usd == null) {
+      return null
+    }
+    const limit = scopedOrg.cost_ceiling_usd
+    const used = orgUsedUsd ?? 0
+    const percent = limit > 0 ? (used / limit) * 100 : 100
+    const barPercent = Math.min(100, Math.max(0, percent))
+
+    return (
+      <div className="mb-6 space-y-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-sm font-medium">{t("org_usage_limit_title")}</p>
+          <p className="text-muted-foreground text-sm tabular-nums">
+            {formatLimitUsed(orgUsedUsd, limit)}
+          </p>
+        </div>
+        <div
+          className="bg-muted h-2 w-full overflow-hidden rounded-full"
+          role="progressbar"
+          aria-valuenow={Math.round(percent)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={t("org_usage_limit_title")}
+        >
+          <div
+            className={cn(
+              "h-full rounded-full transition-[width]",
+              percent >= 100
+                ? "bg-destructive"
+                : percent >= 90
+                  ? "bg-warning"
+                  : "bg-primary"
+            )}
+            style={{ width: `${barPercent}%` }}
+          />
+        </div>
+      </div>
+    )
   }
 
   const formatCompact = (value: number) =>
@@ -381,6 +473,7 @@ export const UsagePage = () => {
     onSort: (next: SortState) => void,
     options?: {
       showCost?: boolean
+      showLimits?: boolean
       expandedRows?: Set<string>
       setExpandedRows?: (value: SetStateAction<Set<string>>) => void
       dailyKind?: "model" | "user" | "org"
@@ -415,6 +508,9 @@ export const UsagePage = () => {
                   {renderSortableHead(t("usage_cost"), sort, onSort, "cost_usd")}
                 </TableHead>
               ) : null}
+              {options?.showLimits ? (
+                <TableHead>{t("usage_limit_column")}</TableHead>
+              ) : null}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -428,7 +524,8 @@ export const UsagePage = () => {
               const dailyCacheKey = options?.dailyKind
                 ? rowDailyCacheKey(options.dailyKind, row)
                 : ""
-              const colSpan = options?.showCost ? 7 : 6
+              const colSpan =
+                6 + (options?.showCost ? 1 : 0) + (options?.showLimits ? 1 : 0)
               return (
                 <Fragment key={rowIdentity}>
                   <TableRow>
@@ -462,6 +559,11 @@ export const UsagePage = () => {
                     <TableCell>{formatTokens(row.thinking_tokens)}</TableCell>
                     <TableCell>{formatTokens(row.total_tokens)}</TableCell>
                     {options?.showCost ? <TableCell>{formatCost(row.cost_usd)}</TableCell> : null}
+                    {options?.showLimits ? (
+                      <TableCell className="tabular-nums">
+                        {formatLimitUsed(row.cost_usd, row.limit_usd)}
+                      </TableCell>
+                    ) : null}
                   </TableRow>
                   {isExpanded ? (
                     <>
@@ -485,6 +587,7 @@ export const UsagePage = () => {
                           {options?.showCost ? (
                             <TableCell>{formatCost(child.cost_usd)}</TableCell>
                           ) : null}
+                          {options?.showLimits ? <TableCell>—</TableCell> : null}
                         </TableRow>
                       ))}
                     </>
@@ -551,11 +654,14 @@ export const UsagePage = () => {
           <CardHeader>
             <CardTitle>
               {scopedOrgId
-                ? orgs.find((org) => org.id === scopedOrgId)?.name ?? t("usage_entire_org")
+                ? scopedOrg?.name ?? orgs.find((org) => org.id === scopedOrgId)?.name ?? t("usage_entire_org")
                 : t("usage_entire_instance")}
             </CardTitle>
           </CardHeader>
-          <CardContent>{renderDailyCharts(dailyPoints)}</CardContent>
+          <CardContent>
+            {renderOrgLimitProgress()}
+            {renderDailyCharts(dailyPoints)}
+          </CardContent>
         </Card>
         {renderTable(t("usage_block_models"), rowsByModel, sortModel, setSortModel, {
           showCost: true,
@@ -565,6 +671,7 @@ export const UsagePage = () => {
         })}
         {renderTable(t("usage_block_users"), rowsByUser, sortUser, setSortUser, {
           showCost: true,
+          showLimits: hasUserLimits,
           expandedRows: expandedUsers,
           setExpandedRows: setExpandedUsers,
           dailyKind: "user",
@@ -572,6 +679,7 @@ export const UsagePage = () => {
         {isSuperAdmin ? (
           renderTable(t("usage_block_orgs"), rowsByOrg, sortOrg, setSortOrg, {
             showCost: true,
+            showLimits: hasOrgLimits,
             expandedRows: expandedOrgs,
             setExpandedRows: setExpandedOrgs,
             dailyKind: "org",

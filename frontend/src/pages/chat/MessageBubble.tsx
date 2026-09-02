@@ -1530,57 +1530,6 @@ const MessageBubbleComponent = ({
       }`}
     >
       <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
-        {showUserSideActions ? (
-          <div className="right-full absolute inset-y-0 flex flex-col justify-end mr-0.5 pointer-events-none">
-            <div className="bottom-0 z-10 sticky flex items-center opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto">
-              {actionsEnabled ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-70 hover:opacity-100 size-7"
-                  onClick={() => onStartEdit(msg)}
-                  aria-label={t("chat_edit_message")}
-                >
-                  <Pencil aria-hidden="true" className="size-4" />
-                </Button>
-              ) : null}
-              {canCopyMessage ? (
-                <CopyTextButton
-                  text={msg.content}
-                  label={t("chat_copy_message")}
-                  copiedLabel={t("common_copied")}
-                  iconOnly
-                  className="opacity-70 hover:opacity-100 size-7"
-                />
-              ) : null}
-              {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-70 hover:opacity-100 size-7"
-                  onClick={() => onSaveAsPrompt(msg)}
-                  aria-label={t("prompt_save_message")}
-                >
-                  <Bookmark aria-hidden="true" className="size-4" />
-                </Button>
-              ) : null}
-              {actionsEnabled ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-70 hover:opacity-100 size-7"
-                  onClick={() => onDeleteFromMessage(msg)}
-                  aria-label={t("chat_delete_message")}
-                >
-                  <Trash2 aria-hidden="true" className="size-4" />
-                </Button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
         <div
           className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal ${
             isUser
@@ -2046,6 +1995,57 @@ const MessageBubbleComponent = ({
             </>
           )}
         </div>
+        {showUserSideActions ? (
+          <div className="flex justify-end mt-1 md:mt-0 md:right-full md:absolute md:inset-y-0 md:flex-col md:justify-end md:mr-0.5 pointer-events-none">
+            <div className="bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 md:flex md:items-center md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto">
+              {actionsEnabled ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100 size-7"
+                  onClick={() => onStartEdit(msg)}
+                  aria-label={t("chat_edit_message")}
+                >
+                  <Pencil aria-hidden="true" className="size-4" />
+                </Button>
+              ) : null}
+              {canCopyMessage ? (
+                <CopyTextButton
+                  text={msg.content}
+                  label={t("chat_copy_message")}
+                  copiedLabel={t("common_copied")}
+                  iconOnly
+                  className="opacity-70 hover:opacity-100 size-7"
+                />
+              ) : null}
+              {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100 size-7"
+                  onClick={() => onSaveAsPrompt(msg)}
+                  aria-label={t("prompt_save_message")}
+                >
+                  <Bookmark aria-hidden="true" className="size-4" />
+                </Button>
+              ) : null}
+              {actionsEnabled ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-70 hover:opacity-100 size-7"
+                  onClick={() => onDeleteFromMessage(msg)}
+                  aria-label={t("chat_delete_message")}
+                >
+                  <Trash2 aria-hidden="true" className="size-4" />
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {showAssistantFooter ? (
           <div className="flex flex-wrap justify-between items-center gap-2 mt-2 transition">
             <div className="flex justify-start items-center gap-1">

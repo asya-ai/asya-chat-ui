@@ -13,6 +13,52 @@ from app.models import ChatModel, Org, UsageEvent, User
 from app.services.model_pricing import estimate_token_cost_usd
 
 CHAT_USAGE_LIMIT_EXCEEDED = "Chat usage limit exceeded"
+USAGE_LIMIT_WARNING_RATIO = 0.9
+
+
+class UsageLimitInfo:
+    """Monthly usage against an optional USD ceiling."""
+
+    __slots__ = (
+        "used_usd",
+        "limit_usd",
+        "percent_used",
+        "near_limit",
+        "at_limit",
+    )
+
+    def __init__(
+        self,
+        *,
+        used_usd: float,
+        limit_usd: float | None = None,
+        percent_used: float | None = None,
+        near_limit: bool = False,
+        at_limit: bool = False,
+    ) -> None:
+        self.used_usd = used_usd
+        self.limit_usd = limit_usd
+        self.percent_used = percent_used
+        self.near_limit = near_limit
+        self.at_limit = at_limit
+
+
+def current_usage_month_label() -> str:
+    return _current_month_bounds()[0].strftime("%Y-%m")
+
+
+def build_usage_limit_info(used_usd: float, limit_usd: float | None) -> UsageLimitInfo:
+    if limit_usd is None:
+        return UsageLimitInfo(used_usd=used_usd)
+    limit = float(limit_usd)
+    ratio = used_usd / limit if limit > 0 else 1.0
+    return UsageLimitInfo(
+        used_usd=used_usd,
+        limit_usd=limit,
+        percent_used=round(ratio * 100.0, 1),
+        near_limit=used_usd >= limit * USAGE_LIMIT_WARNING_RATIO,
+        at_limit=used_usd >= limit,
+    )
 
 
 def _current_month_bounds() -> tuple[datetime, datetime]:

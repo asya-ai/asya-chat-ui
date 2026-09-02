@@ -3,8 +3,10 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, Menu, PanelLeftOpen } from "lucide-react"
 
 import { useSettingsAuth, useSettingsNav } from "@/lib/settings-nav"
+import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
 import { useMe } from "@/hooks/use-chat-query"
+import { UsageLimitBanners } from "@/components/UsageLimitBanners"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
@@ -129,6 +131,7 @@ export const SettingsShell = ({ title, actions, children }: SettingsShellProps) 
   const { t } = useI18n()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [desktopOpen, setDesktopOpen] = useState(true)
+  const orgId = orgStore.get()
 
   const sidebar = (onClose?: () => void) => <SettingsSidebar onClose={onClose} />
 
@@ -193,6 +196,7 @@ export const SettingsShell = ({ title, actions, children }: SettingsShellProps) 
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
           ) : null}
         </div>
+        <UsageLimitBanners orgId={orgId} />
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </main>
     </div>

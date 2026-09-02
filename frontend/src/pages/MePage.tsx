@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 
 import { apiKeyApi, authApi, memoryApi } from "@/lib/api"
+import { useUsageLimits } from "@/hooks/use-chat-query"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n, type TranslationKey } from "@/lib/i18n-context"
 import { isValidPassword } from "@/lib/password"
@@ -45,7 +46,9 @@ import {
 export const MePage = () => {
   const navigate = useNavigate()
   const { clearToken } = useAuth()
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  const orgId = orgStore.get()
+  const { data: usageLimits } = useUsageLimits(orgId)
   const {
     installed: pwaInstalled,
     canPromptInstall,
@@ -240,6 +243,18 @@ export const MePage = () => {
   const showInstallSection =
     !pwaInstalled && (canPromptInstall || needsHttps || platform !== "other")
 
+  const formatCost = (value: number) =>
+    new Intl.NumberFormat(locale ?? "en", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+      maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+    }).format(value)
+
+  const userUsageLimit = usageLimits?.user
+  const showUsageLimit =
+    userUsageLimit?.limit_usd != null && userUsageLimit.limit_usd !== undefined
+
   const onInstallApp = () => {
     if (canPromptInstall) {
       setInstallingPwa(true)
@@ -311,6 +326,22 @@ export const MePage = () => {
             />
           ) : null}
         </SettingsSection>
+
+        {showUsageLimit && userUsageLimit ? (
+          <SettingsSection title={t("me_usage_limit")} description={t("me_usage_limit_desc")}>
+            <SettingsRow label={t("org_usage_limit_title")}>
+              <SettingsControl>
+                <p className="text-sm tabular-nums">
+                  {t("me_usage_limit_used", {
+                    used: formatCost(userUsageLimit.used_usd),
+                    limit: formatCost(userUsageLimit.limit_usd!),
+                    percent: Math.round(userUsageLimit.percent_used ?? 0),
+                  })}
+                </p>
+              </SettingsControl>
+            </SettingsRow>
+          </SettingsSection>
+        ) : null}
 
         <SettingsSection title={t("me_account")}>
           <Dialog open={passwordOpen} onOpenChange={onPasswordOpenChange}>
