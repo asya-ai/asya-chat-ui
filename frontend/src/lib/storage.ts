@@ -14,7 +14,8 @@ const COMPOSER_TEXTAREA_HEIGHT_KEY = "chatui_composer_textarea_height"
 const DEFAULT_COWORK_PANEL_WIDTH_PCT = 50
 const DEFAULT_COMPOSER_TEXTAREA_HEIGHT = 88
 const MIN_COMPOSER_TEXTAREA_HEIGHT = 52
-const COMPOSER_TEXTAREA_MAX_HEIGHT_VH = 0.5
+const COMPOSER_TEXTAREA_AUTO_GROW_MAX_HEIGHT_VH = 0.5
+const COMPOSER_TEXTAREA_MAX_HEIGHT_VH = 0.75
 const MIN_COWORK_PANEL_WIDTH_PCT = 24
 const MAX_COWORK_PANEL_WIDTH_PCT = 76
 
@@ -187,6 +188,7 @@ const parseComposerTextareaHeight = (raw: string | null): number => {
 export const composerTextareaHeightStore = {
   default: DEFAULT_COMPOSER_TEXTAREA_HEIGHT,
   min: MIN_COMPOSER_TEXTAREA_HEIGHT,
+  autoGrowMaxHeightVh: COMPOSER_TEXTAREA_AUTO_GROW_MAX_HEIGHT_VH,
   maxHeightVh: COMPOSER_TEXTAREA_MAX_HEIGHT_VH,
   get: (): number =>
     parseComposerTextareaHeight(localStorage.getItem(COMPOSER_TEXTAREA_HEIGHT_KEY)),

@@ -31,15 +31,20 @@ import {
 import { composerTextareaHeightStore } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 
-const getMaxComposerTextareaHeight = () => {
+const getMaxComposerTextareaHeight = (
+  maxHeightVh = composerTextareaHeightStore.maxHeightVh
+) => {
   if (typeof window === "undefined") {
-    return Math.round(800 * composerTextareaHeightStore.maxHeightVh)
+    return Math.round(800 * maxHeightVh)
   }
-  return Math.round(window.innerHeight * composerTextareaHeightStore.maxHeightVh)
+  return Math.round(window.innerHeight * maxHeightVh)
 }
 
-const clampComposerTextareaHeight = (px: number) => {
-  const max = getMaxComposerTextareaHeight()
+const clampComposerTextareaHeight = (
+  px: number,
+  maxHeightVh = composerTextareaHeightStore.maxHeightVh
+) => {
+  const max = getMaxComposerTextareaHeight(maxHeightVh)
   return Math.min(max, Math.max(composerTextareaHeightStore.min, Math.round(px)))
 }
 
@@ -119,6 +124,8 @@ export const ChatComposer = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const heightPxRef = useRef(clampComposerTextareaHeight(composerTextareaHeightStore.get()))
+  const heightFloorRef = useRef(clampComposerTextareaHeight(composerTextareaHeightStore.get()))
+  const autoGrowRef = useRef(true)
   const resizeStartYRef = useRef(0)
   const resizeStartHeightRef = useRef(0)
   const [hasText, setHasText] = useState(false)
@@ -148,8 +155,37 @@ export const ChatComposer = ({
     }
   }, [isResizing])
 
+  const applyHeight = useCallback((next: number, maxHeightVh?: number) => {
+    const clamped = clampComposerTextareaHeight(next, maxHeightVh)
+    heightPxRef.current = clamped
+    setTextareaHeightPx(clamped)
+    return clamped
+  }, [])
+
+  const resetHeightToDefault = useCallback(() => {
+    autoGrowRef.current = true
+    heightFloorRef.current = composerTextareaHeightStore.default
+    composerTextareaHeightStore.set(composerTextareaHeightStore.default)
+    applyHeight(composerTextareaHeightStore.default)
+  }, [applyHeight])
+
+  const syncAutoGrowHeight = useCallback(() => {
+    if (centered || !autoGrowRef.current) return
+    const el = textareaRef.current
+    if (!el) return
+    const previousHeight = el.style.height
+    el.style.height = "0px"
+    const contentHeight = el.scrollHeight
+    el.style.height = previousHeight
+    applyHeight(
+      Math.max(heightFloorRef.current, contentHeight),
+      composerTextareaHeightStore.autoGrowMaxHeightVh
+    )
+  }, [applyHeight, centered])
+
   const stopResizing = () => {
     setIsResizing(false)
+    heightFloorRef.current = heightPxRef.current
     composerTextareaHeightStore.set(heightPxRef.current)
   }
 
@@ -157,17 +193,17 @@ export const ChatComposer = ({
     if (centered || event.button !== 0) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
+    autoGrowRef.current = false
     resizeStartYRef.current = event.clientY
-    resizeStartHeightRef.current = heightPxRef.current
+    resizeStartHeightRef.current =
+      textareaRef.current?.offsetHeight ?? heightPxRef.current
     setIsResizing(true)
   }
 
   const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!isResizing) return
     const delta = resizeStartYRef.current - event.clientY
-    const next = clampComposerTextareaHeight(resizeStartHeightRef.current + delta)
-    heightPxRef.current = next
-    setTextareaHeightPx(next)
+    applyHeight(resizeStartHeightRef.current + delta)
   }
 
   const handleResizePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -180,25 +216,39 @@ export const ChatComposer = ({
 
   const handleResizeDoubleClick = () => {
     if (centered) return
-    const next = composerTextareaHeightStore.default
-    heightPxRef.current = next
-    setTextareaHeightPx(next)
-    composerTextareaHeightStore.set(next)
+    resetHeightToDefault()
+    requestAnimationFrame(() => syncAutoGrowHeight())
   }
 
   const assignTextareaRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
       textareaRef.current = el
       if (inputRef) inputRef.current = el
+      if (el) requestAnimationFrame(() => syncAutoGrowHeight())
     },
-    [inputRef]
+    [inputRef, syncAutoGrowHeight]
   )
 
   const syncDraft = (next: string) => {
     const nextHasText = next.trim().length > 0
     setHasText((prev) => (prev === nextHasText ? prev : nextHasText))
     onDraftChangeRef.current?.(next)
+    if (!nextHasText) {
+      resetHeightToDefault()
+      return
+    }
+    requestAnimationFrame(() => syncAutoGrowHeight())
   }
+
+  useEffect(() => {
+    if (centered) return
+    const onViewportResize = () => {
+      applyHeight(heightPxRef.current)
+      syncAutoGrowHeight()
+    }
+    window.addEventListener("resize", onViewportResize)
+    return () => window.removeEventListener("resize", onViewportResize)
+  }, [applyHeight, centered, syncAutoGrowHeight])
 
   const updateCursorFromTextarea = (el: HTMLTextAreaElement) => {
     setCursorPosition(el.selectionStart ?? 0)
@@ -402,7 +452,6 @@ export const ChatComposer = ({
           />
         ) : null}
         <div
-          style={centered ? undefined : { minHeight: textareaHeightPx }}
           className={cn("relative", !centered && "shrink-0")}
         >
           {slashMenuOpen ? (
@@ -476,11 +525,12 @@ export const ChatComposer = ({
             onPaste={onPasteAttachments}
             placeholder={placeholder}
             rows={centered ? 1 : 2}
+            style={centered ? undefined : { height: textareaHeightPx }}
             className={cn(
-              "bg-transparent shadow-none border-0 text-base resize-none",
+              "bg-transparent shadow-none border-0 text-base resize-none overflow-y-auto",
               centered
-                ? "min-h-13 max-h-[50vh] max-md:max-h-[50dvh] overflow-y-auto -mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
-                : "field-sizing-content min-h-13 max-h-[50vh] max-md:max-h-[50dvh] overflow-y-auto px-1.5 py-1",
+                ? "field-sizing-content min-h-13 max-h-[50vh] max-md:max-h-[50dvh] -mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
+                : "field-sizing-fixed min-h-0 px-1.5 py-1",
               "placeholder:text-muted-foreground",
               "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
             )}
