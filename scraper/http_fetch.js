@@ -73,28 +73,66 @@ const DEFAULT_FETCH_HEADERS = {
 /**
  * Fetch a URL once. Caller decides whether to render with a browser or convert
  * the body directly based on content-type / body shape.
+ *
+ * Redirects are followed manually so each hop can be SSRF-checked via validateUrl.
  */
-export const fetchDocument = async (urlString, { timeoutMs = 20000 } = {}) => {
-  const response = await fetch(urlString, {
-    redirect: "follow",
-    headers: DEFAULT_FETCH_HEADERS,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) {
-    throw new Error(`HTTP fetch failed (${response.status}) for ${urlString}`);
+export const fetchDocument = async (
+  urlString,
+  { timeoutMs = 20000, validateUrl, maxRedirects = 10 } = {},
+) => {
+  let currentUrl = urlString;
+  for (let hop = 0; hop <= maxRedirects; hop += 1) {
+    if (typeof validateUrl === "function") {
+      const ok = await validateUrl(currentUrl);
+      if (!ok) {
+        throw new Error(`Invalid or private URL: ${currentUrl}`);
+      }
+    }
+
+    const response = await fetch(currentUrl, {
+      redirect: "manual",
+      headers: DEFAULT_FETCH_HEADERS,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new Error(`Redirect missing Location for ${currentUrl}`);
+      }
+      currentUrl = new URL(location, currentUrl).href;
+      // Drain body so the connection can be reused / closed cleanly.
+      try {
+        await response.arrayBuffer();
+      } catch {
+        // ignore
+      }
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`HTTP fetch failed (${response.status}) for ${currentUrl}`);
+    }
+    const finalUrl = response.url || currentUrl;
+    if (typeof validateUrl === "function") {
+      const ok = await validateUrl(finalUrl);
+      if (!ok) {
+        throw new Error(`Invalid or private URL: ${finalUrl}`);
+      }
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const body = await response.text();
+    if (!String(body || "").trim()) {
+      throw new Error(`HTTP fetch returned empty body for ${finalUrl}`);
+    }
+    return {
+      finalUrl,
+      contentType,
+      body,
+      title: titleFromHtml(body) || filenameFromUrl(finalUrl),
+    };
   }
-  const finalUrl = response.url || urlString;
-  const contentType = response.headers.get("content-type") || "";
-  const body = await response.text();
-  if (!String(body || "").trim()) {
-    throw new Error(`HTTP fetch returned empty body for ${finalUrl}`);
-  }
-  return {
-    finalUrl,
-    contentType,
-    body,
-    title: titleFromHtml(body) || filenameFromUrl(finalUrl),
-  };
+  throw new Error(`Too many redirects for ${urlString}`);
 };
 
 export const isDirectTextDocument = (doc) => {

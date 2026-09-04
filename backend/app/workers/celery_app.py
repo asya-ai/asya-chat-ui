@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 
 from celery import Celery
-from celery.signals import worker_process_init
 
 
 def _get_broker_url() -> str:
@@ -54,13 +52,3 @@ celery_app.conf.update(
 )
 
 celery_app.autodiscover_tasks(["app.workers"])
-
-
-@worker_process_init.connect
-def _warm_mcp_cache(**_kwargs) -> None:
-    from app.services.mcp import refresh_mcp_cache
-
-    try:
-        asyncio.run(refresh_mcp_cache(force=True))
-    except Exception:
-        logging.getLogger(__name__).exception("Failed to warm MCP tool cache in worker")

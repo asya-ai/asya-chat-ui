@@ -1835,71 +1835,58 @@ def _probe_mcp_server(server: Any) -> McpServerCheck:
 
 
 def _collect_mcp_servers() -> list[McpServerCheck]:
-    from app.services.mcp.catalog import (
-        MCP_SERVERS_CONFIG_PATH,
-        CatalogLoadError,
-        load_mcp_catalog,
-    )
+    from app.db.session import SessionLocal
+    from app.models import McpServer
+    from app.services.mcp.auth_config import headers_from_shared_auth
+    from app.services.mcp.store import row_to_runtime_config
+    from sqlmodel import select
 
-    path = Path(MCP_SERVERS_CONFIG_PATH)
-    if not path.is_file():
-        return [
-            McpServerCheck(
-                id="catalog",
-                name="MCP catalog",
-                status="missing",
-                detail=f"Catalog not found: {path}",
+    with SessionLocal() as session:
+        rows = session.exec(
+            select(McpServer).where(
+                McpServer.scope == "instance",
+                McpServer.is_enabled.is_(True),
             )
-        ]
+        ).all()
 
-    try:
-        servers = load_mcp_catalog(path)
-    except CatalogLoadError as exc:
+    if not rows:
         return [
             McpServerCheck(
                 id="catalog",
-                name="MCP catalog",
-                status="invalid",
-                detail=_truncate(str(exc)),
-            )
-        ]
-    except Exception as exc:
-        return [
-            McpServerCheck(
-                id="catalog",
-                name="MCP catalog",
-                status="invalid",
-                detail=_truncate(f"Failed to load catalog: {exc}"),
-            )
-        ]
-
-    if not servers:
-        return [
-            McpServerCheck(
-                id="catalog",
-                name="MCP catalog",
+                name="MCP servers",
                 status="ok",
-                detail=f"No enabled servers in {path}",
+                detail="No enabled instance MCP servers configured",
             )
         ]
 
     checks: list[McpServerCheck] = []
-    with ThreadPoolExecutor(max_workers=min(8, len(servers))) as executor:
-        futures = {executor.submit(_probe_mcp_server, server): server for server in servers}
-        for future in as_completed(futures):
-            server = futures[future]
-            try:
-                checks.append(future.result())
-            except Exception as exc:  # pragma: no cover - defensive
-                checks.append(
-                    McpServerCheck(
-                        id=server.id,
-                        name=server.name,
-                        transport=getattr(server, "transport", None),
-                        status="invalid",
-                        detail=_truncate(format_exception_detail(exc, limit=400), limit=320),
-                    )
+    for row in rows:
+        if row.auth_type == "user_provided":
+            checks.append(
+                McpServerCheck(
+                    id=row.slug,
+                    name=row.name,
+                    transport=row.transport,
+                    status="ok",
+                    detail="Configured; requires user connection",
                 )
+            )
+            continue
+        headers = headers_from_shared_auth(row.auth_type, row.auth_config)
+        config = row_to_runtime_config(row, headers=headers)
+        try:
+            check = _probe_mcp_server(config)
+            checks.append(check)
+        except Exception as exc:
+            checks.append(
+                McpServerCheck(
+                    id=row.slug,
+                    name=row.name,
+                    transport=row.transport,
+                    status="invalid",
+                    detail=_truncate(format_exception_detail(exc, limit=400), limit=320),
+                )
+            )
     checks.sort(key=lambda item: item.id)
     return checks
 

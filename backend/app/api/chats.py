@@ -727,6 +727,9 @@ def _build_tool_registry(
                     "Read/analyze/transform them with pandas/openpyxl/etc., then overwrite the same "
                     "path to update the live document in the UI. Prefer this for spreadsheet math, "
                     "CSV transforms, chart data prep; use cowork_str_replace for small text edits."
+                    "Large MCP tool results for this chat are staged read-only under /workspace/data/ "
+                    "(JSON files + manifest.json). Prefer mcp_data_get for small slices; use this "
+                    "tool to load/analyze full spilled payloads with pandas/json."
                     "Write any output files to /outputs to return them to the user (images, resulting csv etc.)."
                     "YOu dont need to tell user where the file was created, it will be sent together with your response to them."
                     "You can call this tool multiple times. Chat attachment filenames are <attachment_id>_<sanitized_name>."
@@ -1187,7 +1190,14 @@ def _build_tool_registry(
             _cowork_write_handler,
         )
 
-    register_mcp_tools(registry)
+    if user_id is not None:
+        register_mcp_tools(
+            registry,
+            session=session,
+            org_id=org_id,
+            user_id=user_id,
+            chat_id=chat_id,
+        )
 
     logger.info("Registered tools: %s", [tool.name for tool in registry.list_specs()])
     return registry
@@ -4858,6 +4868,7 @@ async def create_message(
         exec_policy=effective_exec_policy,
         locale=payload.locale,
         agent_id=chat.agent_id,
+        user_id=chat.user_id,
         pending_attachments=pending_tool_attachments,
     )
     tool_attachments: list[dict] | None = None
@@ -5700,6 +5711,7 @@ async def edit_message(
         exec_policy=effective_exec_policy,
         locale=payload.locale,
         agent_id=chat.agent_id,
+        user_id=chat.user_id,
         pending_attachments=pending_tool_attachments,
     )
 

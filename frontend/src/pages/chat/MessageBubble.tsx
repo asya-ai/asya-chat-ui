@@ -1424,7 +1424,14 @@ const MessageBubbleComponent = ({
         const { className, children, ref: refProp, ...rest } = props
         void refProp
         const match = /language-(\w+)/.exec(className || "")
-        const codeContent = String(children).replace(/\n$/, "")
+        // Never String(children): arrays join with "," and corrupt Mermaid source.
+        const codeContent = (
+          Array.isArray(children)
+            ? children.map((child) => (typeof child === "string" ? child : "")).join("")
+            : typeof children === "string"
+              ? children
+              : String(children ?? "")
+        ).replace(/\n$/, "")
         const mermaidChart = isBlockCode(codeContent, className)
           ? toMermaidChart(codeContent, match?.[1] ?? null)
           : null

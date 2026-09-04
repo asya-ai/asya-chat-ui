@@ -45,4 +45,25 @@ describe("sanitizeMermaidChart", () => {
     expect(output).toContain('D["@splinetool/react-spline"]')
     expect(output).toContain("F[React Three Fiber + Drei]")
   })
+
+  it("escapes ampersands in quoted labels", () => {
+    const input =
+      'flowchart TD\n  A["4 Sep demo"] --> B["Robot navigation, safety & connectivity"]'
+    expect(sanitizeMermaidChart(input)).toContain(
+      'B["Robot navigation, safety #amp; connectivity"]'
+    )
+  })
+
+  it("quotes unquoted labels that contain commas or slashes", () => {
+    const input =
+      "flowchart TD\n  A[Demo runbook, roles] --> B[UI/design handover]"
+    const output = sanitizeMermaidChart(input)
+    expect(output).toContain('A["Demo runbook, roles"]')
+    expect(output).toContain('B["UI/design handover"]')
+  })
+
+  it("normalizes curly quotes around labels", () => {
+    const input = "flowchart TD\n  A[\u201Chello & world\u201D]"
+    expect(sanitizeMermaidChart(input)).toBe('flowchart TD\n  A["hello #amp; world"]')
+  })
 })

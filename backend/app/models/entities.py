@@ -284,6 +284,83 @@ class InstanceProviderEnvSuppression(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class McpSettings(SQLModel, table=True):
+    __tablename__ = "mcp_settings"
+
+    id: int = Field(default=1, primary_key=True)
+    allow_org_servers: bool = Field(default=False)
+    allow_user_servers: bool = Field(default=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class McpServer(SQLModel, table=True):
+    __tablename__ = "mcp_servers"
+    __table_args__ = (UniqueConstraint("slug", name="uq_mcp_servers_slug"),)
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    slug: str = Field(index=True)
+    name: str
+    description: Optional[str] = Field(default=None)
+    scope: str = Field(index=True)
+    org_id: Optional[UUID] = Field(default=None, foreign_key="orgs.id", index=True)
+    user_id: Optional[UUID] = Field(default=None, foreign_key="users.id", index=True)
+    transport: str = Field(default="http")
+    url: Optional[str] = Field(default=None)
+    command: Optional[str] = Field(default=None)
+    args: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
+    stdio_env: Optional[dict[str, str]] = Field(default=None, sa_column=Column(JSON))
+    include_tools: bool = Field(default=True)
+    include_resources: bool = Field(default=True)
+    include_prompts: bool = Field(default=True)
+    tool_allowlist: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
+    tool_blocklist: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
+    auth_type: str = Field(default="none")
+    auth_config: Optional[str] = Field(default=None)
+    is_enabled: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class McpOrgSettings(SQLModel, table=True):
+    __tablename__ = "mcp_org_settings"
+
+    org_id: UUID = Field(foreign_key="orgs.id", primary_key=True)
+    allow_user_servers: bool = Field(default=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class McpOrgBinding(SQLModel, table=True):
+    __tablename__ = "mcp_org_bindings"
+    __table_args__ = (
+        UniqueConstraint("org_id", "instance_server_id", name="uq_mcp_org_bindings_org_server"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    instance_server_id: UUID = Field(foreign_key="mcp_servers.id", index=True)
+    mode: str = Field(default="inherit")
+    auth_type: Optional[str] = Field(default=None)
+    auth_config: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class McpUserConnection(SQLModel, table=True):
+    __tablename__ = "mcp_user_connections"
+    __table_args__ = (
+        UniqueConstraint("user_id", "server_id", name="uq_mcp_user_connections_user_server"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    server_id: UUID = Field(foreign_key="mcp_servers.id", index=True)
+    auth_config: str
+    status: str = Field(default="connected", index=True)
+    expires_at: Optional[datetime] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class Chat(SQLModel, table=True):
     __tablename__ = "chats"
 

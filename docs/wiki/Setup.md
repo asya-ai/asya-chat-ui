@@ -17,6 +17,6 @@ Main URL: `http://127.0.0.1:8085`
 - database credentials
 - one provider API key
 
-MCP catalog (optional): `config/mcp_servers.yaml` is mounted into backend/worker. See `docs/configuration.md`.
+MCP servers: configure in **Settings → Integrations**. See `docs/configuration.md`.
 
 For complete details and production instructions, see `docs/setup.md`.

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-import ipaddress
 import re
-import socket
 from datetime import datetime
 from html import unescape
 from urllib.parse import urlparse
@@ -17,6 +15,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import AuthContext, get_auth_context, get_db
+from app.core.url_safety import is_blocked_hostname
 from app.models import (
     Agent,
     AgentAccess,
@@ -324,27 +323,6 @@ def _decode_source_text(payload: AgentSourceCreateRequest) -> str:
     )
 
 
-def _is_private_hostname(hostname: str) -> bool:
-    if hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-        return True
-    if hostname.endswith((".local", ".internal")):
-        return True
-    try:
-        ip = ipaddress.ip_address(hostname)
-        return not ip.is_global
-    except ValueError:
-        pass
-    try:
-        infos = socket.getaddrinfo(hostname, None)
-    except Exception:
-        return True
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            return True
-    return False
-
-
 def _strip_html(raw_html: str) -> str:
     without_scripts = re.sub(
         r"<(script|style)[^>]*>.*?</\1>",
@@ -364,7 +342,7 @@ def _fetch_url_text(url: str) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only http/https URLs are supported",
         )
-    if not parsed.hostname or _is_private_hostname(parsed.hostname):
+    if is_blocked_hostname(parsed.hostname):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="URL host is blocked",
@@ -378,6 +356,11 @@ def _fetch_url_text(url: str) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to fetch URL source",
         ) from exc
+    if is_blocked_hostname(urlparse(str(response.url)).hostname):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="URL host is blocked",
+        )
     content_type = (response.headers.get("content-type") or "").lower()
     body = response.text or ""
     if "html" in content_type:

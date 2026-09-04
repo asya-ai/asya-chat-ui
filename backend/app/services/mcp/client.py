@@ -15,13 +15,14 @@ from pydantic import AnyUrl
 
 from app.core.config import settings
 from app.core.exceptions import format_exception_detail
-from app.services.mcp.catalog import McpServerConfig
+from app.services.mcp.types import McpServerConfig
 
 logger = logging.getLogger(__name__)
 
 
-def _timeout() -> timedelta:
-    return timedelta(seconds=max(1, int(settings.mcp_call_timeout_seconds)))
+def _timeout(seconds: int | float | None = None) -> timedelta:
+    value = settings.mcp_call_timeout_seconds if seconds is None else seconds
+    return timedelta(seconds=max(1, int(value)))
 
 
 def _contains_timeout(exc: BaseException) -> bool:
@@ -45,9 +46,13 @@ def _contains_timeout(exc: BaseException) -> bool:
 
 
 @asynccontextmanager
-async def open_mcp_session(server: McpServerConfig) -> AsyncIterator[ClientSession]:
+async def open_mcp_session(
+    server: McpServerConfig,
+    *,
+    timeout_seconds: int | float | None = None,
+) -> AsyncIterator[ClientSession]:
     """Open a short-lived MCP client session for the configured transport."""
-    timeout = _timeout()
+    timeout = _timeout(timeout_seconds)
     if server.transport == "http":
         assert server.url
         async with streamablehttp_client(
@@ -152,7 +157,9 @@ async def discover_server_capabilities(server: McpServerConfig) -> dict[str, Any
     templates: list[dict[str, Any]] = []
     prompts: list[dict[str, Any]] = []
 
-    async with open_mcp_session(server) as session:
+    async with open_mcp_session(
+        server, timeout_seconds=settings.mcp_connect_timeout_seconds
+    ) as session:
         caps = session.get_server_capabilities()
         if server.include.tools:
             try:

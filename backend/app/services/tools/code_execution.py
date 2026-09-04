@@ -27,6 +27,7 @@ from app.models import (
     ChatMessageAttachment,
 )
 from app.services.file_storage import attachment_bytes, maybe_read_file_bytes
+from app.services.mcp.spill import stage_mcp_data_for_exec
 from app.services.tools.cowork_tools import bump_content, document_payload, list_documents
 from app.services.tools.registry import ToolResult
 
@@ -913,6 +914,7 @@ async def run_code_execution(
     cowork_files, cowork_path_to_id, cowork_snapshots = _write_cowork_workspace(
         cowork_docs, work_dir
     )
+    mcp_data_files = stage_mcp_data_for_exec(context.chat_id, work_dir)
 
     code_path = work_dir / "main.py"
     code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
@@ -980,6 +982,7 @@ async def run_code_execution(
             "timed_out": timed_out,
             "inputs": inputs,
             "cowork_files": cowork_files,
+            "mcp_data_files": mcp_data_files,
             "cowork_updated": [
                 {
                     "document_id": item.get("document_id"),

@@ -3,9 +3,6 @@ import puppeteer from "puppeteer";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
-import ipaddr from "ipaddr.js";
-import { URL } from "url";
-import dns from "dns/promises";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -16,6 +13,7 @@ import {
   fetchDocument,
   isDirectTextDocument,
 } from "./http_fetch.js";
+import { validateUrl } from "./url_safety.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -230,48 +228,6 @@ const cleanupDocument = (document) => {
         removeElement(element);
       }
     }
-  }
-};
-
-const isPrivateIP = (ip) => {
-  try {
-    const parsed = ipaddr.parse(ip);
-    const range = parsed.range();
-    return (
-      range === "private" ||
-      range === "loopback" ||
-      range === "linkLocal" ||
-      range === "reserved"
-    );
-  } catch {
-    return false;
-  }
-};
-
-const validateUrl = async (urlString) => {
-  try {
-    const url = new URL(urlString);
-    if (!["http:", "https:"].includes(url.protocol)) {
-      return false;
-    }
-    const hostname = url.hostname;
-    // Check if hostname is an IP
-    if (ipaddr.isValid(hostname)) {
-      if (isPrivateIP(hostname)) {
-        return false;
-      }
-    } else {
-      // Resolve DNS
-      const addresses = await dns.resolve(hostname);
-      for (const ip of addresses) {
-        if (isPrivateIP(ip)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  } catch {
-    return false;
   }
 };
 
@@ -545,7 +501,7 @@ app.post("/scrape", async (req, res) => {
     let httpDoc = null;
     if (outputMode === "markdown") {
       try {
-        httpDoc = await fetchDocument(url);
+        httpDoc = await fetchDocument(url, { validateUrl });
         // Plain text / JSON / etc. do not need a browser.
         if (isDirectTextDocument(httpDoc)) {
           const direct = documentToMarkdown(httpDoc, { textLimit });
@@ -567,7 +523,7 @@ app.post("/scrape", async (req, res) => {
 
     const httpMarkdownFallback = async () => {
       if (!httpDoc) {
-        httpDoc = await fetchDocument(url);
+        httpDoc = await fetchDocument(url, { validateUrl });
       }
       return documentToMarkdown(httpDoc, { textLimit, toMarkdown });
     };

@@ -59,7 +59,10 @@ export const useSettingsNav = (options: { isAdmin: boolean; isSuperAdmin: boolea
     const groups: SettingsNavGroup[] = [
       {
         label: t("settings_nav_personal"),
-        items: [item(t("me_settings"), "/settings/me")],
+        items: [
+          item(t("me_settings"), "/settings/me"),
+          item(t("integrations_title"), "/settings/integrations"),
+        ],
       },
       {
         label: t("settings_nav_organization"),

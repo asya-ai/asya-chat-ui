@@ -1,7 +1,10 @@
-// Repair Mermaid syntax that model output often gets wrong but GitHub/Mermaid >= 10.5 reject:
-// - flowchart/graph node labels starting with '@' must be quoted — '[@' is lexed as edge-ID syntax.
-// - rectangle labels containing nested '[' must be quoted.
-// - sequenceDiagram message labels: ';' is a statement separator — replace with ',' in message text.
+// Repair Mermaid syntax that model output often gets wrong:
+// - flowchart/graph labels starting with '@' must be quoted — '[@' is edge-ID syntax.
+// - rectangle labels with nested '[' must be quoted.
+// - bare '&' in labels → '#amp;' (Mermaid HTML-label entity form).
+// - curly/smart quotes → ASCII " so quoted labels actually parse.
+// - unquoted labels containing , & / ( ) # ; " get quoted.
+// - sequenceDiagram message labels: ';' is a statement separator → ','.
 // Scope: chart body only (no ```mermaid fences).
 
 const MSG =
@@ -10,6 +13,14 @@ const LEADING_AT_SQUARE = /\[(@[^\]"]*)\]/g
 const LEADING_AT_DIAMOND = /\{(@[^}"]*)\}/g
 const LEADING_AT_ROUND = /\((@[^)"]*)\)/g
 const SHAPE_SECOND_CHARS = new Set(["[", "(", "/", "\\"])
+const NEEDS_QUOTE = /[,&/#;()"']/
+
+const normalizeQuotes = (text: string): string =>
+  text.replace(/[\u201C\u201D\u00AB\u00BB\u201E]/g, '"').replace(/[\u2018\u2019]/g, "'")
+
+/** Replace bare & with Mermaid's #amp; entity; leave existing entities alone. */
+const escapeAmps = (text: string): string =>
+  text.replace(/&(?!(?:amp|lt|gt|quot|apos|#(?:\d+|x[\da-f]+)|#[a-z]+);)/gi, "#amp;")
 
 const quoteBracketedLabels = (line: string): string => {
   let out = ""
@@ -42,14 +53,38 @@ const quoteBracketedLabels = (line: string): string => {
         if (depth === 0) break
       }
     }
+    if (depth !== 0) {
+      out += ch
+      i += 1
+      continue
+    }
     const inner = line.slice(i + 1, j)
-    if (depth === 0 && /[[\]]/.test(inner) && !inner.includes('"')) {
-      out += `["${inner}"]`
+    if ((/[[\]]/.test(inner) || NEEDS_QUOTE.test(inner)) && !inner.includes('"')) {
+      out += `["${escapeAmps(inner)}"]`
       i = j + 1
     } else {
       out += ch
       i += 1
     }
+  }
+  return out
+}
+
+/** Escape & inside already-quoted "..." label segments. */
+const escapeAmpsInQuotes = (line: string): string => {
+  let out = ""
+  let i = 0
+  while (i < line.length) {
+    if (line[i] !== '"') {
+      out += line[i]
+      i += 1
+      continue
+    }
+    let j = i + 1
+    while (j < line.length && line[j] !== '"') j += 1
+    const inner = line.slice(i + 1, j)
+    out += `"${escapeAmps(inner)}"`
+    i = j < line.length ? j + 1 : j
   }
   return out
 }
@@ -61,19 +96,20 @@ const quoteLeadingAtLabels = (line: string): string =>
     .replace(LEADING_AT_ROUND, '("$1")')
 
 const rewriteFlowLine = (line: string): string =>
-  quoteLeadingAtLabels(quoteBracketedLabels(line))
+  escapeAmpsInQuotes(quoteLeadingAtLabels(quoteBracketedLabels(line)))
 
 const rewriteSequenceLine = (line: string): string => {
   const match = MSG.exec(line)
-  if (!match) return line
+  if (!match) return escapeAmps(line)
   const head = match[1] ?? ""
   const rest = match[2] ?? ""
-  return head + rest.replace(/;/g, ",")
+  return head + escapeAmps(rest.replace(/;/g, ","))
 }
 
 /** Best-effort repairs for common invalid Mermaid emitted by models. Idempotent on valid charts. */
 export const sanitizeMermaidChart = (body: string): string => {
-  const lines = body.split(/\r?\n/)
+  const normalized = normalizeQuotes(body)
+  const lines = normalized.split(/\r?\n/)
   const first =
     lines.find((line) => line.trim() !== "" && !line.trim().startsWith("%%"))?.trim() ?? ""
   const isFlow = /^(flowchart|graph)\b/i.test(first)
@@ -84,7 +120,7 @@ export const sanitizeMermaidChart = (body: string): string => {
     .map((line) => {
       if (isFlow) return rewriteFlowLine(line)
       if (isSequence) return rewriteSequenceLine(line)
-      return line
+      return escapeAmps(line)
     })
     .join(eol)
 }

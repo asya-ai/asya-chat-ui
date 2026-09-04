@@ -46,6 +46,16 @@ def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None)
     mcp_summary = mcp_action_summary(name, args)
     if mcp_summary:
         return mcp_summary
+    if name == "mcp_data_list":
+        return "Listing stored MCP data"
+    if name == "mcp_data_get":
+        artifact = str(args.get("artifact_id") or "").strip()
+        path = str(args.get("path") or "").strip()
+        if artifact and path:
+            return f"Reading MCP data {artifact}: {path[:80]}"
+        if artifact:
+            return f"Reading MCP data {artifact}"
+        return "Reading stored MCP data"
     if name == "web_search":
         queries = _ensure_list(args.get("queries")) or _ensure_list(args.get("query"))
         query = next(

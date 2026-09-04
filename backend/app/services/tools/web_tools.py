@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import ipaddress
 import logging
 import base64
 import mimetypes
 import os
-import socket
 from urllib.parse import urlparse
 from urllib.parse import unquote
 from dataclasses import dataclass
@@ -17,6 +15,7 @@ from ddgs import DDGS
 from ddgs import http_client as ddgs_http_client
 
 from app.core.config import settings
+from app.core.url_safety import is_blocked_hostname
 from app.services.tool_usage import merge_tool_usage_fields, perplexity_usage_fields
 from app.services.tools.registry import ToolResult
 
@@ -237,27 +236,6 @@ async def web_search(context: WebToolContext, *, query: str | None = None, queri
     return ToolResult(name="web_search", output=output)
 
 
-def _is_private_hostname(hostname: str) -> bool:
-    if hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-        return True
-    if hostname.endswith((".local", ".internal")):
-        return True
-    try:
-        ip = ipaddress.ip_address(hostname)
-        return not ip.is_global
-    except ValueError:
-        pass
-    try:
-        infos = socket.getaddrinfo(hostname, None)
-    except Exception:
-        return True
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            return True
-    return False
-
-
 def _sanitize_filename(name: str) -> str:
     base = os.path.basename(name).strip()
     cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in base).strip("._")
@@ -362,16 +340,19 @@ async def web_scrape(
             return {"url": item, "error": "Invalid URL scheme"}
         parsed = urlparse(item)
         hostname = parsed.hostname
-        if not hostname or _is_private_hostname(hostname):
+        if not hostname or is_blocked_hostname(hostname):
             return {"url": item, "error": "Blocked host"}
         try:
             if output_mode == "answer":
                 markdown_data, markdown_error = await _call_scraper(item, "markdown")
                 if markdown_error or not markdown_data:
                     return {"url": item, "error": markdown_error or "Failed to scrape markdown"}
+                final_url = str(markdown_data.get("finalUrl") or item)
+                if is_blocked_hostname(urlparse(final_url).hostname):
+                    return {"url": item, "error": "Blocked redirect host"}
                 screenshot_data, screenshot_error = await _call_scraper(item, "screenshot")
                 base_output = {
-                    "url": markdown_data.get("finalUrl") or item,
+                    "url": final_url,
                     "title": markdown_data.get("title"),
                     "output": "answer",
                     "question": question_text,
@@ -418,8 +399,12 @@ async def web_scrape(
             if error or not data:
                 return {"url": item, "error": error or "Scrape failed"}
 
+            final_url = str(data.get("finalUrl") or item)
+            if is_blocked_hostname(urlparse(final_url).hostname):
+                return {"url": item, "error": "Blocked redirect host"}
+
             base_output = {
-                "url": data.get("finalUrl") or item,
+                "url": final_url,
                 "title": data.get("title"),
             }
             if output_mode == "screenshot":
@@ -514,7 +499,7 @@ async def download_attachments(
             return {"url": item, "error": "Invalid URL scheme"}
         parsed = urlparse(item)
         hostname = parsed.hostname
-        if not hostname or _is_private_hostname(hostname):
+        if not hostname or is_blocked_hostname(hostname):
             return {"url": item, "error": "Blocked host"}
         try:
             async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
@@ -522,7 +507,7 @@ async def download_attachments(
             if response.status_code >= 400:
                 return {"url": item, "error": f"Download failed ({response.status_code})"}
             final_hostname = urlparse(str(response.url)).hostname
-            if final_hostname and _is_private_hostname(final_hostname):
+            if is_blocked_hostname(final_hostname):
                 return {"url": item, "error": "Blocked redirect host"}
             content_type = (response.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].strip()
             if content_type == "text/html":

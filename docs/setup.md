@@ -30,9 +30,8 @@ Database variable note:
 
 MCP data sources (optional):
 
-- Compose mounts `./config` into backend/worker as `/config`.
-- Default catalog: `config/mcp_servers.yaml` (Latvia open data + statistics MCP servers).
-- See `docs/configuration.md` → **MCP Servers** to add more (including authenticated) endpoints.
+- Configure in the app under **Settings → Integrations** (instance, organisation, and personal servers).
+- See `docs/configuration.md` → **MCP Servers** for runtime tuning and tool naming.
 
 ## 2) Start Local Development
 

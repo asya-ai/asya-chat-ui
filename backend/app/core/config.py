@@ -143,11 +143,23 @@ class Settings(BaseSettings):
     mcp_cache_ttl_seconds: int = Field(
         default=300, validation_alias="MCP_CACHE_TTL_SECONDS"
     )
+    mcp_connect_timeout_seconds: int = Field(
+        default=15, validation_alias="MCP_CONNECT_TIMEOUT_SECONDS"
+    )
     mcp_call_timeout_seconds: int = Field(
-        default=300, validation_alias="MCP_CALL_TIMEOUT_SECONDS"
+        default=60, validation_alias="MCP_CALL_TIMEOUT_SECONDS"
     )
     mcp_max_result_chars: int = Field(
         default=50000, validation_alias="MCP_MAX_RESULT_CHARS"
+    )
+    mcp_spill_threshold_chars: int = Field(
+        default=8000, validation_alias="MCP_SPILL_THRESHOLD_CHARS"
+    )
+    mcp_spill_sample_chars: int = Field(
+        default=800, validation_alias="MCP_SPILL_SAMPLE_CHARS"
+    )
+    mcp_spill_get_max_chars: int = Field(
+        default=12000, validation_alias="MCP_SPILL_GET_MAX_CHARS"
     )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

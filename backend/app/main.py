@@ -38,7 +38,6 @@ for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 async def lifespan(_app: FastAPI):
     from app.db.session import SessionLocal
     from app.services.instance_providers import migrate_env_providers
-    from app.services.mcp import refresh_mcp_cache
 
     try:
         with SessionLocal() as session:
@@ -59,10 +58,6 @@ async def lifespan(_app: FastAPI):
             "Failed to migrate instance provider credentials from env"
         )
 
-    try:
-        await refresh_mcp_cache(force=True)
-    except Exception:
-        logging.getLogger(__name__).exception("Failed to warm MCP tool cache")
     yield
 
 

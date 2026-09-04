@@ -47,10 +47,14 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
   - `AGENT_EMBEDDING_MODEL` (default: `BAAI/bge-m3`; Docker build arg + runtime env must match — ONNX weights are downloaded at image build)
   - `AGENT_EMBEDDING_BATCH_SIZE` (default: 16)
   - Compose-injected runtime vars (shown in System diagnosis): `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `DOCKER_HOST`, `EXEC_HOST_FILES_DIR`, `HF_HOME`
-- MCP data sources (host-mounted catalog at `/config/mcp_servers.yaml`):
+- MCP data sources (configured in **Settings → Integrations**):
   - `MCP_CACHE_TTL_SECONDS` (default: 300)
-  - `MCP_CALL_TIMEOUT_SECONDS` (default: 300)
-  - `MCP_MAX_RESULT_CHARS` (default: 50000)
+  - `MCP_CONNECT_TIMEOUT_SECONDS` (default: 15)
+  - `MCP_CALL_TIMEOUT_SECONDS` (default: 60)
+  - `MCP_MAX_RESULT_CHARS` (default: 50000) — soft per-string cap / fallback when spill unavailable
+  - `MCP_SPILL_THRESHOLD_CHARS` (default: 8000) — larger MCP results are written to `chats/{chat_id}/mcp/*.json` and the model gets shape/sample + `artifact_id`
+  - `MCP_SPILL_SAMPLE_CHARS` (default: 800) — sample size in spill stubs
+  - `MCP_SPILL_GET_MAX_CHARS` (default: 12000) — max payload returned by `mcp_data_get`
 - Public URL:
   - `PUBLIC_API_BASE_URL` (used for links/externally visible API references)
 
@@ -107,39 +111,21 @@ Model IDs are configured in the Models settings UI, not via env vars.
 
 ## MCP Servers (model data sources)
 
-Catalog path is fixed: `/config/mcp_servers.yaml` (compose mounts `./config` → `/config:ro` on **backend** and **worker**). Edit [`config/mcp_servers.yaml`](../config/mcp_servers.yaml) on the host; processes rediscover tools on cache TTL (or restart).
+MCP servers are configured in the UI at **Settings → Integrations** (super-admin instance servers, org servers/bindings, user personal servers and connections). There is no YAML catalog.
 
-Defaults ship Latvia open data (no auth):
+Runtime tuning:
 
-- `data-lv` → `https://gateway.pipeworx.io/data-lv/mcp`
-- `stat-lv` → `https://gateway.pipeworx.io/stat-lv/mcp`
+- `MCP_CACHE_TTL_SECONDS` (default: 300) — discovery cache per server/auth fingerprint
+- `MCP_CONNECT_TIMEOUT_SECONDS` (default: 15) — connect + capability discovery
+- `MCP_CALL_TIMEOUT_SECONDS` (default: 60) — tool/resource/prompt calls
+- `MCP_MAX_RESULT_CHARS` (default: 50000) — soft string truncate / spill fallback
+- `MCP_SPILL_THRESHOLD_CHARS` (default: 8000) — spill large results to disk
+- `MCP_SPILL_SAMPLE_CHARS` (default: 800)
+- `MCP_SPILL_GET_MAX_CHARS` (default: 12000)
 
-### Catalog schema
+Auth modes: none, shared bearer/API token, or user-provided (bearer or API token per user).
 
-```yaml
-servers:
-  - id: my-server                 # required; no '__' in id
-    name: Display Name
-    enabled: true
-    transport: http               # http | sse | stdio
-    url: https://example.com/mcp  # required for http/sse
-    # command: npx                # required for stdio
-    # args: ["-y", "some-mcp"]
-    # env:                        # stdio child env; supports ${VAR}
-    #   FOO: bar
-    description: Optional blurb shown to the model.
-    headers:                      # optional auth for http/sse
-      Authorization: "Bearer ${SOME_API_TOKEN}"
-    include:
-      tools: true
-      resources: true
-      prompts: true
-    tool_allowlist: null          # or ["tool_a", "tool_b"]
-    tool_blocklist: null
-```
-
-- `${VAR}` in `headers` / stdio `env` expands from the process environment. If a var is missing, that server entry is skipped (logged).
-- Missing catalog file → no MCP tools (safe default).
+Large tool/resource/prompt responses are written under `chats/{chat_id}/mcp/` and staged into code execution at `/workspace/data/`. The model receives a stub (`artifact_id`, shape, sample, path) and can use `mcp_data_list` / `mcp_data_get` for slices.
 
 ### How capabilities map to model tools
 
@@ -148,19 +134,11 @@ servers:
 | Tools | `{server_id}__{tool_name}` |
 | Resources | `{server_id}__list_resources`, `{server_id}__read_resource` |
 | Prompts | `{server_id}__list_prompts`, `{server_id}__get_prompt` |
-
-Resource/prompt meta-tools are registered only when the server advertises or returns those capabilities.
+| Spilled results | `mcp_data_list`, `mcp_data_get` (+ `/workspace/data/` in `code_execution`) |
 
 ### System diagnosis
 
-Super-admin **System diagnosis** includes an **MCP servers** panel that:
-
-- marks the catalog **invalid** if `/config/mcp_servers.yaml` is unreadable or has broken YAML / structure
-- probes each enabled server (connect + list tools/resources/prompts) with latency and capability counts
-
-### Auth notes
-
-Static headers / bearer tokens via env expansion are supported. Do not commit secrets into the YAML; put tokens in `.env` and reference `${TOKEN_NAME}`. OAuth browser flows are not implemented.
+Super-admin **System diagnosis** probes enabled **instance** MCP servers. User-provided servers show as configured and require a user connection before tools appear in chat.
 
 ## Network and Port Configuration
 

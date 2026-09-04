@@ -202,6 +202,16 @@ const settingsProvidersRoute = createRoute({
   ),
 })
 
+const settingsIntegrationsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/settings/integrations",
+  component: lazyRouteComponent(() =>
+    import("@/pages/IntegrationsPage").then((mod) => ({
+      default: mod.IntegrationsPage,
+    }))
+  ),
+})
+
 const settingsMeRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/settings/me",
@@ -241,6 +251,7 @@ export const routeTree = rootRoute.addChildren([
     settingsTeamsRoute,
     settingsModelsRoute,
     settingsProvidersRoute,
+    settingsIntegrationsRoute,
     settingsDiagnosisRoute,
     settingsMeRoute,
   ]),

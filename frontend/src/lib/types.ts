@@ -724,3 +724,121 @@ export type MyTeam = {
   id: string
   name: string
 }
+
+export type McpSettings = {
+  allow_org_servers: boolean
+  allow_user_servers: boolean
+}
+
+export type McpOrgSettings = {
+  allow_user_servers: boolean
+}
+
+export type McpAuthType = "none" | "bearer" | "api_token" | "user_provided"
+export type McpUserAuthMethod = "bearer" | "api_token"
+export type McpTransport = "http" | "sse" | "stdio"
+export type McpBindingMode = "inherit" | "override" | "disabled"
+
+export type McpServer = {
+  id: string
+  slug: string
+  name: string
+  description?: string | null
+  scope: string
+  org_id?: string | null
+  user_id?: string | null
+  transport: McpTransport
+  url?: string | null
+  command?: string | null
+  args: string[]
+  stdio_env: Record<string, string>
+  include_tools: boolean
+  include_resources: boolean
+  include_prompts: boolean
+  tool_allowlist?: string[] | null
+  tool_blocklist?: string[] | null
+  auth_type: McpAuthType
+  token_set: boolean
+  user_auth_method?: McpUserAuthMethod | null
+  user_instructions?: string | null
+  api_token_header_name?: string | null
+  api_token_header_format?: string | null
+  is_enabled: boolean
+  connection_status?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type McpServerWrite = {
+  slug: string
+  name: string
+  description?: string | null
+  transport: McpTransport
+  url?: string | null
+  command?: string | null
+  args?: string[]
+  stdio_env?: Record<string, string>
+  include_tools?: boolean
+  include_resources?: boolean
+  include_prompts?: boolean
+  tool_allowlist?: string[] | null
+  tool_blocklist?: string[] | null
+  auth_type?: McpAuthType
+  token?: string | null
+  header_name?: string | null
+  header_format?: string | null
+  user_auth_method?: McpUserAuthMethod | null
+  user_instructions?: string | null
+  is_enabled?: boolean
+}
+
+export type McpBinding = {
+  id: string
+  org_id: string
+  instance_server_id: string
+  instance_server_slug: string
+  instance_server_name: string
+  mode: McpBindingMode
+  auth_type?: McpAuthType | null
+  token_set: boolean
+  user_auth_method?: string | null
+}
+
+export type McpBindingWrite = {
+  mode: McpBindingMode
+  auth_type?: McpAuthType | null
+  token?: string | null
+  header_name?: string | null
+  header_format?: string | null
+  user_auth_method?: McpUserAuthMethod | null
+  user_instructions?: string | null
+}
+
+export type McpConnection = {
+  id: string
+  server_id: string
+  server_slug: string
+  server_name: string
+  status: string
+  user_auth_method?: string | null
+  user_instructions?: string | null
+}
+
+export type McpOverview = {
+  policy: {
+    allow_org_servers: boolean
+    allow_user_servers: boolean
+    org_allow_user_servers?: boolean | null
+  }
+  user_provided_servers: McpServer[]
+  personal_servers: McpServer[]
+}
+
+export type McpTestResult = {
+  status: string
+  detail?: string | null
+  latency_ms?: number | null
+  tools?: number | null
+  resources?: number | null
+  prompts?: number | null
+}

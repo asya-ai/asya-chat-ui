@@ -40,6 +40,15 @@ import type {
   Prompt,
   PromptSharedUser,
   PromptVisibility,
+  McpSettings,
+  McpOrgSettings,
+  McpServer,
+  McpServerWrite,
+  McpBinding,
+  McpBindingWrite,
+  McpConnection,
+  McpOverview,
+  McpTestResult,
   Team,
   TeamMember,
   TeamModel,
@@ -550,6 +559,91 @@ export const instanceProviderApi = {
     apiFetch<void>(`/admin/instance-providers/${encodeURIComponent(provider)}`, {
       method: "DELETE",
     }),
+}
+
+export const mcpApi = {
+  instanceSettings: () => apiFetch<McpSettings>("/admin/mcp/settings"),
+  updateInstanceSettings: (payload: Partial<McpSettings>) =>
+    apiFetch<McpSettings>("/admin/mcp/settings", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  listInstanceServers: () => apiFetch<McpServer[]>("/admin/mcp/servers"),
+  createInstanceServer: (payload: McpServerWrite) =>
+    apiFetch<McpServer>("/admin/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateInstanceServer: (id: string, payload: Partial<McpServerWrite>) =>
+    apiFetch<McpServer>(`/admin/mcp/servers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteInstanceServer: (id: string) =>
+    apiFetch<void>(`/admin/mcp/servers/${id}`, { method: "DELETE" }),
+  testInstanceServer: (id: string) =>
+    apiFetch<McpTestResult>(`/admin/mcp/servers/${id}/test`, { method: "POST" }),
+  orgSettings: (orgId: string) => apiFetch<McpOrgSettings>(`/orgs/${orgId}/mcp/settings`),
+  updateOrgSettings: (orgId: string, payload: Partial<McpOrgSettings>) =>
+    apiFetch<McpOrgSettings>(`/orgs/${orgId}/mcp/settings`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  listOrgServers: (orgId: string) => apiFetch<McpServer[]>(`/orgs/${orgId}/mcp/servers`),
+  createOrgServer: (orgId: string, payload: McpServerWrite) =>
+    apiFetch<McpServer>(`/orgs/${orgId}/mcp/servers`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateOrgServer: (orgId: string, id: string, payload: Partial<McpServerWrite>) =>
+    apiFetch<McpServer>(`/orgs/${orgId}/mcp/servers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteOrgServer: (orgId: string, id: string) =>
+    apiFetch<void>(`/orgs/${orgId}/mcp/servers/${id}`, { method: "DELETE" }),
+  testOrgServer: (orgId: string, id: string) =>
+    apiFetch<McpTestResult>(`/orgs/${orgId}/mcp/servers/${id}/test`, { method: "POST" }),
+  listBindings: (orgId: string) => apiFetch<McpBinding[]>(`/orgs/${orgId}/mcp/bindings`),
+  upsertBinding: (orgId: string, instanceServerId: string, payload: McpBindingWrite) =>
+    apiFetch<McpBinding>(`/orgs/${orgId}/mcp/bindings/${instanceServerId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  overview: (orgId?: string) => {
+    const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
+    return apiFetch<McpOverview>(`/users/me/mcp/overview${params}`)
+  },
+  listPersonalServers: () => apiFetch<McpServer[]>("/users/me/mcp/servers"),
+  createPersonalServer: (payload: McpServerWrite, orgId?: string) => {
+    const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
+    return apiFetch<McpServer>(`/users/me/mcp/servers${params}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  },
+  updatePersonalServer: (id: string, payload: Partial<McpServerWrite>) =>
+    apiFetch<McpServer>(`/users/me/mcp/servers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deletePersonalServer: (id: string) =>
+    apiFetch<void>(`/users/me/mcp/servers/${id}`, { method: "DELETE" }),
+  testPersonalServer: (id: string) =>
+    apiFetch<McpTestResult>(`/users/me/mcp/servers/${id}/test`, { method: "POST" }),
+  upsertConnection: (serverId: string, payload: { token?: string; header_name?: string; header_format?: string }) =>
+    apiFetch<McpConnection>(`/users/me/mcp/connections/${serverId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteConnection: (serverId: string) =>
+    apiFetch<void>(`/users/me/mcp/connections/${serverId}`, { method: "DELETE" }),
+  testConnection: (serverId: string, orgId?: string) => {
+    const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
+    return apiFetch<McpTestResult>(`/users/me/mcp/connections/${serverId}/test${params}`, {
+      method: "POST",
+    })
+  },
 }
 
 export const modelApi = {
