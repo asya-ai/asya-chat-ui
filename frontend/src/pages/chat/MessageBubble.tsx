@@ -1498,6 +1498,16 @@ const MessageBubbleComponent = ({
   )
   const attachmentSrc = (attachment: DownloadableAttachment) => attachmentDownloadSrc(attachment)
   const attachmentHref = (attachment: DownloadableAttachment) => attachmentDownloadSrc(attachment)
+  // User uploads live on msg.attachments; assistant "generated files" strip is separate.
+  const userAttachments = useMemo(
+    () =>
+      isUser
+        ? (msg.attachments ?? []).filter((attachment) =>
+            Boolean(attachment.file_name?.trim())
+          )
+        : [],
+    [isUser, msg.attachments]
+  )
   const generatedFiles = useMemo(
     () => (!isUser ? collectDownloadableAttachments(msg) : []),
     [isUser, msg]
@@ -1951,6 +1961,60 @@ const MessageBubbleComponent = ({
                   ) : null}
                 </>
               )}
+              {userAttachments.length > 0 ? (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {userAttachments.map((attachment, index) => {
+                    const isImage = (attachment.content_type ?? "").startsWith("image/")
+                    const href = attachmentHref(attachment)
+                    if (isImage) {
+                      return (
+                        <Button
+                          key={`${attachment.file_name}-${index}`}
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                          onClick={() =>
+                            onPreviewAttachment({
+                              file_name: attachment.file_name,
+                              content_type: attachment.content_type,
+                              data_base64: attachment.data_base64,
+                              content_url: attachment.content_url,
+                            })
+                          }
+                        >
+                          <img
+                            src={attachmentSrc(attachment)}
+                            alt={attachment.file_name}
+                            className="bg-muted/50 rounded-md w-auto max-w-32 h-auto max-h-32 object-contain"
+                          />
+                        </Button>
+                      )
+                    }
+                    if (href) {
+                      return (
+                        <a
+                          key={`${attachment.file_name}-${index}`}
+                          className="inline-flex items-center gap-1.5 hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                          href={href}
+                          download={attachment.file_name}
+                        >
+                          <Download aria-hidden="true" className="opacity-70 size-3.5 shrink-0" />
+                          {attachment.file_name}
+                        </a>
+                      )
+                    }
+                    return (
+                      <div
+                        key={`${attachment.file_name}-${index}`}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 border rounded-md text-xs"
+                      >
+                        {attachment.file_name}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
               {generatedFiles.length > 0 ? (
                 <div className="mt-4 pt-3 border-t border-border/60">
                   <p className="mb-2 font-medium text-foreground/80 text-xs">

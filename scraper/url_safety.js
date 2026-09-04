@@ -35,7 +35,10 @@ export const isBlockedHostnameLiteral = (hostname) => {
 /** True for any non-global address (RFC1918, loopback, link-local, CGNAT, ULA, …). */
 export const isPrivateIP = (ip) => {
   try {
-    const parsed = ipaddr.parse(String(ip));
+    let parsed = ipaddr.parse(String(ip));
+    if (parsed.kind() === "ipv6" && parsed.isIPv4MappedAddress?.()) {
+      parsed = parsed.toIPv4Address();
+    }
     // Only global unicast is allowed; everything else is treated as private/special-use.
     return parsed.range() !== "unicast";
   } catch {
@@ -44,18 +47,14 @@ export const isPrivateIP = (ip) => {
 };
 
 const resolveAddresses = async (hostname) => {
-  const addresses = [];
+  // Prefer system getaddrinfo (dns.lookup) so Docker embedded DNS / hosts files
+  // work the same way the HTTP client will when fetching.
   try {
-    addresses.push(...(await dns.resolve4(hostname)));
+    const result = await dns.lookup(hostname, { all: true, verbatim: true });
+    return result.map((entry) => entry.address).filter(Boolean);
   } catch {
-    // ignore ENODATA / ENOTFOUND for A
+    return [];
   }
-  try {
-    addresses.push(...(await dns.resolve6(hostname)));
-  } catch {
-    // ignore ENODATA / ENOTFOUND for AAAA
-  }
-  return addresses;
 };
 
 export const validateUrl = async (urlString) => {

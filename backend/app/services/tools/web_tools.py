@@ -15,7 +15,7 @@ from ddgs import DDGS
 from ddgs import http_client as ddgs_http_client
 
 from app.core.config import settings
-from app.core.url_safety import is_blocked_hostname
+from app.core.url_safety import is_blocked_hostname, is_literal_blocked_hostname
 from app.services.tool_usage import merge_tool_usage_fields, perplexity_usage_fields
 from app.services.tools.registry import ToolResult
 
@@ -310,10 +310,19 @@ async def web_scrape(
     async def _call_scraper(item: str, mode: str) -> tuple[dict[str, Any] | None, str | None]:
         payload = {"url": item, "output": mode}
         # Scraper may settle SPAs for ~20s+; keep client timeout above that.
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{settings.scraper_url}/scrape", json=payload
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{settings.scraper_url}/scrape", json=payload
+                )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "web_scrape upstream transport failed url=%s mode=%s err=%s",
+                item,
+                mode,
+                exc,
             )
+            return None, f"Scraper unreachable: {exc}"
         if response.status_code >= 400:
             detail = ""
             try:
@@ -340,7 +349,9 @@ async def web_scrape(
             return {"url": item, "error": "Invalid URL scheme"}
         parsed = urlparse(item)
         hostname = parsed.hostname
-        if not hostname or is_blocked_hostname(hostname):
+        # Literal SSRF checks only — do not DNS-resolve here. The scraper
+        # validates resolved IPs; backend DNS often differs inside Docker.
+        if not hostname or is_literal_blocked_hostname(hostname):
             return {"url": item, "error": "Blocked host"}
         try:
             if output_mode == "answer":
@@ -348,7 +359,7 @@ async def web_scrape(
                 if markdown_error or not markdown_data:
                     return {"url": item, "error": markdown_error or "Failed to scrape markdown"}
                 final_url = str(markdown_data.get("finalUrl") or item)
-                if is_blocked_hostname(urlparse(final_url).hostname):
+                if is_literal_blocked_hostname(urlparse(final_url).hostname):
                     return {"url": item, "error": "Blocked redirect host"}
                 screenshot_data, screenshot_error = await _call_scraper(item, "screenshot")
                 base_output = {
@@ -400,7 +411,7 @@ async def web_scrape(
                 return {"url": item, "error": error or "Scrape failed"}
 
             final_url = str(data.get("finalUrl") or item)
-            if is_blocked_hostname(urlparse(final_url).hostname):
+            if is_literal_blocked_hostname(urlparse(final_url).hostname):
                 return {"url": item, "error": "Blocked redirect host"}
 
             base_output = {

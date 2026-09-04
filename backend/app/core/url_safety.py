@@ -31,8 +31,13 @@ def normalize_hostname(hostname: str | None) -> str:
     return hostname.strip().rstrip(".").lower()
 
 
-def is_blocked_hostname(hostname: str | None) -> bool:
-    """True when a hostname must not be fetched by tools (SSRF)."""
+def is_literal_blocked_hostname(hostname: str | None) -> bool:
+    """
+    Block private/special hosts without DNS.
+
+    Used by web_scrape so the backend does not depend on resolving public
+    sites (scraper performs DNS + non-global IP checks at fetch time).
+    """
     host = normalize_hostname(hostname)
     if not host:
         return True
@@ -47,10 +52,18 @@ def is_blocked_hostname(hostname: str | None) -> bool:
         ip = ipaddress.ip_address(host)
         return not ip.is_global
     except ValueError:
-        pass
+        return False
+
+
+def resolves_to_non_global(hostname: str | None) -> bool:
+    """True when DNS answers include any non-global address (or DNS fails)."""
+    host = normalize_hostname(hostname)
+    if not host:
+        return True
     try:
         infos = socket.getaddrinfo(host, None)
-    except Exception:
+    except OSError:
+        # Fail closed for direct backend fetches (downloads / agent URL import).
         return True
     if not infos:
         return True
@@ -64,7 +77,23 @@ def is_blocked_hostname(hostname: str | None) -> bool:
     return False
 
 
-def is_blocked_http_url(url: str) -> bool:
+def is_blocked_hostname(hostname: str | None, *, resolve_dns: bool = True) -> bool:
+    """
+    True when a hostname must not be fetched by tools (SSRF).
+
+    resolve_dns=False: literal / suffix / IP-literal checks only (for scrape
+    gating — scraper validates resolved IPs).
+    resolve_dns=True: also reject hosts whose DNS answers are non-global
+    (for backend-side httpx fetches).
+    """
+    if is_literal_blocked_hostname(hostname):
+        return True
+    if not resolve_dns:
+        return False
+    return resolves_to_non_global(hostname)
+
+
+def is_blocked_http_url(url: str, *, resolve_dns: bool = True) -> bool:
     """True when a URL is unsafe to fetch (scheme or host)."""
     try:
         parsed = urlparse(url)
@@ -72,4 +101,4 @@ def is_blocked_http_url(url: str) -> bool:
         return True
     if parsed.scheme not in {"http", "https"}:
         return True
-    return is_blocked_hostname(parsed.hostname)
+    return is_blocked_hostname(parsed.hostname, resolve_dns=resolve_dns)
