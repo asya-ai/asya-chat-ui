@@ -5,7 +5,7 @@ import logging
 import re
 import secrets
 from io import BytesIO
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4
 
@@ -124,6 +124,10 @@ from app.services.tools.cowork_tools import (
     list_documents,
     mime_for_document,
     start_coworking,
+)
+from app.services.marp_export import (
+    export_presentation_via_scraper,
+    prepare_presentation_markdown,
 )
 from app.services.mcp import register_mcp_tools
 from app.services.generation_event_bus import iter_generation_notifications
@@ -1016,11 +1020,14 @@ def _build_tool_registry(
                     "with only ---. Keep each slide sparse (headline + ≤5 short bullets); "
                     "never put large multi-column tables or long footers that overflow the "
                     "slide; split comparisons across slides. "
+                    "To embed a generate_image/edit_image result, use the tool's file_name "
+                    "exactly (e.g. ![bg right:40% cover](generated-….png) or ![](generated-….png)); "
+                    "do not invent other paths. "
                     "After starting, put the first full draft in start_coworking's content "
                     "(or one cowork_write if the doc was empty). For every later change, "
                     "prefer cowork_str_replace / cowork_append — not full-file cowork_write. "
                     "Re-read with cowork_read when needed. "
-                    "Do not invent URLs or markdown links to the file_name — it is not a "
+                    "Do not invent URLs or markdown links to the document file_name — it is not a "
                     "web path; the panel is the only UI for viewing/downloading."
                 ),
                 parameters={
@@ -2880,6 +2887,10 @@ class CoworkDocumentPatchRequest(BaseModel):
     base_version: int
 
 
+class CoworkPresentationExportRequest(BaseModel):
+    format: Literal["pdf", "pptx"] = "pdf"
+
+
 class CoworkDocumentConflictRead(BaseModel):
     detail: str = "version_conflict"
     document: CoworkDocumentRead
@@ -4235,6 +4246,61 @@ def download_cowork_document(
             "Cache-Control": "private, no-store",
             "Content-Disposition": _content_disposition_header(
                 "attachment", doc.file_name
+            ),
+        },
+    )
+
+
+@router.post("/{chat_id}/cowork/{doc_id}/export")
+async def export_cowork_presentation(
+    chat_id: str,
+    doc_id: str,
+    payload: CoworkPresentationExportRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Export a presentation document via Marp CLI on the scraper service."""
+    chat = _require_chat_for_cowork(session, chat_id, current_user)
+    try:
+        document_id = UUID(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document id"
+        ) from exc
+    doc = get_document(session, chat.id, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    format_value = (doc.format.value if hasattr(doc.format, "value") else str(doc.format or "")).lower()
+    if format_value != "presentation":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only presentation documents can be exported with Marp",
+        )
+
+    markdown = prepare_presentation_markdown(
+        session, chat_id=chat.id, markdown=doc.content or ""
+    )
+    try:
+        file_bytes, content_type = await export_presentation_via_scraper(
+            markdown=markdown,
+            format=payload.format,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    stem = (doc.file_name or doc.title or "presentation").rsplit(".", 1)[0] or "presentation"
+    download_name = f"{stem}.{payload.format}"
+    return Response(
+        content=file_bytes,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": _content_disposition_header(
+                "attachment", download_name
             ),
         },
     )

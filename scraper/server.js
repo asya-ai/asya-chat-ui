@@ -7,16 +7,16 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
-  BROWSER_USER_AGENT,
   CHROME_LAUNCH_ARGS,
   documentToMarkdown,
   fetchDocument,
   isDirectTextDocument,
 } from "./http_fetch.js";
 import { validateUrl } from "./url_safety.js";
+import { exportMarpPresentation } from "./marp_export.js";
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: process.env.SCRAPER_JSON_LIMIT || "15mb" }));
 
 const port = process.env.SCRAPER_PORT || 3001;
 const textLimit = Number(process.env.SCRAPE_TEXT_LIMIT || 20000);
@@ -276,9 +276,15 @@ const DEFAULT_VIEWPORT = { width: 1366, height: 1800 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const preparePage = async (page) => {
+const preparePage = async (page, browserInstance) => {
   await page.setViewport(DEFAULT_VIEWPORT);
-  await page.setUserAgent(BROWSER_USER_AGENT);
+  // Match the launched Chrome version/TLS. Spoofing an old fixed Chrome UA
+  // (e.g. Chrome/120) trips SiteGround and similar WAFs with 403.
+  const userAgent = String(await browserInstance.userAgent() || "").replace(
+    /HeadlessChrome/g,
+    "Chrome",
+  );
+  await page.setUserAgent(userAgent);
   await page.setExtraHTTPHeaders({
     "Accept-Language": "en-US,en;q=0.9",
   });
@@ -543,7 +549,7 @@ app.post("/scrape", async (req, res) => {
     try {
       const browserInstance = await getBrowser();
       page = await browserInstance.newPage();
-      await preparePage(page);
+      await preparePage(page, browserInstance);
       await attachPrivateRedirectGuard(page);
 
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -628,6 +634,31 @@ app.post("/scrape", async (req, res) => {
 
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.post("/marp/export", async (req, res) => {
+  const { markdown, format } = req.body || {};
+  try {
+    const result = await exportMarpPresentation({
+      markdown,
+      format: typeof format === "string" ? format.toLowerCase() : "pdf",
+    });
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("X-Marp-Format", result.format);
+    return res.status(200).send(result.buffer);
+  } catch (error) {
+    const message =
+      error && typeof error === "object" && "message" in error
+        ? String(error.message)
+        : String(error);
+    const status =
+      error && typeof error === "object" && "status" in error
+        ? Number(error.status) || 500
+        : 500;
+    console.error("marp export failed", { status, error: message });
+    return res.status(status).json({ error: "Marp export failed", detail: message });
+  }
 });
 
 app.listen(port, "0.0.0.0", () => {

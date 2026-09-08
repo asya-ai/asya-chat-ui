@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { Trash2 } from "lucide-react"
 
 import { orgApi, promptApi } from "@/lib/api"
@@ -73,9 +73,12 @@ export const PromptFormDialog = ({
 }: PromptFormDialogProps) => {
   const { t } = useI18n()
   const savePromptMutation = useSavePrompt(contextAgentId)
-  const nameRef = useRef<HTMLInputElement | null>(null)
-  const descRef = useRef<HTMLInputElement | null>(null)
-  const bodyRef = useRef<HTMLTextAreaElement | null>(null)
+  // Controlled fields — Dialog content mounts after `open` flips true, so the
+  // previous ref+useLayoutEffect hydration often ran with null refs and left
+  // name/description/body blank while location/visibility (React state) worked.
+  const [name, setName] = useState("")
+  const [promptDescription, setPromptDescription] = useState("")
+  const [body, setBody] = useState("")
   const [visibility, setVisibility] = useState<PromptVisibility>("private")
   const [teamIds, setTeamIds] = useState<string[]>([])
   const [selectedUsers, setSelectedUsers] = useState<PromptSharedUser[]>([])
@@ -87,12 +90,12 @@ export const PromptFormDialog = ({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!open) return
     const agentId = initial?.agent_id ?? null
-    if (nameRef.current) nameRef.current.value = initial?.name ?? ""
-    if (descRef.current) descRef.current.value = initial?.description ?? ""
-    if (bodyRef.current) bodyRef.current.value = initial?.body ?? ""
+    setName(initial?.name ?? "")
+    setPromptDescription(initial?.description ?? "")
+    setBody(initial?.body ?? "")
     setVisibility(defaultVisibility(agentId, initial?.visibility))
     setTeamIds(initial?.team_ids ?? [])
     setSelectedUsers(initial?.users ?? [])
@@ -187,8 +190,8 @@ export const PromptFormDialog = ({
   }
 
   const handleSave = async () => {
-    const trimmedName = nameRef.current?.value.trim() ?? ""
-    const trimmedBody = bodyRef.current?.value.trim() ?? ""
+    const trimmedName = name.trim()
+    const trimmedBody = body.trim()
     if (!trimmedName) {
       setError(t("prompt_name_required"))
       return
@@ -215,7 +218,7 @@ export const PromptFormDialog = ({
       setError(null)
       const payload = {
         name: trimmedName,
-        description: descRef.current?.value.trim() || null,
+        description: promptDescription.trim() || null,
         body: trimmedBody,
         visibility,
         team_ids: visibility === "team" ? teamIds : [],
@@ -250,8 +253,8 @@ export const PromptFormDialog = ({
             </label>
             <Input
               id="prompt-name"
-              ref={nameRef}
-              defaultValue=""
+              value={name}
+              onChange={(event) => setName(event.target.value)}
               maxLength={120}
             />
           </div>
@@ -261,8 +264,8 @@ export const PromptFormDialog = ({
             </label>
             <Input
               id="prompt-description"
-              ref={descRef}
-              defaultValue=""
+              value={promptDescription}
+              onChange={(event) => setPromptDescription(event.target.value)}
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -271,8 +274,8 @@ export const PromptFormDialog = ({
             </label>
             <Textarea
               id="prompt-body"
-              ref={bodyRef}
-              defaultValue=""
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
               rows={8}
               className="min-h-32"
             />

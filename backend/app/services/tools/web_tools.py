@@ -4,6 +4,8 @@ import logging
 import base64
 import mimetypes
 import os
+import socket
+import time
 from urllib.parse import urlparse
 from urllib.parse import unquote
 from dataclasses import dataclass
@@ -38,6 +40,48 @@ _SUPPORTED_IMPERSONATE_OS = ("android", "ios", "linux", "macos", "windows")
 # Keep ddgs in sync with primp-supported impersonations to avoid warnings.
 ddgs_http_client.HttpClient._impersonates = _SUPPORTED_IMPERSONATES
 ddgs_http_client.HttpClient._impersonates_os = _SUPPORTED_IMPERSONATE_OS
+
+
+def _resolve_scraper_request_url(path: str = "/scrape") -> tuple[str, dict[str, str], str]:
+    """
+    Build a scraper request URL.
+
+    Resolves the SCRAPER_URL host to IPv4 and connects by IP (Host header kept)
+    so flaky Docker DNS / AAAA paths in Celery workers are less painful.
+    Returns (request_url, headers, host_for_errors).
+    """
+    base = (settings.scraper_url or "").rstrip("/")
+    parsed = urlparse(base if "://" in base else f"http://{base}")
+    host = parsed.hostname or ""
+    scheme = parsed.scheme or "http"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    headers: dict[str, str] = {}
+    if not host:
+        return f"{base}{path}", headers, base
+
+    # Docker DNS can return EAI_AGAIN under load; a few short retries help.
+    last_error: OSError | None = None
+    for attempt in range(3):
+        try:
+            infos = socket.getaddrinfo(
+                host,
+                port,
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+            )
+            if not infos:
+                raise OSError("getaddrinfo returned no IPv4 addresses")
+            ip = infos[0][4][0]
+            netloc = f"{ip}:{port}"
+            headers["Host"] = f"{host}:{port}" if parsed.port else host
+            return f"{scheme}://{netloc}{path}", headers, host
+        except OSError as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+    raise OSError(
+        f"Cannot resolve scraper host {host!r} from SCRAPER_URL={base!r}: {last_error}"
+    )
 
 
 @dataclass
@@ -310,19 +354,31 @@ async def web_scrape(
     async def _call_scraper(item: str, mode: str) -> tuple[dict[str, Any] | None, str | None]:
         payload = {"url": item, "output": mode}
         # Scraper may settle SPAs for ~20s+; keep client timeout above that.
+        scraper_host = urlparse(settings.scraper_url).hostname or settings.scraper_url
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{settings.scraper_url}/scrape", json=payload
-                )
-        except httpx.HTTPError as exc:
+            request_url, headers, scraper_host = _resolve_scraper_request_url("/scrape")
+            # trust_env=False: server HTTP(S)_PROXY must not intercept Docker-internal
+            # scraper calls (proxy DNS cannot resolve compose service names).
+            async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+                response = await client.post(request_url, json=payload, headers=headers)
+        except OSError as exc:
             logger.warning(
-                "web_scrape upstream transport failed url=%s mode=%s err=%s",
+                "web_scrape scraper DNS failed target=%s scraper_host=%s scraper_url=%s err=%s",
                 item,
-                mode,
+                scraper_host,
+                settings.scraper_url,
                 exc,
             )
-            return None, f"Scraper unreachable: {exc}"
+            return None, f"Scraper unreachable ({scraper_host}): {exc}"
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "web_scrape upstream transport failed target=%s scraper_host=%s scraper_url=%s err=%s",
+                item,
+                scraper_host,
+                settings.scraper_url,
+                exc,
+            )
+            return None, f"Scraper unreachable ({scraper_host}): {exc}"
         if response.status_code >= 400:
             detail = ""
             try:

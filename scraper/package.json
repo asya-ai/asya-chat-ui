@@ -2,10 +2,12 @@
   "name": "scraper",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.20.0",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@marp-team/marp-cli": "^4.5.1",
     "@mozilla/readability": "^0.6.0",
     "body-parser": "^2.3.0",
     "express": "^5.2.1",

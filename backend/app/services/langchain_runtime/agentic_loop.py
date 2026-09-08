@@ -248,7 +248,9 @@ async def run_agentic_loop_langchain(
         if delta_sender:
             await delta_sender.send({"delta": text})
 
-    async def _call_model(current_step: int) -> tuple[str, str, list[Any], ChatUsage | None]:
+    async def _call_model(
+        current_step: int,
+    ) -> tuple[str, str, list[Any], ChatUsage | None, str | None]:
         if hasattr(provider, "chat_stream_with_tools"):
             content_parts: list[str] = []
             episode_reasoning = ""
@@ -256,6 +258,7 @@ async def run_agentic_loop_langchain(
             all_reasoning_parts: list[str] = []
             tool_calls: list[Any] = []
             step_usage: ChatUsage | None = None
+            finish_reason: str | None = None
             last_emitted_reasoning_len = 0
 
             def _absorb_reasoning_delta(piece: str) -> None:
@@ -317,6 +320,8 @@ async def run_agentic_loop_langchain(
                     await _emit_reasoning()
                 if chunk.usage:
                     step_usage = chunk.usage
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
             await _emit_reasoning(force=True)
             if episode_reasoning:
                 all_reasoning_parts.append(episode_reasoning)
@@ -325,6 +330,7 @@ async def run_agentic_loop_langchain(
                 "\n\n".join(all_reasoning_parts),
                 tool_calls,
                 step_usage,
+                finish_reason,
             )
 
         response = await provider.chat_with_tools(model_name, messages, tool_specs)
@@ -339,24 +345,117 @@ async def run_agentic_loop_langchain(
                 "id": f"reasoning_{current_step}",
                 "content": reasoning_content,
             })
-        return content, reasoning_content, tool_calls, response.usage
+        return (
+            content,
+            reasoning_content,
+            tool_calls,
+            response.usage,
+            getattr(response, "finish_reason", None),
+        )
 
     def _visible_content(fallback: str) -> str:
         if emitted_text_parts:
             return "".join(emitted_text_parts)
         return fallback
 
+    def _is_length_truncated(finish_reason: str | None) -> bool:
+        reason = str(finish_reason or "").strip().lower()
+        return reason in {
+            "length",
+            "max_tokens",
+            "max_output_tokens",
+            "incomplete",
+        }
+
+    consecutive_empty = 0
+    consecutive_length = 0
     for step in range(max_steps):
         await _emit_activity(f"Step {step + 1}/{max_steps}", "start")
         thinking_label = "Thinking"
         await _emit_activity(thinking_label, "start")
-        content, reasoning_content, tool_calls, step_usage = await _call_model(step)
+        content, reasoning_content, tool_calls, step_usage, finish_reason = await _call_model(
+            step
+        )
         usage = _merge_chat_usage(usage, step_usage)
         if not tool_calls:
+            step_text = (content or "").strip()
+            truncated = _is_length_truncated(finish_reason)
+            logger.info(
+                "Agentic step %s/%s no tool_calls finish_reason=%s response_len=%s",
+                step + 1,
+                max_steps,
+                finish_reason,
+                len(content or ""),
+            )
+
+            # Output was cut mid-answer — keep going instead of returning a stump.
+            if truncated and step_text:
+                consecutive_length += 1
+                consecutive_empty = 0
+                if consecutive_length >= 3:
+                    logger.warning(
+                        "Agentic loop stopping after %s consecutive length truncations",
+                        consecutive_length,
+                    )
+                    await _emit_activity(thinking_label, "end")
+                    await _emit_activity("Answering", "start")
+                    return (
+                        _visible_content(content),
+                        attachments,
+                        _finalize_sources(),
+                        image_usages,
+                        usage,
+                    )
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Continue your previous response from exactly where you "
+                            "left off. Do not repeat earlier text."
+                        ),
+                    }
+                )
+                await _emit_activity(thinking_label, "end")
+                continue
+
+            # Some models (esp. local/vLLM) end a tool round with empty content.
+            # Nudge instead of finishing the task blank.
+            if not step_text:
+                consecutive_empty += 1
+                consecutive_length = 0
+                if consecutive_empty >= 3:
+                    logger.warning(
+                        "Agentic loop aborting after %s consecutive empty responses",
+                        consecutive_empty,
+                    )
+                    await _emit_activity(thinking_label, "end")
+                    await _emit_activity("Answering", "start")
+                    return (
+                        _visible_content(content),
+                        attachments,
+                        _finalize_sources(),
+                        image_usages,
+                        usage,
+                    )
+                logger.info("No tool calls and empty content; forcing final answer")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Please provide the final answer now.",
+                    }
+                )
+                await _emit_activity(thinking_label, "end")
+                continue
+
+            consecutive_empty = 0
+            consecutive_length = 0
             await _emit_activity(thinking_label, "end")
             await _emit_activity("Answering", "start")
             return _visible_content(content), attachments, _finalize_sources(), image_usages, usage
 
+        consecutive_empty = 0
+        consecutive_length = 0
         await _emit_activity(thinking_label, "end")
         messages.append(
             {
@@ -520,6 +619,25 @@ async def run_agentic_loop_langchain(
                     output=tool_output,
                     attachments=result.attachments,
                 )
+
+            if (
+                call.name in {"generate_image", "edit_image"}
+                and isinstance(tool_output, dict)
+                and not tool_output.get("error")
+            ):
+                file_name = tool_output.get("file_name")
+                if isinstance(file_name, str) and file_name.strip():
+                    tool_output["note"] = (
+                        f"To embed in a Marp presentation or markdown document, reference "
+                        f"this exact file_name: ![bg right:40% cover]({file_name}) or "
+                        f"![]({file_name}). The app resolves chat attachment names; do not "
+                        "invent other URLs or paths."
+                    )
+                    result = ToolResult(
+                        name=result.name or call.name,
+                        output=tool_output,
+                        attachments=result.attachments,
+                    )
 
             error_text = tool_output.get("error")
             if error_text is None and tool_output.get("is_error"):

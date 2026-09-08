@@ -11,7 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 
-import type { ChatMessageAttachmentInput, Prompt } from "@/lib/types"
+import type { ChatMessageAttachmentInput, McpPrompt, Prompt } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -56,6 +56,7 @@ export type ChatComposerHandle = {
 type SlashMenuItem =
   | { kind: "command"; command: ComposerSlashCommand }
   | { kind: "prompt"; prompt: Prompt }
+  | { kind: "mcp_prompt"; prompt: McpPrompt }
 
 type ChatComposerProps = {
   placeholder: string
@@ -70,6 +71,7 @@ type ChatComposerProps = {
   showModelSelect?: boolean
   hasPrompts?: boolean
   prompts?: Prompt[]
+  mcpPrompts?: McpPrompt[]
   slashCommands?: ComposerSlashCommand[]
   onSend: () => void
   onStop: () => void
@@ -82,6 +84,7 @@ type ChatComposerProps = {
   onDragLeave: (event: React.DragEvent<HTMLDivElement>) => void
   onDrop: (event: React.DragEvent<HTMLDivElement>) => void
   onInsertPromptRequest?: () => void
+  onSelectMcpPrompt?: (prompt: McpPrompt) => void
   onDraftChange?: (value: string) => void
   sendLabel: string
   stopLabel: string
@@ -102,6 +105,7 @@ export const ChatComposer = ({
   showModelSelect = false,
   hasPrompts = false,
   prompts = [],
+  mcpPrompts = [],
   slashCommands = [],
   onSend,
   onStop,
@@ -114,6 +118,7 @@ export const ChatComposer = ({
   onDragLeave,
   onDrop,
   onInsertPromptRequest,
+  onSelectMcpPrompt,
   onDraftChange,
   sendLabel,
   stopLabel,
@@ -255,10 +260,15 @@ export const ChatComposer = ({
   }
 
   const slashTrigger = useMemo(() => {
-    if (readOnly || (slashCommands.length === 0 && prompts.length === 0)) return null
+    if (
+      readOnly ||
+      (slashCommands.length === 0 && prompts.length === 0 && mcpPrompts.length === 0)
+    ) {
+      return null
+    }
     const value = textareaRef.current?.value ?? ""
     return getSlashPromptTrigger(value, cursorPosition)
-  }, [cursorPosition, prompts.length, readOnly, slashCommands.length])
+  }, [cursorPosition, mcpPrompts.length, prompts.length, readOnly, slashCommands.length])
 
   const filteredCommands = useMemo(() => {
     if (!slashTrigger) return []
@@ -276,6 +286,18 @@ export const ChatComposer = ({
     )
   }, [prompts, slashTrigger])
 
+  const filteredMcpPrompts = useMemo(() => {
+    if (!slashTrigger) return []
+    const needle = slashTrigger.query.trim().toLowerCase()
+    if (!needle) return mcpPrompts
+    return mcpPrompts.filter(
+      (prompt) =>
+        prompt.name.toLowerCase().includes(needle) ||
+        prompt.server_name.toLowerCase().includes(needle) ||
+        (prompt.description ?? "").toLowerCase().includes(needle)
+    )
+  }, [mcpPrompts, slashTrigger])
+
   const slashMenuItems = useMemo((): SlashMenuItem[] => {
     const items: SlashMenuItem[] = filteredCommands.map((command) => ({
       kind: "command",
@@ -284,8 +306,11 @@ export const ChatComposer = ({
     for (const prompt of filteredPrompts) {
       items.push({ kind: "prompt", prompt })
     }
+    for (const prompt of filteredMcpPrompts) {
+      items.push({ kind: "mcp_prompt", prompt })
+    }
     return items
-  }, [filteredCommands, filteredPrompts])
+  }, [filteredCommands, filteredMcpPrompts, filteredPrompts])
 
   const slashMenuOpen = slashTrigger !== null
 
@@ -317,16 +342,7 @@ export const ChatComposer = ({
     })
   }
 
-  const selectSlashItem = (item: SlashMenuItem) => {
-    if (item.kind === "command") {
-      item.command.onSelect?.()
-      insertSlashReplacement(item.command.insertText)
-      return
-    }
-    insertSlashReplacement(item.prompt.body)
-  }
-
-  const dismissSlashMenu = () => {
+  const clearSlashTrigger = () => {
     if (!slashTrigger) return
     const el = textareaRef.current
     if (!el) return
@@ -339,6 +355,24 @@ export const ChatComposer = ({
       el.setSelectionRange(slashTrigger.start, slashTrigger.start)
       setCursorPosition(slashTrigger.start)
     })
+  }
+
+  const selectSlashItem = (item: SlashMenuItem) => {
+    if (item.kind === "command") {
+      item.command.onSelect?.()
+      insertSlashReplacement(item.command.insertText)
+      return
+    }
+    if (item.kind === "mcp_prompt") {
+      clearSlashTrigger()
+      onSelectMcpPrompt?.(item.prompt)
+      return
+    }
+    insertSlashReplacement(item.prompt.body)
+  }
+
+  const dismissSlashMenu = () => {
+    clearSlashTrigger()
   }
 
   const handleTextareaChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -465,13 +499,23 @@ export const ChatComposer = ({
                 <p className="px-3 py-2 text-muted-foreground text-sm">{t("prompt_no_results")}</p>
               ) : (
                 slashMenuItems.map((item, index) => {
+                  const prev = slashMenuItems[index - 1]
                   const showPromptHeader =
                     item.kind === "prompt" &&
                     index > 0 &&
-                    slashMenuItems[index - 1]?.kind === "command"
+                    prev?.kind === "command"
+                  const showMcpHeader =
+                    item.kind === "mcp_prompt" &&
+                    (index === 0 || prev?.kind !== "mcp_prompt")
+                  const itemKey =
+                    item.kind === "command"
+                      ? item.command.id
+                      : item.kind === "prompt"
+                        ? item.prompt.id
+                        : `mcp:${item.prompt.id}`
                   return (
-                    <div key={item.kind === "command" ? item.command.id : item.prompt.id}>
-                      {showPromptHeader ? (
+                    <div key={itemKey}>
+                      {showPromptHeader || showMcpHeader ? (
                         <Separator className="my-1" />
                       ) : null}
                       <button
@@ -495,6 +539,15 @@ export const ChatComposer = ({
                             </span>
                             <span className="w-full truncate text-muted-foreground text-xs">
                               {item.command.description}
+                            </span>
+                          </>
+                        ) : item.kind === "mcp_prompt" ? (
+                          <>
+                            <span className="w-full truncate font-medium">{item.prompt.name}</span>
+                            <span className="w-full truncate text-muted-foreground text-xs">
+                              {item.prompt.description
+                                ? `${item.prompt.server_name} · ${item.prompt.description}`
+                                : item.prompt.server_name}
                             </span>
                           </>
                         ) : (

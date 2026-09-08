@@ -65,6 +65,7 @@ type CoworkPanelProps = {
   onActivateDocument: (documentId: string) => void
   onDeleteDocument: (documentId: string) => void
   onReloadLatest?: () => void
+  imageUrls?: Record<string, string>
 }
 
 export const CoworkPanel = ({
@@ -77,6 +78,7 @@ export const CoworkPanel = ({
   content,
   resizable = false,
   className,
+  imageUrls,
   onClose,
   onContentChange,
   onDownload,
@@ -306,10 +308,14 @@ export const CoworkPanel = ({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => onDownload({ presentationFormat: "pdf" })}>
+                <DropdownMenuItem
+                  onClick={() => onDownload({ presentationFormat: "pdf" })}
+                >
                   Download PDF
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onDownload({ presentationFormat: "pptx" })}>
+                <DropdownMenuItem
+                  onClick={() => onDownload({ presentationFormat: "pptx" })}
+                >
                   Download PowerPoint (.pptx)
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -395,6 +401,7 @@ export const CoworkPanel = ({
         format={document.format}
         language={document.language}
         readOnly={writing}
+        imageUrls={imageUrls}
         onChange={onContentChange}
       />
     </aside>

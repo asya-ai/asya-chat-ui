@@ -10,6 +10,14 @@ services:
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/executor:/app/executor_context
       - ./data/files:/data/files
+  worker:
+    # Match backend bind-mounts so scrapes pick up local app fixes without image rebuild.
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/executor:/app/executor_context
+      - ./data/files:/data/files
   scraper:
     command: sh -c "corepack enable && pnpm install && pnpm start"
     volumes:

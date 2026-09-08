@@ -49,6 +49,9 @@ import type {
   McpConnection,
   McpOverview,
   McpTestResult,
+  McpPrompt,
+  McpPromptResolveRequest,
+  McpPromptResolveResult,
   Team,
   TeamMember,
   TeamModel,
@@ -614,6 +617,15 @@ export const mcpApi = {
     const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
     return apiFetch<McpOverview>(`/users/me/mcp/overview${params}`)
   },
+  listPrompts: (orgId: string) =>
+    apiFetch<McpPrompt[]>(
+      `/users/me/mcp/prompts?org_id=${encodeURIComponent(orgId)}`
+    ),
+  getPrompt: (payload: McpPromptResolveRequest) =>
+    apiFetch<McpPromptResolveResult>("/users/me/mcp/prompts/get", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   listPersonalServers: () => apiFetch<McpServer[]>("/users/me/mcp/servers"),
   createPersonalServer: (payload: McpServerWrite, orgId?: string) => {
     const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
@@ -860,6 +872,35 @@ export const chatApi = {
     const blob = await response.blob()
     return { blob, fileName: match?.[1] || "document.txt" }
   },
+  exportCoworkPresentation: async (
+    chatId: string,
+    docId: string,
+    format: "pdf" | "pptx" = "pdf"
+  ) => {
+    const headers = new Headers({ "Content-Type": "application/json" })
+    const token = tokenStore.get()
+    if (token) headers.set("Authorization", `Bearer ${token}`)
+    const response = await fetch(`${API_BASE}/chats/${chatId}/cowork/${docId}/export`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ format }),
+    })
+    if (!response.ok) {
+      let detail = "Presentation export failed"
+      try {
+        const data = (await response.json()) as { detail?: string; error?: string }
+        detail = data.detail || data.error || detail
+      } catch {
+        // keep default
+      }
+      throw new ApiError(detail, response.status)
+    }
+    const disposition = response.headers.get("content-disposition") || ""
+    const match = /filename="([^"]+)"/i.exec(disposition)
+    const blob = await response.blob()
+    const fallback = format === "pptx" ? "presentation.pptx" : "presentation.pdf"
+    return { blob, fileName: match?.[1] || fallback }
+  },
   sendMessage: (
     chatId: string,
     content: string,
@@ -947,7 +988,12 @@ export const chatApi = {
       `/chats/${chatId}/messages/${messageId}`,
       {
       method: "PATCH",
-        body: JSON.stringify({ content, attachments, locale }),
+        body: JSON.stringify({
+          content,
+          attachments,
+          locale,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
       }
     ),
   listGenerationTasks: (chatId: string, activeOnly = true) =>

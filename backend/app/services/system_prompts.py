@@ -68,12 +68,17 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     "generate_image": (
         "Use generate_image when the user asks for creating a new image. "
         "Before calling it, briefly say what image you are about to create. "
-        "Prefer calling generate_image in its own step rather than batching it with unrelated tools."
+        "Prefer calling generate_image in its own step rather than batching it with unrelated tools. "
+        "The tool returns file_name (e.g. generated-….png). To place it in a Marp presentation, "
+        "reference that exact file_name in markdown — "
+        "![bg right:40% cover](generated-….png) or ![](generated-….png). "
+        "The app resolves chat attachment file names; do not invent /chat/… paths or bare relative URLs that are not the returned file_name."
     ),
     "edit_image": (
         "Use edit_image when the user asks to modify an existing image. "
         "Before calling it, briefly say what change you are about to make. "
-        "If no image is specified, it will use the latest image attachment in the chat."
+        "If no image is specified, it will use the latest image attachment in the chat. "
+        "Embed the returned file_name in Marp/markdown the same way as generate_image."
     ),
     "store_memory": (
         "Use store_memory to persist important facts the user shares about themselves, "
@@ -140,17 +145,31 @@ def _locale_prompt(locale: str | None) -> str | None:
 
 def _time_prompt(user_timezone: str | None) -> str:
     now = datetime.now(timezone.utc)
-    utc_str = now.strftime("%Y-%m-%d %H:%M UTC")
-    parts = [f"Current UTC time: {utc_str}."]
+    # Spell the calendar date multiple ways — small models often mangle ISO day numbers.
+    utc_long = f"{now.strftime('%A')}, {now.day} {now.strftime('%B %Y')}"
+    lines = [
+        "## Current time (authoritative — do not invent a different date)",
+        f"- Today's date: {now.strftime('%Y-%m-%d')} ({utc_long})",
+        f"- Current UTC time: {now.strftime('%H:%M')} UTC",
+    ]
     if user_timezone:
         try:
             from zoneinfo import ZoneInfo
             local_now = now.astimezone(ZoneInfo(user_timezone))
-            local_str = local_now.strftime("%Y-%m-%d %H:%M %Z")
-            parts.append(f"User's timezone: {user_timezone} (local time: {local_str}).")
+            local_long = (
+                f"{local_now.strftime('%A')}, {local_now.day} {local_now.strftime('%B %Y')}"
+            )
+            lines.append(
+                f"- User timezone: {user_timezone}"
+                f" (local: {local_now.strftime('%Y-%m-%d %H:%M %Z')}, {local_long})"
+            )
         except Exception:
-            parts.append(f"User's timezone: {user_timezone}.")
-    return " ".join(parts)
+            lines.append(f"- User timezone: {user_timezone}")
+    lines.append(
+        "Use these values for today/tomorrow/this week and clock questions. "
+        "Never substitute a different calendar date."
+    )
+    return "\n".join(lines)
 
 
 def _memories_prompt(memories: list[dict[str, str]] | None) -> str:
@@ -170,7 +189,18 @@ def build_system_prompt_messages(
     memories: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     tool_names = set(enabled_tool_names or [])
-    messages: list[dict[str, str]] = [{"role": "system", "content": MAIN_SYSTEM_PROMPT}]
+    # Bake datetime into the first system message so aggressive provider trims that
+    # keep only messages[0] (see openai_provider._trim_messages_for_context) still
+    # retain the clock, and so HEAD/SUMMARY truncation cannot drop it.
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": f"{MAIN_SYSTEM_PROMPT}\n\n{_time_prompt(timezone)}",
+        },
+    ]
+    locale_instruction = _locale_prompt(locale)
+    if locale_instruction:
+        messages.append({"role": "system", "content": locale_instruction})
     memory_tools_enabled = bool(
         tool_names.intersection({"store_memory", "remove_memory", "search_past_chats"})
     )
@@ -184,8 +214,4 @@ def build_system_prompt_messages(
     mcp_guidance = mcp_guidance_for_tools(tool_names)
     if mcp_guidance:
         messages.append({"role": "system", "content": mcp_guidance})
-    locale_instruction = _locale_prompt(locale)
-    if locale_instruction:
-        messages.append({"role": "system", "content": locale_instruction})
-    messages.append({"role": "system", "content": _time_prompt(timezone)})
     return messages

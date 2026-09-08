@@ -953,6 +953,109 @@ async def test_agentic_loop_streams_final_answer_deltas():
 
 
 @pytest.mark.asyncio
+async def test_agentic_loop_retries_when_post_tool_response_is_empty():
+    registry = ToolRegistry()
+
+    async def _echo(args: dict) -> ToolResult:
+        return ToolResult(name="echo_tool", output={"echo": args.get("text")})
+
+    registry.register(
+        ToolSpec(
+            name="echo_tool",
+            description="Echo text",
+            parameters={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        ),
+        _echo,
+    )
+
+    @dataclass
+    class _EmptyThenAnswerProvider:
+        calls: int = 0
+        seen_messages: list[list[dict]] | None = None
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            if self.seen_messages is None:
+                self.seen_messages = []
+            self.seen_messages.append([dict(message) for message in messages])
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="",
+                    usage=_usage(),
+                    tool_calls=[
+                        ChatToolCall(
+                            id="tool-1",
+                            name="echo_tool",
+                            arguments={"text": "hello"},
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                return ChatResponse(content="", usage=_usage(), tool_calls=[], finish_reason="stop")
+            return ChatResponse(
+                content="here is the answer",
+                usage=_usage(),
+                tool_calls=[],
+                finish_reason="stop",
+            )
+
+    provider = _EmptyThenAnswerProvider()
+    content, *_ = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "say hello"}],
+        tool_registry=registry,
+        max_steps=5,
+    )
+
+    assert content == "here is the answer"
+    assert provider.calls == 3
+    assert provider.seen_messages is not None
+    assert provider.seen_messages[2][-1]["content"] == "Please provide the final answer now."
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_continues_after_length_truncation():
+    registry = ToolRegistry()
+
+    @dataclass
+    class _LengthThenContinueProvider:
+        calls: int = 0
+
+        async def chat_with_tools(self, model: str, messages: list[dict], tools: list[ToolSpec]):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="Part one of a long answer that got cut",
+                    usage=_usage(),
+                    tool_calls=[],
+                    finish_reason="length",
+                )
+            return ChatResponse(
+                content=" and here is the rest.",
+                usage=_usage(),
+                tool_calls=[],
+                finish_reason="stop",
+            )
+
+    provider = _LengthThenContinueProvider()
+    content, *_ = await run_agentic_loop_langchain(
+        provider=provider,
+        model_name="fake-model",
+        messages=[{"role": "user", "content": "write a long answer"}],
+        tool_registry=registry,
+        max_steps=4,
+    )
+
+    assert content == "Part one of a long answer that got cut and here is the rest."
+    assert provider.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_agentic_loop_tracks_search_result_and_scrape_urls():
     registry = ToolRegistry()
 

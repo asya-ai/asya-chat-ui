@@ -27,6 +27,7 @@ type CoworkEditorProps = {
   format?: string | null
   readOnly?: boolean
   className?: string
+  imageUrls?: Record<string, string>
   onChange: (value: string) => void
 }
 
@@ -85,6 +86,7 @@ export const CoworkEditor = ({
   format,
   readOnly = false,
   className,
+  imageUrls,
   onChange,
 }: CoworkEditorProps) => {
   const theme = useAppTheme()
@@ -108,6 +110,7 @@ export const CoworkEditor = ({
           value={value}
           readOnly={readOnly}
           className={className}
+          imageUrls={imageUrls}
           onChange={onChange}
         />
       </Suspense>

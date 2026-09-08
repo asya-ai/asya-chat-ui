@@ -842,3 +842,32 @@ export type McpTestResult = {
   resources?: number | null
   prompts?: number | null
 }
+
+export type McpPromptArgument = {
+  name: string
+  description?: string
+  required: boolean
+}
+
+export type McpPrompt = {
+  id: string
+  server_id: string
+  server_name: string
+  name: string
+  description?: string
+  arguments: McpPromptArgument[]
+}
+
+export type McpPromptResolveRequest = {
+  org_id: string
+  server_id: string
+  name: string
+  arguments?: Record<string, string>
+}
+
+export type McpPromptResolveResult = {
+  name: string
+  description?: string | null
+  body: string
+  messages: unknown[]
+}

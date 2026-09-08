@@ -52,3 +52,6 @@ celery_app.conf.update(
 )
 
 celery_app.autodiscover_tasks(["app.workers"])
+
+# Register worker_process_init hooks (scraper DNS probe, etc.).
+from app.workers import scraper_dns as _scraper_dns  # noqa: E402,F401

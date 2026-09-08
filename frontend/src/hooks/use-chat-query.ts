@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 
-import { agentApi, authApi, chatApi, modelApi, orgApi, promptApi, usageApi } from "@/lib/api"
+import { agentApi, authApi, chatApi, mcpApi, modelApi, orgApi, promptApi, usageApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import type { Agent, Chat, ChatMessage, ChatModel, Org, Prompt } from "@/lib/types"
 
@@ -34,6 +34,11 @@ const agentKeys = {
 const promptKeys = {
   all: ["prompts"] as const,
   list: (contextAgentId: string | null) => [...promptKeys.all, contextAgentId ?? "none"] as const,
+}
+
+const mcpPromptKeys = {
+  all: ["mcpPrompts"] as const,
+  list: (orgId: string) => [...mcpPromptKeys.all, orgId] as const,
 }
 
 const upsertPromptInContextCache = (
@@ -212,6 +217,14 @@ export const usePrompts = (contextAgentId: string | null) =>
     staleTime: 15_000,
   })
 
+export const useMcpPrompts = (orgId: string | null) =>
+  useQuery({
+    queryKey: mcpPromptKeys.list(orgId ?? "none"),
+    queryFn: () => mcpApi.listPrompts(orgId!),
+    enabled: Boolean(orgId),
+    staleTime: 60_000,
+  })
+
 export const useSavePrompt = (contextAgentId: string | null) => {
   const queryClient = useQueryClient()
   return useMutation({
@@ -229,6 +242,9 @@ export const useSavePrompt = (contextAgentId: string | null) => {
         : promptApi.create(payload),
     onSuccess: (saved) => {
       upsertPromptInContextCache(queryClient, contextAgentId, saved)
+      // Refetch every context list so older prompts aren't stuck behind a
+      // stale/empty cache until the next navigation.
+      void queryClient.invalidateQueries({ queryKey: promptKeys.all })
     },
   })
 }

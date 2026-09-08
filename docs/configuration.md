@@ -40,7 +40,8 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
   - `EXEC_ULIMIT_FSIZE_BYTES`
   - `EXEC_ULIMIT_NPROC`
 - Search/scraping/RAG:
-  - `SCRAPER_URL` (default: `http://scraper:3001`)
+  - `SCRAPER_URL` (default: `http://scraper:3001`; compose pins this for backend/worker so `.env` proxies cannot override the Docker service name)
+
   - `WEB_SEARCH_LIMIT` (default: 5)
   - `SCRAPE_TEXT_LIMIT` (default: 20000)
   - `SCRAPE_PARALLEL_MAX` (default: 5)
@@ -108,6 +109,9 @@ Model IDs are configured in the Models settings UI, not via env vars.
 - `SCRAPER_PORT` (default: `3001`)
 - `SCRAPE_TEXT_LIMIT` (default: `20000`)
 - `PUPPETEER_EXECUTABLE_PATH` (optional custom browser binary path)
+- `SCRAPER_JSON_LIMIT` (default: `15mb`) — body limit for scrape/Marp export payloads
+- `MARP_EXPORT_MAX_MARKDOWN_BYTES` (default: `12000000`) — max Marp markdown size for presentation export
+- `MARP_EXPORT_BROWSER_TIMEOUT` (default: `120`) — Marp CLI browser timeout in seconds
 
 ## MCP Servers (model data sources)
 

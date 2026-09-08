@@ -482,13 +482,11 @@ export function useCoworkDocument(chatId: string | undefined): UseCoworkDocument
             format === "pptx" ? "Building PowerPoint…" : "Building PDF…"
           )
           try {
-            const { exportCoworkPresentation } = await import(
-              "@/pages/chat/exportCoworkPresentation"
+            const { blob, fileName } = await chatApi.exportCoworkPresentation(
+              chatId,
+              documentIdRef.current,
+              format
             )
-            const { blob, fileName } = await exportCoworkPresentation(contentRef.current, {
-              format,
-              fileName: document?.file_name || document?.title || "presentation",
-            })
             triggerDownload(blob, fileName)
             toast.success("Download ready", { id: toastId })
           } catch (error) {

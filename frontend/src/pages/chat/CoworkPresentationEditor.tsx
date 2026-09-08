@@ -10,11 +10,17 @@ import { Button } from "@/components/ui/button"
 import { getTheme, type ThemeMode } from "@/lib/theme"
 import { sanitizeMermaidChart } from "@/lib/sanitizeMermaid"
 import { cn } from "@/lib/utils"
+import {
+  resolveCoworkPresentationMarkdown,
+  rewriteMarpHtmlImageUrls,
+} from "@/pages/chat/resolveCoworkPresentationImages"
 
 type CoworkPresentationEditorProps = {
   value: string
   readOnly?: boolean
   className?: string
+  /** file_name / id → content URL for generated chat images referenced in Marp */
+  imageUrls?: Record<string, string>
   onChange: (value: string) => void
 }
 
@@ -111,6 +117,7 @@ div.marpit {
   overflow: hidden;
   border-radius: 0.5rem;
   position: relative;
+  background: var(--color-background, #fff8e1);
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.06),
     0 8px 24px rgb(0 0 0 / 0.08);
@@ -123,7 +130,6 @@ div.marpit {
 div.marpit > .cowork-marp-slide > .cowork-marp-scaler > section {
   box-sizing: border-box !important;
   width: ${SLIDE_WIDTH}px !important;
-  height: auto !important;
   min-height: ${SLIDE_HEIGHT}px !important;
   max-height: none !important;
   margin: 0 !important;
@@ -185,40 +191,55 @@ const patchMarpCssForSlideWrappers = (css: string) =>
   )
 
 const fitPresentationSlides = (root: ParentNode) => {
-  const cleanups: (() => void)[] = []
-
-  for (const wrap of root.querySelectorAll<HTMLElement>(".cowork-marp-slide")) {
+  const slides = Array.from(
+    root.querySelectorAll<HTMLElement>(".cowork-marp-slide")
+  ).flatMap((wrap) => {
     const scaler = wrap.querySelector<HTMLElement>(".cowork-marp-scaler")
     const section = scaler?.querySelector<HTMLElement>("section")
-    if (!scaler || !section) continue
+    if (!scaler || !section) return []
+    return [{ wrap, scaler, section }]
+  })
 
-    const apply = () => {
-      const containerWidth = wrap.clientWidth
-      if (containerWidth <= 0) return
+  if (slides.length === 0) return () => {}
 
+  const apply = () => {
+    for (const { wrap, scaler, section } of slides) {
       scaler.style.transform = "none"
-      const contentHeight = Math.max(section.scrollHeight, SLIDE_HEIGHT)
-      const contentWidth = Math.max(section.scrollWidth, SLIDE_WIDTH)
-      const widthScale = containerWidth / SLIDE_WIDTH
-      const contentScale = Math.min(1, SLIDE_HEIGHT / contentHeight, SLIDE_WIDTH / contentWidth)
-      const scale = widthScale * contentScale
-
-      scaler.style.transformOrigin = "top left"
-      scaler.style.transform = `scale(${scale})`
-      wrap.style.height = `${contentHeight * scale}px`
+      section.style.removeProperty("height")
+      wrap.style.height = "auto"
     }
 
-    apply()
+    let maxContentHeight = SLIDE_HEIGHT
+    let containerWidth = 0
 
-    const observer = new ResizeObserver(apply)
+    for (const { wrap, section } of slides) {
+      containerWidth = Math.max(containerWidth, wrap.clientWidth)
+      maxContentHeight = Math.max(maxContentHeight, section.scrollHeight)
+    }
+
+    if (containerWidth <= 0) return
+
+    // Width-fit only — do not shrink to 16:9 or the beige section
+    // leaves a pillarbox inside the full-width wrap.
+    const scale = containerWidth / SLIDE_WIDTH
+
+    for (const { wrap, scaler, section } of slides) {
+      section.style.setProperty("height", `${maxContentHeight}px`, "important")
+      scaler.style.transformOrigin = "top left"
+      scaler.style.transform = `scale(${scale})`
+      wrap.style.height = `${maxContentHeight * scale}px`
+    }
+  }
+
+  apply()
+
+  const observer = new ResizeObserver(apply)
+  for (const { wrap, section } of slides) {
     observer.observe(wrap)
     observer.observe(section)
-    cleanups.push(() => observer.disconnect())
   }
 
-  return () => {
-    for (const cleanup of cleanups) cleanup()
-  }
+  return () => observer.disconnect()
 }
 
 const ensureShadowRoot = (host: HTMLElement): ShadowRoot => {
@@ -311,6 +332,7 @@ export const CoworkPresentationEditor = ({
   value,
   readOnly = false,
   className,
+  imageUrls,
   onChange,
 }: CoworkPresentationEditorProps) => {
   const theme = useAppTheme()
@@ -334,7 +356,15 @@ export const CoworkPresentationEditor = ({
 
   const rendered = useMemo(() => {
     try {
-      return marp.render(ensureMarpFrontMatter(value || "# Untitled\n"))
+      const markdown = resolveCoworkPresentationMarkdown(
+        ensureMarpFrontMatter(value || "# Untitled\n"),
+        imageUrls
+      )
+      const result = marp.render(markdown)
+      return {
+        ...result,
+        html: rewriteMarpHtmlImageUrls(result.html, imageUrls),
+      }
     } catch (error) {
       return {
         html: `<section><pre>${String(error)}</pre></section>`,
@@ -342,7 +372,7 @@ export const CoworkPresentationEditor = ({
         comments: [] as string[][],
       }
     }
-  }, [marp, value])
+  }, [imageUrls, marp, value])
 
   const slideCount = useMemo(() => {
     if (typeof document === "undefined") return 1

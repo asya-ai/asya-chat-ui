@@ -332,7 +332,13 @@ const isBlockCode = (content: string, className?: string) =>
   Boolean(/language-\w+/.exec(className || "")) || content.includes("\n")
 
 const codeBlockClassName =
-  "relative my-3 overflow-hidden rounded-lg border border-border bg-code text-code-foreground shadow-sm"
+  "relative my-3 rounded-lg border border-border bg-code text-code-foreground shadow-sm"
+
+const codeCopyStickyClassName =
+  "sticky top-0 z-10 flex h-0 justify-end overflow-visible pointer-events-none"
+
+const codeCopyButtonClassName =
+  "pointer-events-auto m-2 bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
 
 const scheduleIdle = (callback: () => void, timeout = 120) => {
   if (typeof window.requestIdleCallback === "function") {
@@ -1027,12 +1033,14 @@ const HighlightedCodeBlock = ({
 
   return (
     <div className={codeBlockClassName}>
-      <CopyTextButton
-        text={code}
-        label={copyLabel}
-        copiedLabel={copiedLabel}
-        className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
-      />
+      <div className={codeCopyStickyClassName}>
+        <CopyTextButton
+          text={code}
+          label={copyLabel}
+          copiedLabel={copiedLabel}
+          className={codeCopyButtonClassName}
+        />
+      </div>
       {highlight ? (
         <SyntaxHighlighter
           {...restProps}
@@ -1460,12 +1468,14 @@ const MessageBubbleComponent = ({
           }
           return (
             <div className={codeBlockClassName}>
-              <CopyTextButton
-                text={codeContent}
-                label={t("chat_copy_code")}
-                copiedLabel={t("common_copied")}
-                className="top-2 right-2 z-10 absolute bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
-              />
+              <div className={codeCopyStickyClassName}>
+                <CopyTextButton
+                  text={codeContent}
+                  label={t("chat_copy_code")}
+                  copiedLabel={t("common_copied")}
+                  className={codeCopyButtonClassName}
+                />
+              </div>
               <pre className="m-0 p-4 pt-10 overflow-x-auto text-[13px] whitespace-pre-wrap">
                 <code className={className} {...rest}>
                   {codeContent}

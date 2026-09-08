@@ -98,6 +98,9 @@ docker compose logs dind executor-bootstrap backend worker
   - Verify provider keys and org provider/model settings.
 - Web search/scraping failures:
   - Check `SCRAPER_URL`, `SCRAPER_PORT`, and scraper logs.
+  - Worker must resolve the scraper compose service: on boot look for `worker scraper DNS ok` (or `DNS FAILED`) in worker logs. `Scraper unreachable (scraper): [Errno -3]…` means Docker DNS from the worker, not the target website.
+- Presentation PDF/PPTX download failures:
+  - Same scraper service runs Marp CLI (`POST /marp/export`). Confirm scraper is healthy and Chrome is installed in the scraper image.
 - Code execution errors:
   - Check dind health and executor image availability.
 

@@ -57,11 +57,11 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      SCRAPER_URL: http://scraper:3001
     volumes:
       - files-data:/data/files
     networks:
       - app
-      - executor
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,11 +95,13 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      SCRAPER_URL: http://scraper:3001
     volumes:
       - files-data:/data/files
+    # Stay on `app` only. Attaching the internal `executor` network breaks Docker
+    # DNS for service names like `scraper` (EAI_AGAIN from Celery workers).
     networks:
       - app
-      - executor
     depends_on:
       redis:
         condition: service_started
@@ -107,6 +109,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      scraper:
+        condition: service_healthy
       dind:
         condition: service_healthy
       executor-bootstrap:
@@ -169,8 +173,10 @@ services:
     volumes:
       - dind-data:/var/lib/docker
       - files-data:/data/files
+    # Share `app` with backend/worker so DOCKER_HOST=tcp://dind:2375 works without
+    # attaching workers to an internal-only network (which breaks scraper DNS).
     networks:
-      - executor
+      - app
       - egress
     restart: unless-stopped
     healthcheck:
@@ -185,7 +191,7 @@ services:
       DOCKER_HOST: tcp://dind:2375
       EXECUTOR_IMAGE: asyaai/asya-chat-ui-executor:${CHATUI_TAG:-latest}
     networks:
-      - executor
+      - app
     depends_on:
       dind:
         condition: service_healthy
@@ -215,5 +221,3 @@ volumes:
 networks:
   app:
   egress:
-  executor:
-    internal: true

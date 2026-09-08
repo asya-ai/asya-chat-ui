@@ -13,9 +13,12 @@ from app.models import McpOrgBinding, McpOrgSettings, McpServer, McpUserConnecti
 from app.services.mcp.auth_config import (
     decrypt_auth_config,
 )
+from app.services.mcp.bridge import discover_mcp_snapshots
+from app.services.mcp.client import flatten_mcp_prompt_messages, get_mcp_prompt
 from app.services.mcp.registry import (
     get_mcp_org_settings,
     get_mcp_settings,
+    resolve_effective_mcp_servers,
     resolve_test_auth,
     store_user_token_connection,
 )
@@ -173,6 +176,35 @@ class McpTestResult(BaseModel):
     tools: int | None = None
     resources: int | None = None
     prompts: int | None = None
+
+
+class McpPromptArgumentRead(BaseModel):
+    name: str
+    description: str = ""
+    required: bool = False
+
+
+class McpPromptRead(BaseModel):
+    id: str
+    server_id: str
+    server_name: str
+    name: str
+    description: str = ""
+    arguments: list[McpPromptArgumentRead] = Field(default_factory=list)
+
+
+class McpPromptGetRequest(BaseModel):
+    org_id: str
+    server_id: str
+    name: str
+    arguments: dict[str, str] | None = None
+
+
+class McpPromptGetResult(BaseModel):
+    name: str
+    description: str | None = None
+    body: str
+    messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _parse_uuid(value: str, *, field: str = "id") -> UUID:
@@ -730,6 +762,127 @@ def get_user_mcp_overview(
         "user_provided_servers": user_provided + org_servers,
         "personal_servers": personal,
     }
+
+
+@router.get("/users/me/mcp/prompts", response_model=list[McpPromptRead])
+async def list_user_mcp_prompts(
+    org_id: str = Query(...),
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[McpPromptRead]:
+    org_uuid = _parse_uuid(org_id, field="org_id")
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    snapshots = await discover_mcp_snapshots(
+        session,
+        org_id=org_uuid,
+        user_id=current_user.id,
+        force=False,
+    )
+    items: list[McpPromptRead] = []
+    for snap in snapshots:
+        if not snap.server.include.prompts:
+            continue
+        for prompt in snap.prompts:
+            if not isinstance(prompt, dict):
+                continue
+            name = str(prompt.get("name") or "").strip()
+            if not name:
+                continue
+            raw_args = prompt.get("arguments") or []
+            arguments: list[McpPromptArgumentRead] = []
+            if isinstance(raw_args, list):
+                for arg in raw_args:
+                    if not isinstance(arg, dict):
+                        continue
+                    arg_name = str(arg.get("name") or "").strip()
+                    if not arg_name:
+                        continue
+                    arguments.append(
+                        McpPromptArgumentRead(
+                            name=arg_name,
+                            description=str(arg.get("description") or ""),
+                            required=bool(arg.get("required")),
+                        )
+                    )
+            items.append(
+                McpPromptRead(
+                    id=f"{snap.server.id}:{name}",
+                    server_id=snap.server.id,
+                    server_name=snap.server.name,
+                    name=name,
+                    description=str(prompt.get("description") or ""),
+                    arguments=arguments,
+                )
+            )
+    items.sort(key=lambda item: (item.server_name.lower(), item.name.lower()))
+    return items
+
+
+@router.post("/users/me/mcp/prompts/get", response_model=McpPromptGetResult)
+async def get_user_mcp_prompt(
+    payload: McpPromptGetRequest,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> McpPromptGetResult:
+    org_uuid = _parse_uuid(payload.org_id, field="org_id")
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    prompt_name = payload.name.strip()
+    server_id = payload.server_id.strip()
+    if not prompt_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
+    if not server_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="server_id is required")
+
+    resolved = resolve_effective_mcp_servers(
+        session, org_id=org_uuid, user_id=current_user.id
+    )
+    match = next((item for item in resolved if item.config.id == server_id), None)
+    if match is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
+    if not match.config.include.prompts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MCP server does not expose prompts",
+        )
+
+    prompt_args: dict[str, str] | None = None
+    if payload.arguments:
+        prompt_args = {
+            str(key): str(value)
+            for key, value in payload.arguments.items()
+            if str(value).strip() != ""
+        }
+    try:
+        result = await get_mcp_prompt(match.config, prompt_name, prompt_args)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    messages = result.get("messages") if isinstance(result, dict) else None
+    message_list = messages if isinstance(messages, list) else []
+    body = flatten_mcp_prompt_messages(
+        [item for item in message_list if isinstance(item, dict)]
+    )
+    return McpPromptGetResult(
+        name=prompt_name,
+        description=result.get("description") if isinstance(result, dict) else None,
+        body=body,
+        messages=message_list,
+    )
 
 
 @router.get("/users/me/mcp/servers", response_model=list[McpServerRead])

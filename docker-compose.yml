@@ -58,6 +58,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      - SCRAPER_URL=http://scraper:3001
     volumes:
       - ./data/files:/data/files
     # Boot deps only. scraper / dind / executor-bootstrap are runtime; they
@@ -100,6 +101,9 @@ services:
       - .env
     # Chrome needs more than Docker's default 64MB /dev/shm.
     shm_size: "256mb"
+    # Explicit default network so workers always share DNS with scraper.
+    networks:
+      - default
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/healthz').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
       interval: 10s
@@ -125,19 +129,23 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      - SCRAPER_URL=http://scraper:3001
     volumes:
       - ./data/files:/data/files
-    # migrate already implies postgres; no scraper/dind/executor gate.
     depends_on:
       redis:
         condition: service_started
       migrate:
         condition: service_completed_successfully
+      scraper:
+        condition: service_healthy
     command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "-Q", "generation,celery,embedding", "--concurrency=${WORKER_CONCURRENCY:-2}", "--prefetch-multiplier=1"]
     deploy:
       replicas: ${WORKER_REPLICAS:-1}
       restart_policy:
         condition: on-failure
+    # Keep scraper DNS on the compose `default` network. `asya-mcp` stays available
+    # for MCP, but scraper resolution must not depend on that external network.
     networks:
       - default
       - asya-mcp

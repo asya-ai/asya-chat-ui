@@ -773,8 +773,11 @@ async def _run_generation(task_id: UUID) -> None:
             if chat.agent_id:
                 agent = session.get(Agent, chat.agent_id)
                 if agent and agent.master_prompt and agent.master_prompt.strip():
+                    # Keep index 0 as the main+datetime system message so clock context
+                    # stays first if anything keeps only messages[0].
+                    insert_at = 1 if messages and messages[0].get("role") == "system" else 0
                     messages.insert(
-                        0,
+                        insert_at,
                         {
                             "role": "system",
                             "content": (

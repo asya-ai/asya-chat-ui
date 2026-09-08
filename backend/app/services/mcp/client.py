@@ -449,3 +449,50 @@ async def get_mcp_prompt(
         },
         max_chars=settings.mcp_max_result_chars,
     )
+
+
+def _message_text_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text.strip() if isinstance(text, str) else ""
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and isinstance(block.get("text"), str):
+            text = block["text"].strip()
+            if text:
+                parts.append(text)
+        elif isinstance(block, str) and block.strip():
+            parts.append(block.strip())
+    return "\n".join(parts).strip()
+
+
+def flatten_mcp_prompt_messages(messages: list[dict[str, Any]] | None) -> str:
+    """Turn MCP get_prompt messages into composer-insertable text."""
+    if not messages:
+        return ""
+    sections: list[tuple[str | None, str]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        text = _message_text_content(message.get("content"))
+        if not text:
+            continue
+        role = message.get("role")
+        role_str = str(role).strip().lower() if role else None
+        sections.append((role_str, text))
+    if not sections:
+        return ""
+    if len(sections) == 1:
+        role, text = sections[0]
+        if role in {None, "", "user"}:
+            return text
+        return f"{role.capitalize()}:\n{text}"
+    parts: list[str] = []
+    for role, text in sections:
+        label = (role or "user").capitalize()
+        parts.append(f"{label}:\n{text}")
+    return "\n\n".join(parts)

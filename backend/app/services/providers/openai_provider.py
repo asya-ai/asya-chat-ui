@@ -72,9 +72,16 @@ def _is_context_length_error(exc: Exception) -> bool:
 def _trim_messages_for_context(messages: list[dict], keep_tail: int = 20) -> list[dict]:
     if len(messages) <= keep_tail:
         return messages
-    system_messages = [msg for msg in messages if msg.get("role") == "system"][:1]
+    # Keep every leading system message (datetime/locale/tools live there), then the
+    # most recent non-system turns. Dropping all but the first system message used to
+    # strip the authoritative clock and tool guidance on context-limit retries.
+    leading_system: list[dict] = []
+    for msg in messages:
+        if msg.get("role") != "system":
+            break
+        leading_system.append(msg)
     non_system_tail = [msg for msg in messages if msg.get("role") != "system"][-keep_tail:]
-    return system_messages + non_system_tail
+    return [*leading_system, *non_system_tail]
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -311,6 +318,23 @@ def _tool_calls_from_pending(
     return tool_calls
 
 
+def _finish_reason_from_response(
+    response: object | None, tool_calls: list[ChatToolCall] | None
+) -> str:
+    if tool_calls:
+        return "tool_calls"
+    if response is None:
+        return "stop"
+    status = str(getattr(response, "status", None) or "").strip().lower()
+    if status == "incomplete":
+        incomplete = getattr(response, "incomplete_details", None)
+        reason = str(getattr(incomplete, "reason", None) or "").strip().lower()
+        if reason in {"max_output_tokens", "max_tokens", "length"}:
+            return "length"
+        return "incomplete"
+    return "stop"
+
+
 async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]:
     pending_tool_calls: dict[int, dict[str, str]] = {}
     signaled_tool_calls = False
@@ -378,13 +402,15 @@ async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]
             continue
         if event_type == "response.completed":
             final_response = getattr(event, "response", None)
+        if event_type == "response.incomplete":
+            final_response = getattr(event, "response", None) or final_response
 
     tool_calls = _tool_calls_from_pending(pending_tool_calls)
     usage = getattr(final_response, "usage", None) if final_response is not None else None
     yield _usage_chunk_from_response_usage(usage)
     yield ChatStreamChunk(
         tool_calls=tool_calls or None,
-        finish_reason="tool_calls" if tool_calls else "stop",
+        finish_reason=_finish_reason_from_response(final_response, tool_calls),
     )
 
 
@@ -793,7 +819,7 @@ class OpenAIProvider:
             content = _extract_response_text(response)
             usage = getattr(response, "usage", None)
             tool_calls = _extract_response_tool_calls(response)
-            finish_reason = "tool_calls" if tool_calls else "stop"
+            finish_reason = _finish_reason_from_response(response, tool_calls)
             cached_tokens, thinking_tokens = _extract_usage_details(usage)
             prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
                 _coalesce_usage_tokens(usage)
@@ -852,7 +878,7 @@ class OpenAIProvider:
             content = _extract_response_text(response)
             usage = getattr(response, "usage", None)
             tool_calls = _extract_response_tool_calls(response)
-            finish_reason = "tool_calls" if tool_calls else "stop"
+            finish_reason = _finish_reason_from_response(response, tool_calls)
             cached_tokens, thinking_tokens = _extract_usage_details(usage)
             prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
                 _coalesce_usage_tokens(usage)

@@ -4,7 +4,7 @@ import { flushSync } from "react-dom"
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, chatApi, configApi } from "@/lib/api"
+import { ApiError, chatApi, configApi, mcpApi } from "@/lib/api"
 import { chatGenerationIndicatorsStore, useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import { composerDraftStore } from "@/lib/composer-drafts"
 import {
@@ -22,6 +22,7 @@ import type {
   ChatMessage,
   ChatMessageAttachmentInput,
   GenerationStatus,
+  McpPrompt,
   Prompt,
   SourceItem,
 } from "@/lib/types"
@@ -48,6 +49,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
 import { CoworkPanel } from "@/pages/chat/CoworkPanel"
+import { collectChatImageUrlMap } from "@/pages/chat/resolveCoworkPresentationImages"
 import { useCoworkDocument } from "@/pages/chat/useCoworkDocument"
 import { useIsMobile } from "@/hooks/use-mobile"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
@@ -64,6 +66,7 @@ import {
   useCreateChat,
   useDeleteChat,
   useMe,
+  useMcpPrompts,
   useModels,
   useOrgsMine,
   usePrompts,
@@ -358,22 +361,31 @@ const mergeMessageAttachments = (
 type InsertPromptPickerProps = {
   open: boolean
   prompts: Prompt[]
+  mcpPrompts: McpPrompt[]
   title: string
   description: string
   searchPlaceholder: string
+  librarySectionLabel: string
+  mcpSectionLabel: string
   onOpenChange: (open: boolean) => void
-  onSelect: (body: string) => void
+  onSelectLibrary: (body: string) => void
+  onSelectMcp: (prompt: McpPrompt) => void
 }
 
 const InsertPromptPicker = ({
   open,
   prompts,
+  mcpPrompts,
   title,
   description,
   searchPlaceholder,
+  librarySectionLabel,
+  mcpSectionLabel,
   onOpenChange,
-  onSelect,
+  onSelectLibrary,
+  onSelectMcp,
 }: InsertPromptPickerProps) => {
+  const { t } = useI18n()
   const [query, setQuery] = useState("")
 
   useEffect(() => {
@@ -381,13 +393,22 @@ const InsertPromptPicker = ({
   }, [open])
 
   const needle = query.trim().toLowerCase()
-  const filtered = needle
+  const filteredLibrary = needle
     ? prompts.filter(
         (prompt) =>
           prompt.name.toLowerCase().includes(needle) ||
           (prompt.description ?? "").toLowerCase().includes(needle)
       )
     : prompts
+  const filteredMcp = needle
+    ? mcpPrompts.filter(
+        (prompt) =>
+          prompt.name.toLowerCase().includes(needle) ||
+          prompt.server_name.toLowerCase().includes(needle) ||
+          (prompt.description ?? "").toLowerCase().includes(needle)
+      )
+    : mcpPrompts
+  const empty = filteredLibrary.length === 0 && filteredMcp.length === 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -402,26 +423,140 @@ const InsertPromptPicker = ({
           placeholder={searchPlaceholder}
         />
         <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
-          {filtered.map((prompt) => (
-            <Button
-              key={prompt.id}
-              type="button"
-              variant="ghost"
-              className="flex flex-col items-start gap-0.5 px-3 py-2 w-full h-auto min-h-10 text-left"
-              onClick={() => {
-                onSelect(prompt.body)
-                onOpenChange(false)
-              }}
-            >
-              <span className="w-full font-medium text-sm truncate">{prompt.name}</span>
-              {prompt.description ? (
-                <span className="w-full text-muted-foreground text-xs truncate">
-                  {prompt.description}
-                </span>
+          {empty ? (
+            <p className="px-3 py-2 text-muted-foreground text-sm">{t("prompt_no_results")}</p>
+          ) : null}
+          {filteredLibrary.length > 0 ? (
+            <>
+              {mcpPrompts.length > 0 ? (
+                <p className="px-3 pt-1 pb-0.5 text-muted-foreground text-xs font-medium">
+                  {librarySectionLabel}
+                </p>
               ) : null}
-            </Button>
-          ))}
+              {filteredLibrary.map((prompt) => (
+                <Button
+                  key={prompt.id}
+                  type="button"
+                  variant="ghost"
+                  className="flex flex-col items-start gap-0.5 px-3 py-2 w-full h-auto min-h-10 text-left"
+                  onClick={() => {
+                    onSelectLibrary(prompt.body)
+                    onOpenChange(false)
+                  }}
+                >
+                  <span className="w-full font-medium text-sm truncate">{prompt.name}</span>
+                  {prompt.description ? (
+                    <span className="w-full text-muted-foreground text-xs truncate">
+                      {prompt.description}
+                    </span>
+                  ) : null}
+                </Button>
+              ))}
+            </>
+          ) : null}
+          {filteredMcp.length > 0 ? (
+            <>
+              <p className="px-3 pt-1 pb-0.5 text-muted-foreground text-xs font-medium">
+                {mcpSectionLabel}
+              </p>
+              {filteredMcp.map((prompt) => (
+                <Button
+                  key={prompt.id}
+                  type="button"
+                  variant="ghost"
+                  className="flex flex-col items-start gap-0.5 px-3 py-2 w-full h-auto min-h-10 text-left"
+                  onClick={() => {
+                    onSelectMcp(prompt)
+                    onOpenChange(false)
+                  }}
+                >
+                  <span className="w-full font-medium text-sm truncate">{prompt.name}</span>
+                  <span className="w-full text-muted-foreground text-xs truncate">
+                    {prompt.description
+                      ? `${prompt.server_name} · ${prompt.description}`
+                      : prompt.server_name}
+                  </span>
+                </Button>
+              ))}
+            </>
+          ) : null}
         </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+type McpPromptArgsDialogProps = {
+  open: boolean
+  prompt: McpPrompt | null
+  values: Record<string, string>
+  submitting: boolean
+  error: string | null
+  onOpenChange: (open: boolean) => void
+  onChangeValue: (name: string, value: string) => void
+  onSubmit: () => void
+}
+
+const McpPromptArgsDialog = ({
+  open,
+  prompt,
+  values,
+  submitting,
+  error,
+  onOpenChange,
+  onChangeValue,
+  onSubmit,
+}: McpPromptArgsDialogProps) => {
+  const { t } = useI18n()
+  if (!prompt) return null
+  const requiredOk = prompt.arguments.every(
+    (arg) => !arg.required || (values[arg.name] ?? "").trim().length > 0
+  )
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("mcp_prompt_args_title")}</DialogTitle>
+          <DialogDescription>
+            {t("mcp_prompt_args_description", {
+              name: prompt.name,
+              server: prompt.server_name,
+            })}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          {prompt.arguments.map((arg) => (
+            <div key={arg.name} className="space-y-1">
+              <label className="text-sm font-medium" htmlFor={`mcp-arg-${arg.name}`}>
+                {arg.name}
+                {arg.required ? " *" : ""}
+              </label>
+              {arg.description ? (
+                <p className="text-muted-foreground text-xs">{arg.description}</p>
+              ) : null}
+              <Input
+                id={`mcp-arg-${arg.name}`}
+                value={values[arg.name] ?? ""}
+                onChange={(event) => onChangeValue(arg.name, event.target.value)}
+                disabled={submitting}
+              />
+            </div>
+          ))}
+          {error ? (
+            <p className="text-destructive text-sm" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            onClick={onSubmit}
+            disabled={!requiredOk || submitting}
+          >
+            {submitting ? t("mcp_prompt_resolving") : t("mcp_prompt_args_submit")}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
@@ -451,6 +586,10 @@ export const ChatPage = () => {
   const [insertPromptOpen, setInsertPromptOpen] = useState(false)
   const [savePromptOpen, setSavePromptOpen] = useState(false)
   const [savePromptBody, setSavePromptBody] = useState("")
+  const [mcpArgsPrompt, setMcpArgsPrompt] = useState<McpPrompt | null>(null)
+  const [mcpArgsValues, setMcpArgsValues] = useState<Record<string, string>>({})
+  const [mcpArgsError, setMcpArgsError] = useState<string | null>(null)
+  const [mcpResolving, setMcpResolving] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     modelStore.get() ?? undefined
   )
@@ -1601,6 +1740,9 @@ export const ChatPage = () => {
       !chats.some((item) => item.id === chatId) &&
       !sessionOwnedChatIds.includes(chatId)
   )
+  const { data: mcpPrompts = [] } = useMcpPrompts(isSharedView ? null : orgId)
+  const usableMcpPrompts = isSharedView ? [] : mcpPrompts
+  const hasInsertablePrompts = prompts.length > 0 || usableMcpPrompts.length > 0
   const slashCommands = useMemo((): ComposerSlashCommand[] => {
     if (isSharedView) return []
     return [
@@ -1930,6 +2072,11 @@ export const ChatPage = () => {
     toolEvents,
     actionInfoLevel,
   ])
+
+  const presentationImageUrls = useMemo(
+    () => collectChatImageUrlMap([...serverMessages, ...toolEvents]),
+    [serverMessages, toolEvents]
+  )
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = messagesContainerRef.current
@@ -2685,6 +2832,57 @@ export const ChatPage = () => {
       el.setSelectionRange(cursor, cursor)
     })
   }, [])
+
+  const resolveMcpPrompt = useCallback(
+    async (prompt: McpPrompt, argumentsByName?: Record<string, string>) => {
+      if (!orgId || mcpResolving) return
+      setMcpResolving(true)
+      setMcpArgsError(null)
+      try {
+        const result = await mcpApi.getPrompt({
+          org_id: orgId,
+          server_id: prompt.server_id,
+          name: prompt.name,
+          arguments: argumentsByName,
+        })
+        if (!result.body.trim()) {
+          throw new Error(t("mcp_prompt_resolve_error"))
+        }
+        insertPromptIntoComposer(result.body)
+        setMcpArgsPrompt(null)
+        setMcpArgsValues({})
+      } catch (err) {
+        const message =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : t("mcp_prompt_resolve_error")
+        setMcpArgsError(message)
+        toast.error(message)
+      } finally {
+        setMcpResolving(false)
+      }
+    },
+    [insertPromptIntoComposer, mcpResolving, orgId, t]
+  )
+
+  const selectMcpPrompt = useCallback(
+    (prompt: McpPrompt) => {
+      if (prompt.arguments.length > 0) {
+        const initial: Record<string, string> = {}
+        for (const arg of prompt.arguments) {
+          initial[arg.name] = ""
+        }
+        setMcpArgsValues(initial)
+        setMcpArgsError(null)
+        setMcpArgsPrompt(prompt)
+        return
+      }
+      void resolveMcpPrompt(prompt)
+    },
+    [resolveMcpPrompt]
+  )
 
   const openInsertPromptPicker = useCallback(() => {
     setInsertPromptOpen(true)
@@ -3722,8 +3920,9 @@ export const ChatPage = () => {
                 attachmentError={attachmentError}
                 inputRef={composerInputRef}
                 showModelSelect
-                hasPrompts={prompts.length > 0}
+                hasPrompts={hasInsertablePrompts}
                 prompts={prompts}
+                mcpPrompts={usableMcpPrompts}
                 slashCommands={slashCommands}
                 onDraftChange={handleComposerDraftChange}
                 modelSelect={
@@ -3928,6 +4127,7 @@ export const ChatPage = () => {
                 onInsertPromptRequest={() => {
                   void openInsertPromptPicker()
                 }}
+                onSelectMcpPrompt={selectMcpPrompt}
                 sendLabel={t("common_send")}
                 stopLabel={t("common_stop")}
                 welcomeTitle={welcomeTitle}
@@ -3943,6 +4143,7 @@ export const ChatPage = () => {
                 writing={cowork.writing}
                 conflict={cowork.conflict}
                 content={cowork.content}
+                imageUrls={presentationImageUrls}
                 resizable={!isMobile}
                 className={isMobile ? "max-w-none border-l-0" : undefined}
                 onClose={cowork.closePanel}
@@ -4077,11 +4278,36 @@ export const ChatPage = () => {
         <InsertPromptPicker
           open={insertPromptOpen}
           prompts={prompts}
+          mcpPrompts={usableMcpPrompts}
           title={t("prompt_insert")}
           description={t("prompt_insert_description")}
           searchPlaceholder={t("prompt_search_placeholder")}
+          librarySectionLabel={t("prompt_library_section")}
+          mcpSectionLabel={t("mcp_prompts_section")}
           onOpenChange={setInsertPromptOpen}
-          onSelect={insertPromptIntoComposer}
+          onSelectLibrary={insertPromptIntoComposer}
+          onSelectMcp={selectMcpPrompt}
+        />
+        <McpPromptArgsDialog
+          open={mcpArgsPrompt != null}
+          prompt={mcpArgsPrompt}
+          values={mcpArgsValues}
+          submitting={mcpResolving}
+          error={mcpArgsError}
+          onOpenChange={(open) => {
+            if (!open && !mcpResolving) {
+              setMcpArgsPrompt(null)
+              setMcpArgsValues({})
+              setMcpArgsError(null)
+            }
+          }}
+          onChangeValue={(name, value) => {
+            setMcpArgsValues((prev) => ({ ...prev, [name]: value }))
+          }}
+          onSubmit={() => {
+            if (!mcpArgsPrompt) return
+            void resolveMcpPrompt(mcpArgsPrompt, mcpArgsValues)
+          }}
         />
         <PromptFormDialog
           open={savePromptOpen}

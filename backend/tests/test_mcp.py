@@ -17,10 +17,50 @@ from app.services.mcp.bridge import (
     parse_mcp_tool_name,
     set_active_mcp_snapshots,
 )
-from app.services.mcp.client import open_mcp_session, truncate_json_text
+from app.services.mcp.client import flatten_mcp_prompt_messages, open_mcp_session, truncate_json_text
 from app.services.mcp.types import McpServerConfig
 from app.services.tools.registry import ToolRegistry
 from app.services.tools.previews import tool_call_action_summary
+
+
+def test_flatten_mcp_prompt_messages_single_user() -> None:
+    body = flatten_mcp_prompt_messages(
+        [{"role": "user", "content": [{"type": "text", "text": "Hello world"}]}]
+    )
+    assert body == "Hello world"
+
+
+def test_flatten_mcp_prompt_messages_single_content_object() -> None:
+    """MCP SDK model_dump emits content as one object, not a list."""
+    body = flatten_mcp_prompt_messages(
+        [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": "Coach this conversation",
+                    "annotations": None,
+                    "meta": None,
+                },
+            }
+        ]
+    )
+    assert body == "Coach this conversation"
+
+
+def test_flatten_mcp_prompt_messages_multi_role() -> None:
+    body = flatten_mcp_prompt_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "Ask this"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Context"}]},
+        ]
+    )
+    assert body == "User:\nAsk this\n\nAssistant:\nContext"
+
+
+def test_flatten_mcp_prompt_messages_string_content() -> None:
+    body = flatten_mcp_prompt_messages([{"role": "system", "content": "Be brief"}])
+    assert body == "System:\nBe brief"
 
 
 def test_validate_slug() -> None:

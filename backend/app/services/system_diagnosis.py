@@ -1264,7 +1264,9 @@ def _check_scraper_dependency() -> DependencyCheck:
 
     def _probe() -> str:
         request = urllib.request.Request(f"{base}/healthz", method="GET")
-        with urllib.request.urlopen(request, timeout=3) as response:
+        # Bypass HTTP(S)_PROXY so Docker-internal SCRAPER_URL still works.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=3) as response:
             if response.status >= 400:
                 raise RuntimeError(f"HTTP {response.status}")
             return f"healthz HTTP {response.status}"
