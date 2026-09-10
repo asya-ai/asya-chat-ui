@@ -60,6 +60,7 @@ import { MessageBubble } from "@/pages/chat/MessageBubble"
 import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 import {
   useAgents,
+  useChat,
   useChatSearch,
   useChatMessages,
   useChats,
@@ -197,6 +198,11 @@ const actionLabelMatchesToolEvent = (
   if (toolEvent.type === "code_execution") {
     return label === "Running code" || label.startsWith("Running code (")
   }
+  if (toolEvent.type === "subagent") {
+    const title = toolEvent.title?.trim()
+    if (title) return label === `Delegating: ${title}`
+    return label === "Delegating to subagent" || label.startsWith("Delegating:")
+  }
   if (toolEvent.type === "url_attachments") {
     return label === "Downloading attachments"
   }
@@ -224,7 +230,8 @@ const isSpecializedToolEvent = (
   toolEvent.type === "url_attachments" ||
   toolEvent.type === "context_summary" ||
   toolEvent.type === "coworking" ||
-  toolEvent.type === "reasoning"
+  toolEvent.type === "reasoning" ||
+  toolEvent.type === "subagent"
 
 const resolveToolEventActionLabel = (
   toolEvent: NonNullable<ChatMessage["tool_event"]>
@@ -238,6 +245,9 @@ const resolveToolEventActionLabel = (
     if (toolEvent.tool_name === "download_attachments") return "Downloading attachments"
     if (toolEvent.tool_name === "code_execution") return "Running code"
     if (toolEvent.tool_name === "extract_pdf") return "Extracting PDF"
+    if (toolEvent.tool_name === "spawn_subagent") return "Delegating to subagent"
+    if (toolEvent.tool_name === "get_subagent_result") return "Checking subagent result"
+    if (toolEvent.tool_name === "await_subagents") return "Waiting for subagents"
     if (toolEvent.tool_name === "start_coworking") return "Opening co-editing"
     if (toolEvent.tool_name === "cowork_write") return "Writing document"
     if (toolEvent.tool_name === "cowork_str_replace") return "Editing document"
@@ -246,6 +256,10 @@ const resolveToolEventActionLabel = (
     return `Running ${toolEvent.tool_name}`
   }
   if (toolEvent.type === "code_execution") return "Running code"
+  if (toolEvent.type === "subagent") {
+    const title = toolEvent.title?.trim()
+    return title ? `Delegating: ${title}` : "Delegating to subagent"
+  }
   if (toolEvent.type === "url_attachments") return "Downloading attachments"
   if (toolEvent.type === "context_summary") return "Summarizing context"
   if (toolEvent.type === "coworking") {
@@ -672,6 +686,12 @@ export const ChatPage = () => {
   const { data: models = [], refetch: refetchModels } = useModels(orgId)
   const { data: agents = [] } = useAgents(orgId)
   const { data: chats = [], isFetched: chatsFetched, refetch: refetchChats } = useChats(orgId)
+  const needsChatDetail =
+    Boolean(chatId) &&
+    chatsFetched &&
+    !chats.some((item) => item.id === chatId) &&
+    !sessionOwnedChatIds.includes(chatId ?? "")
+  const { data: chatDetail } = useChat(needsChatDetail ? chatId ?? null : null)
   const { data: searchedChats = [] } = useChatSearch(orgId, chatSearchDebounced)
   const {
     data: serverMessages = [],
@@ -1712,6 +1732,7 @@ export const ChatPage = () => {
   const activeChat = useMemo(() => {
     const fromList = chats.find((item) => item.id === chatId)
     if (fromList) return fromList
+    if (chatDetail && chatDetail.id === chatId) return chatDetail
     if (chatId && sessionOwnedChatIds.includes(chatId)) {
       return {
         id: chatId,
@@ -1729,16 +1750,23 @@ export const ChatPage = () => {
       }
     }
     return null
-  }, [chatId, chats, chatsFetched, sessionOwnedChatIds])
+  }, [chatId, chats, chatsFetched, chatDetail, sessionOwnedChatIds])
   const activeAgentId = activeAgentIdFromQuery ?? activeChat?.agent_id ?? null
   const isAgentMode = Boolean(activeAgentId)
+  const isSubagentView = Boolean(activeChat?.is_subagent)
+  const { data: parentChat } = useChat(
+    isSubagentView && activeChat?.parent_chat_id ? activeChat.parent_chat_id : null
+  )
   const { data: prompts = [] } = usePrompts(activeAgentId)
   const isSharedView = Boolean(
     chatId &&
       orgId &&
       chatsFetched &&
       !chats.some((item) => item.id === chatId) &&
-      !sessionOwnedChatIds.includes(chatId)
+      !sessionOwnedChatIds.includes(chatId) &&
+      !activeChat?.is_subagent &&
+      !activeChat?.is_incognito &&
+      !(chatDetail && chatDetail.id === chatId)
   )
   const { data: mcpPrompts = [] } = useMcpPrompts(isSharedView ? null : orgId)
   const usableMcpPrompts = isSharedView ? [] : mcpPrompts
@@ -3906,6 +3934,33 @@ export const ChatPage = () => {
                 endRef={messagesEndRef}
                 renderMessage={renderMessage}
               />
+              {isSubagentView ? (
+                <div className="border-t bg-muted/30 px-4 py-3 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t("chat_subagent_banner", {
+                      title:
+                        parentChat?.title?.trim() ||
+                        t("chat_untitled"),
+                    })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{t("chat_subagent_readonly")}</p>
+                  {activeChat?.parent_chat_id ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        void navigate({
+                          to: "/chat/{-$chatId}",
+                          params: { chatId: activeChat.parent_chat_id! },
+                        })
+                      }
+                    >
+                      {t("chat_subagent_back")}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
               <ChatComposer
                 ref={composerRef}
                 placeholder={
@@ -4133,6 +4188,7 @@ export const ChatPage = () => {
                 welcomeTitle={welcomeTitle}
                 centered={isEmptyChat}
               />
+              )}
             </div>
             {cowork.open && cowork.document && (!isMobile || cowork.mobileTab === "document") ? (
               <CoworkPanel

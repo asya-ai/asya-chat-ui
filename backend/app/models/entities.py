@@ -369,10 +369,14 @@ class Chat(SQLModel, table=True):
     user_id: UUID = Field(foreign_key="users.id", index=True)
     model_id: Optional[UUID] = Field(default=None, foreign_key="chat_models.id")
     agent_id: Optional[UUID] = Field(default=None, foreign_key="agents.id", index=True)
+    parent_chat_id: Optional[UUID] = Field(
+        default=None, foreign_key="chats.id", index=True
+    )
     title: Optional[str] = Field(default=None)
     share_token: Optional[str] = Field(default=None, index=True, unique=True)
     is_deleted: bool = Field(default=False, index=True)
     is_incognito: bool = Field(default=False, index=True)
+    is_subagent: bool = Field(default=False, index=True)
     is_pinned: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
     last_activity_at: datetime = Field(

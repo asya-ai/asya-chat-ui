@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { sanitizeMermaidChart } from "./sanitizeMermaid"
+import {
+  isIncompleteMermaidPrefix,
+  sanitizeMermaidChart,
+  splitMermaidCharts,
+} from "./sanitizeMermaid"
 
 describe("sanitizeMermaidChart", () => {
   it("quotes square labels that start with @", () => {
@@ -65,5 +69,41 @@ describe("sanitizeMermaidChart", () => {
   it("normalizes curly quotes around labels", () => {
     const input = "flowchart TD\n  A[\u201Chello & world\u201D]"
     expect(sanitizeMermaidChart(input)).toBe('flowchart TD\n  A["hello #amp; world"]')
+  })
+})
+
+describe("splitMermaidCharts", () => {
+  it("keeps a single diagram intact", () => {
+    const input = `flowchart LR
+  A["PDF / image"] --> B["OCR"]`
+    expect(splitMermaidCharts(input)).toEqual([input])
+  })
+
+  it("splits multiple flowchart roots in one fence", () => {
+    const input = `flowchart LR
+  A["PDF / image"] --> B["Render"]
+  B --> C["OCR"]
+
+flowchart TD
+  A["PDF intake"] --> B{"Born-digital?"}
+  B -->|"Yes"| C["Extract"]`
+    const parts = splitMermaidCharts(input)
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toMatch(/^flowchart LR/)
+    expect(parts[0]).toContain('A["PDF / image"]')
+    expect(parts[1]).toMatch(/^flowchart TD/)
+    expect(parts[1]).toContain("PDF intake")
+  })
+})
+
+describe("isIncompleteMermaidPrefix", () => {
+  it("detects streamed diagram keyword prefixes", () => {
+    expect(isIncompleteMermaidPrefix("flow")).toBe(true)
+    expect(isIncompleteMermaidPrefix("flowc")).toBe(true)
+    expect(isIncompleteMermaidPrefix("seq")).toBe(true)
+    expect(isIncompleteMermaidPrefix("flowchart")).toBe(false)
+    expect(isIncompleteMermaidPrefix("flowchart LR")).toBe(false)
+    expect(isIncompleteMermaidPrefix("graph TD")).toBe(false)
+    expect(isIncompleteMermaidPrefix("not a diagram")).toBe(false)
   })
 })

@@ -96,6 +96,17 @@ from app.services.tools.memory_tools import (
     store_memory,
     remove_memory,
 )
+from app.services.tools.subagent_tools import (
+    SubagentToolContext,
+    await_subagents,
+    get_subagent_result,
+    spawn_subagent,
+)
+from app.services.chat_filespace import (
+    family_chat_ids,
+    filespace_chat_id,
+    resolve_filespace_chat_id,
+)
 from app.services.tools.agent_tools import (
     AgentToolContext,
     list_project_sources,
@@ -454,6 +465,10 @@ def _build_tool_registry(
     user_id: UUID | None = None,
     agent_id: UUID | None = None,
     pending_attachments: list[dict[str, Any]] | None = None,
+    allow_subagents: bool = True,
+    parent_task_id: UUID | None = None,
+    parent_metadata: dict[str, Any] | None = None,
+    allow_cowork: bool = True,
 ) -> ToolRegistry:
     image_model = get_image_model(
         session,
@@ -688,6 +703,10 @@ def _build_tool_registry(
             _download_attachments_handler,
         )
     if exec_policy != "off" and chat_id:
+        chat_row = session.get(Chat, chat_id)
+        filespace_id = filespace_chat_id(chat_row, chat_id=chat_id)
+        family_ids = [str(item) for item in family_chat_ids(session, filespace_id)]
+
         async def _exec_handler(args: dict) -> object:
             code = args.get("code", "")
             if exec_policy == "prompt":
@@ -705,6 +724,8 @@ def _build_tool_registry(
                     org_id=str(org_id),
                     chat_id=str(chat_id),
                     agent_id=str(agent_id) if agent_id else None,
+                    filespace_chat_id=str(filespace_id),
+                    family_chat_ids=family_ids,
                 ),
                 code=code,
                 language=args.get("language", "python"),
@@ -991,7 +1012,7 @@ def _build_tool_registry(
             _read_project_source_handler,
         )
 
-    if chat_id:
+    if chat_id and allow_cowork:
         cowork_ctx = CoworkToolContext(session=session, chat_id=chat_id)
 
         async def _start_coworking_handler(args: dict) -> object:
@@ -1198,13 +1219,142 @@ def _build_tool_registry(
         )
 
     if user_id is not None:
+        mcp_chat_id = chat_id
+        if chat_id is not None:
+            mcp_chat_id = resolve_filespace_chat_id(session, chat_id)
         register_mcp_tools(
             registry,
             session=session,
             org_id=org_id,
             user_id=user_id,
-            chat_id=chat_id,
+            chat_id=mcp_chat_id,
         )
+
+    if allow_subagents and chat_id is not None:
+        parent_chat = session.get(Chat, chat_id)
+        if parent_chat is not None and not parent_chat.is_subagent:
+            subagent_ctx = SubagentToolContext(
+                session=session,
+                parent_chat=parent_chat,
+                parent_task_id=parent_task_id,
+                parent_metadata=parent_metadata,
+                enqueue_generation=_enqueue_generation_task,
+            )
+
+            async def _spawn_subagent_handler(args: dict) -> object:
+                return await spawn_subagent(
+                    subagent_ctx,
+                    prompt=args.get("prompt", ""),
+                    title=args.get("title"),
+                    mode=args.get("mode", "blocking"),
+                    data=args.get("data"),
+                    model_id=args.get("model_id"),
+                )
+
+            registry.register(
+                ToolSpec(
+                    name="spawn_subagent",
+                    description=(
+                        "Spawn a subagent with a fresh context window to handle a "
+                        "self-contained task (deep research, processing a large data chunk, "
+                        "parallel workstreams). Put ALL needed context in prompt/data — the "
+                        "subagent cannot see prior chat history. "
+                        "mode=blocking waits for the summary; mode=background returns "
+                        "immediately (then use get_subagent_result / await_subagents). "
+                        "Subagents share this chat's uploads and code-exec filespace."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "Self-contained task instructions for the subagent",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Short label shown in the chat UI",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["blocking", "background"],
+                                "description": "blocking waits; background returns immediately",
+                            },
+                            "data": {
+                                "type": "string",
+                                "description": (
+                                    "Optional payload or MCP artifact instructions for the "
+                                    "subagent to process"
+                                ),
+                            },
+                            "model_id": {
+                                "type": "string",
+                                "description": "Optional model override; defaults to parent model",
+                            },
+                        },
+                        "required": ["prompt"],
+                    },
+                ),
+                _spawn_subagent_handler,
+            )
+
+            async def _get_subagent_result_handler(args: dict) -> object:
+                return await get_subagent_result(
+                    subagent_ctx, child_chat_id=args.get("child_chat_id", "")
+                )
+
+            registry.register(
+                ToolSpec(
+                    name="get_subagent_result",
+                    description=(
+                        "Fetch status and summary for a previously spawned subagent by "
+                        "child_chat_id."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "child_chat_id": {
+                                "type": "string",
+                                "description": "ID returned by spawn_subagent",
+                            },
+                        },
+                        "required": ["child_chat_id"],
+                    },
+                ),
+                _get_subagent_result_handler,
+            )
+
+            async def _await_subagents_handler(args: dict) -> object:
+                return await await_subagents(
+                    subagent_ctx,
+                    child_chat_ids=args.get("child_chat_ids"),
+                    timeout_seconds=args.get("timeout_seconds"),
+                )
+
+            registry.register(
+                ToolSpec(
+                    name="await_subagents",
+                    description=(
+                        "Wait for one or more background subagents to finish and return "
+                        "their summaries. Omit child_chat_ids to wait for all children "
+                        "of this chat."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "child_chat_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional subset of child chat IDs",
+                            },
+                            "timeout_seconds": {
+                                "type": "number",
+                                "description": "Max seconds to wait per child (default 600)",
+                            },
+                        },
+                    },
+                ),
+                _await_subagents_handler,
+            )
 
     logger.info("Registered tools: %s", [tool.name for tool in registry.list_specs()])
     return registry
@@ -1828,6 +1978,7 @@ def _is_specialized_tool_event(payload: dict[str, Any]) -> bool:
         "context_summary",
         "coworking",
         "reasoning",
+        "subagent",
     }
 
 
@@ -1855,6 +2006,11 @@ def _tool_event_action_label(payload: dict[str, Any]) -> str:
         return "Running tool"
     if event_type == "code_execution":
         return "Running code"
+    if event_type == "subagent":
+        title = payload.get("title")
+        if isinstance(title, str) and title.strip():
+            return f"Delegating: {title.strip()}"
+        return "Delegating to subagent"
     if event_type == "url_attachments":
         return "Downloading attachments"
     if event_type == "context_summary":
@@ -1893,6 +2049,11 @@ def _action_label_matches_tool_event(label: str, payload: dict[str, Any]) -> boo
         return False
     if event_type == "code_execution":
         return label == "Running code" or label.startswith("Running code (")
+    if event_type == "subagent":
+        title = payload.get("title")
+        if isinstance(title, str) and title.strip():
+            return label == f"Delegating: {title.strip()}"
+        return label == "Delegating to subagent" or label.startswith("Delegating:")
     if event_type == "url_attachments":
         return label == "Downloading attachments"
     if event_type == "context_summary":
@@ -2799,8 +2960,10 @@ class ChatRead(BaseModel):
     title: str | None
     model_id: str | None
     agent_id: str | None
+    parent_chat_id: str | None = None
     is_shared: bool = False
     is_incognito: bool = False
+    is_subagent: bool = False
     is_pinned: bool = False
     created_at: datetime
     last_activity_at: datetime
@@ -2812,8 +2975,10 @@ def _chat_read(chat: Chat) -> ChatRead:
         title=chat.title,
         model_id=str(chat.model_id) if chat.model_id else None,
         agent_id=str(chat.agent_id) if chat.agent_id else None,
+        parent_chat_id=str(chat.parent_chat_id) if chat.parent_chat_id else None,
         is_shared=bool(chat.share_token),
         is_incognito=bool(chat.is_incognito),
+        is_subagent=bool(chat.is_subagent),
         is_pinned=bool(chat.is_pinned),
         created_at=chat.created_at,
         last_activity_at=chat.last_activity_at or chat.created_at,
@@ -3677,9 +3842,45 @@ def list_chats(
             Chat.user_id == current_user.id,
             Chat.is_deleted.is_(False),
             Chat.is_incognito.is_(False),
+            Chat.is_subagent.is_(False),
         )
     ).all()
     return [_chat_read(chat) for chat in chats]
+
+
+@router.get("/{chat_id}/subagents", response_model=list[ChatRead])
+def list_subagents(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    if chat.user_id != current_user.id and not current_user.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    children = session.exec(
+        select(Chat)
+        .where(
+            Chat.parent_chat_id == chat.id,
+            Chat.is_subagent.is_(True),
+            Chat.is_deleted.is_(False),
+        )
+        .order_by(Chat.created_at.desc())
+    ).all()
+    return [_chat_read(child) for child in children]
 
 
 @router.get("/search", response_model=list[ChatRead])
@@ -3709,6 +3910,7 @@ def search_chats(
         Chat.user_id == current_user.id,
         Chat.is_deleted.is_(False),
         Chat.is_incognito.is_(False),
+        Chat.is_subagent.is_(False),
     ]
     if org_uuid:
         base_chat_filters.append(Chat.org_id == org_uuid)
@@ -3756,6 +3958,33 @@ def search_chats(
         .limit(capped_limit)
     ).all()
     return [_chat_read(chat) for chat, _rank in chats]
+
+
+@router.get("/{chat_id}", response_model=ChatRead)
+def get_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatRead:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    is_owner = chat.user_id == current_user.id
+    if not is_owner and not current_user.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    return _chat_read(chat)
 
 
 @router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
@@ -4057,6 +4286,7 @@ async def upload_chat_attachment(
         upload_id=upload.id,
         file_name=file_name,
         data=raw,
+        filespace_chat_id=resolve_filespace_chat_id(session, chat.id),
     )
     session.add(upload)
     session.commit()
@@ -4511,6 +4741,23 @@ def delete_chat(
     )
     chat.is_deleted = True
     session.add(chat)
+    children = session.exec(
+        select(Chat).where(
+            Chat.parent_chat_id == chat.id,
+            Chat.is_deleted.is_(False),
+        )
+    ).all()
+    for child in children:
+        child.is_deleted = True
+        session.add(child)
+        try:
+            from app.services.agents.chat_index import delete_project_chat_source
+
+            delete_project_chat_source(session, child.id)
+        except Exception:
+            logger.exception(
+                "Failed to delete project chat index for subagent chat_id=%s", child.id
+            )
     try:
         from app.services.agents.chat_index import delete_project_chat_source
 
@@ -4614,6 +4861,11 @@ def share_chat(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incognito chats cannot be shared",
+        )
+    if chat.is_subagent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Subagent chats cannot be shared",
         )
     if not chat.share_token:
         chat.share_token = secrets.token_urlsafe(24)

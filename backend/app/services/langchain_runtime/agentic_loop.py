@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from contextvars import ContextVar
+from typing import Any, Awaitable, Callable
 
 import anyio
 from json_repair import loads as repair_json_loads
@@ -22,6 +23,33 @@ logger = logging.getLogger(__name__)
 
 WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
 WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
+
+ToolEventEmitter = Callable[[dict[str, Any]], Awaitable[None]]
+_tool_event_emitter: ContextVar[ToolEventEmitter | None] = ContextVar(
+    "tool_event_emitter", default=None
+)
+_current_tool_call_id: ContextVar[str | None] = ContextVar(
+    "current_tool_call_id", default=None
+)
+_tool_emit_lock: ContextVar[anyio.Lock | None] = ContextVar(
+    "tool_emit_lock", default=None
+)
+
+
+async def emit_tool_event_from_tool(payload: dict[str, Any]) -> None:
+    """Allow tools to push mid-flight UI events (e.g. subagent child id)."""
+    emitter = _tool_event_emitter.get()
+    if emitter is None:
+        return
+    call_id = _current_tool_call_id.get()
+    if call_id and "id" not in payload:
+        payload = {**payload, "id": call_id}
+    lock = _tool_emit_lock.get()
+    if lock is not None:
+        async with lock:
+            await emitter(payload)
+    else:
+        await emitter(payload)
 
 
 def _merge_chat_usage(base: ChatUsage | None, extra: ChatUsage | None) -> ChatUsage | None:
@@ -238,6 +266,10 @@ async def run_agentic_loop_langchain(
     async def _emit_tool_event(payload: dict[str, Any]) -> None:
         if tool_event_sender:
             await tool_event_sender.send(payload)
+
+    # Tools (e.g. spawn_subagent) can emit mid-flight UI updates while running.
+    _tool_event_emitter.set(_emit_tool_event)
+    _tool_emit_lock.set(anyio.Lock())
 
     emitted_text_parts: list[str] = []
 
@@ -473,7 +505,8 @@ async def run_agentic_loop_langchain(
             }
         )
 
-        emit_lock = anyio.Lock()
+        emit_lock = _tool_emit_lock.get() or anyio.Lock()
+        _tool_emit_lock.set(emit_lock)
 
         async def _run_one_tool_call(call: Any) -> tuple[Any, ToolResult, dict[str, Any], ChatUsage | None]:
             call_arguments = call.arguments if isinstance(call.arguments, dict) else {}
@@ -487,6 +520,18 @@ async def run_agentic_loop_langchain(
                             "type": "code_execution",
                             "id": call.id,
                             "code": call_arguments.get("code", ""),
+                            "output": {},
+                        }
+                    )
+                elif call.name == "spawn_subagent":
+                    await _emit_tool_event(
+                        {
+                            "type": "subagent",
+                            "id": call.id,
+                            "title": call_arguments.get("title"),
+                            "mode": call_arguments.get("mode") or "blocking",
+                            "prompt_preview": str(call_arguments.get("prompt") or "")[:240],
+                            "status": "starting",
                             "output": {},
                         }
                     )
@@ -538,21 +583,25 @@ async def run_agentic_loop_langchain(
                             "output": {"status": "writing", "tool_name": call.name},
                         }
                     )
-                await _emit_tool_event(
-                    {
-                        "type": "tool_call",
-                        "id": f"call:{call.id}",
-                        "tool_name": call.name,
-                        "state": "start",
-                        "input_preview": input_preview,
-                        "action_summary": action_summary,
-                        "output": {},
-                    }
-                )
+                # Specialized tools render their own cards — skip the generic
+                # tool_call JSON dump for spawn_subagent.
+                if call.name != "spawn_subagent":
+                    await _emit_tool_event(
+                        {
+                            "type": "tool_call",
+                            "id": f"call:{call.id}",
+                            "tool_name": call.name,
+                            "state": "start",
+                            "input_preview": input_preview,
+                            "action_summary": action_summary,
+                            "output": {},
+                        }
+                    )
 
             result = ToolResult(name=call.name, output={})
             answer_usage: ChatUsage | None = None
             tool_output: dict[str, Any] = {}
+            call_id_token = _current_tool_call_id.set(str(call.id) if call.id else None)
             try:
                 result = await executor.execute(call.name, call_arguments)
                 if (
@@ -590,6 +639,8 @@ async def run_agentic_loop_langchain(
                 )
                 tool_output = {"error": f"{type(exc).__name__}: {exc}"}
                 result = ToolResult(name=call.name, output=tool_output)
+            finally:
+                _current_tool_call_id.reset(call_id_token)
 
             cowork_updated_payloads: list[dict[str, Any]] = []
             extra_model_usage: dict[str, Any] | None = None
@@ -679,6 +730,25 @@ async def run_agentic_loop_langchain(
                                 },
                             }
                         )
+                elif call.name == "spawn_subagent":
+                    await _emit_tool_event(
+                        {
+                            "type": "subagent",
+                            "id": call.id,
+                            "title": tool_output.get("title")
+                            or call_arguments.get("title"),
+                            "mode": tool_output.get("mode")
+                            or call_arguments.get("mode")
+                            or "blocking",
+                            "child_chat_id": tool_output.get("child_chat_id"),
+                            "task_id": tool_output.get("task_id"),
+                            "status": tool_output.get("status")
+                            or ("error" if is_error else "completed"),
+                            "summary": tool_output.get("summary"),
+                            "prompt_preview": str(call_arguments.get("prompt") or "")[:240],
+                            "output": tool_output,
+                        }
+                    )
                 elif call.name == "download_attachments":
                     urls = call_arguments.get("urls") or call_arguments.get("url")
                     if isinstance(urls, str):
@@ -733,32 +803,33 @@ async def run_agentic_loop_langchain(
                                 },
                             }
                         )
-                await _emit_tool_event(
-                    {
-                        "type": "tool_call",
-                        "id": f"call:{call.id}",
-                        "tool_name": call.name,
-                        "state": "end",
-                        "input_preview": input_preview,
-                        "action_summary": action_summary,
-                        "output": {
-                            "status": "error" if is_error else "ok",
-                            "result_preview": result_preview,
-                            "raw_output": tool_output,
-                            "error": str(error_text) if error_text is not None else None,
-                            "attachments": [
-                                {
-                                    "file_name": item.get("file_name"),
-                                    "content_type": item.get("content_type"),
-                                    "data_base64": item.get("data_base64"),
-                                }
-                                for item in (result.attachments or [])
-                                if isinstance(item, dict) and item.get("data_base64")
-                            ]
-                            or None,
-                        },
-                    }
-                )
+                if call.name != "spawn_subagent":
+                    await _emit_tool_event(
+                        {
+                            "type": "tool_call",
+                            "id": f"call:{call.id}",
+                            "tool_name": call.name,
+                            "state": "end",
+                            "input_preview": input_preview,
+                            "action_summary": action_summary,
+                            "output": {
+                                "status": "error" if is_error else "ok",
+                                "result_preview": result_preview,
+                                "raw_output": tool_output,
+                                "error": str(error_text) if error_text is not None else None,
+                                "attachments": [
+                                    {
+                                        "file_name": item.get("file_name"),
+                                        "content_type": item.get("content_type"),
+                                        "data_base64": item.get("data_base64"),
+                                    }
+                                    for item in (result.attachments or [])
+                                    if isinstance(item, dict) and item.get("data_base64")
+                                ]
+                                or None,
+                            },
+                        }
+                    )
             return call, result, tool_output, answer_usage, extra_model_usage
 
         call_results: list[

@@ -733,6 +733,9 @@ export const chatApi = {
       { method: "DELETE" }
     ),
   list: (orgId: string) => apiFetch<Chat[]>(`/chats?org_id=${orgId}`),
+  get: (chatId: string) => apiFetch<Chat>(`/chats/${chatId}`),
+  listSubagents: (chatId: string) =>
+    apiFetch<Chat[]>(`/chats/${chatId}/subagents`),
   search: (query: string, limit = 50) => {
     const params = new URLSearchParams({
       q: query,

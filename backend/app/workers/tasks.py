@@ -100,7 +100,7 @@ class GenerationCancelledError(Exception):
 
 def _queue_project_chat_index(session: Session, chat: Chat) -> None:
     """Refresh semantic index for a project chat after a successful turn."""
-    if not chat.agent_id or chat.is_incognito or chat.is_deleted:
+    if not chat.agent_id or chat.is_incognito or chat.is_deleted or chat.is_subagent:
         return
     try:
         source = upsert_project_chat_source(session, chat)
@@ -715,6 +715,7 @@ async def _run_generation(task_id: UUID) -> None:
             requested_web_enabled,
         )
         pending_tool_attachments: list[dict[str, Any]] = []
+        is_subagent_chat = bool(chat.is_subagent)
         tool_registry = _build_tool_registry(
             session,
             chat.org_id,
@@ -730,13 +731,26 @@ async def _run_generation(task_id: UUID) -> None:
                 )
             ),
             locale=task.metadata_json.get("locale") if task.metadata_json else None,
-            memory_enabled=chat_user.memory_enabled if chat_user else False,
+            memory_enabled=(
+                False
+                if is_subagent_chat or chat.is_incognito
+                else (chat_user.memory_enabled if chat_user else False)
+            ),
             user_id=chat.user_id,
             agent_id=chat.agent_id,
             pending_attachments=pending_tool_attachments,
+            allow_subagents=not is_subagent_chat,
+            parent_task_id=task.id,
+            parent_metadata=task.metadata_json if isinstance(task.metadata_json, dict) else None,
+            allow_cowork=not is_subagent_chat,
         )
         user_memories = None
-        if chat_user and chat_user.memory_enabled:
+        if (
+            not is_subagent_chat
+            and not chat.is_incognito
+            and chat_user
+            and chat_user.memory_enabled
+        ):
             mem_rows = session.scalars(
                 select(UserMemory)
                 .where(UserMemory.user_id == chat_user.id)
@@ -746,15 +760,16 @@ async def _run_generation(task_id: UUID) -> None:
                 user_memories = [{"id": str(m.id), "content": m.content} for m in mem_rows]
         title_task: asyncio.Task[None] | None = None
         try:
-            title_task = asyncio.create_task(
-                _run_chat_title_job(
-                    chat_id=chat.id,
-                    model_id=model.id,
-                    task_id=task.id,
-                    sequence_ref=sequence_ref,
-                    assistant_message_id=assistant_message.id,
+            if not is_subagent_chat:
+                title_task = asyncio.create_task(
+                    _run_chat_title_job(
+                        chat_id=chat.id,
+                        model_id=model.id,
+                        task_id=task.id,
+                        sequence_ref=sequence_ref,
+                        assistant_message_id=assistant_message.id,
+                    )
                 )
-            )
             messages = _build_provider_messages(
                 history=history,
                 attachments_by_message=attachments_by_message,

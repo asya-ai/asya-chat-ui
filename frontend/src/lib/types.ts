@@ -120,8 +120,10 @@ export type Chat = {
   title?: string | null
   model_id?: string | null
   agent_id?: string | null
+  parent_chat_id?: string | null
   is_shared?: boolean
   is_incognito?: boolean
+  is_subagent?: boolean
   is_pinned?: boolean
   created_at: string
   last_activity_at: string
@@ -304,6 +306,27 @@ export type ReasoningToolEvent = {
   content: string
 }
 
+export type SubagentToolEvent = {
+  type: "subagent"
+  id?: string
+  title?: string | null
+  mode?: "blocking" | "background" | string | null
+  child_chat_id?: string | null
+  task_id?: string | null
+  status?: string | null
+  summary?: string | null
+  prompt_preview?: string | null
+  output?: {
+    status?: string | null
+    error?: string | null
+    summary?: string | null
+    child_chat_id?: string | null
+    task_id?: string | null
+    title?: string | null
+    mode?: string | null
+  } | null
+}
+
 export type ToolEvent =
   | CodeExecutionToolEvent
   | ContextSummaryToolEvent
@@ -311,6 +334,7 @@ export type ToolEvent =
   | ToolCallToolEvent
   | CoworkingToolEvent
   | ReasoningToolEvent
+  | SubagentToolEvent
 
 export type GenerationStatus =
   | "queued"

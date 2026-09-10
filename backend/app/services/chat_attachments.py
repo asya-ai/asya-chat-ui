@@ -8,6 +8,7 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from app.models.entities import ChatMessageAttachment
+from app.services.chat_filespace import resolve_filespace_chat_id
 from app.services.file_storage import (
     attachment_bytes,
     attachment_size_bytes,
@@ -39,12 +40,14 @@ def persist_attachment_bytes(
     )
     session.add(attachment)
     session.flush()
+    filespace_id = resolve_filespace_chat_id(session, chat_id)
     attachment.file_path = store_chat_attachment_bytes(
         chat_id=chat_id,
         message_id=message_id,
         attachment_id=attachment.id,
         file_name=file_name,
         data=data,
+        filespace_chat_id=filespace_id,
     )
     return attachment
 

@@ -40,10 +40,12 @@ def write_chat_upload_file(
     file_name: str,
     data: bytes | None = None,
     data_base64: str | None = None,
+    filespace_chat_id: UUID | None = None,
 ) -> tuple[str, int]:
     payload = data if data is not None else base64.b64decode(data_base64 or "")
     safe_name = _sanitize_filename(file_name)
-    relative_path = f"chats/{chat_id}/uploads/{upload_id}_{safe_name}"
+    root_id = filespace_chat_id or chat_id
+    relative_path = f"chats/{root_id}/uploads/{upload_id}_{safe_name}"
     return _write_bytes(relative_path, payload)
 
 
@@ -55,11 +57,13 @@ def write_chat_attachment_file(
     file_name: str,
     data: bytes | None = None,
     data_base64: str | None = None,
+    filespace_chat_id: UUID | None = None,
 ) -> tuple[str, int]:
     payload = data if data is not None else base64.b64decode(data_base64 or "")
     safe_name = _sanitize_filename(file_name)
+    root_id = filespace_chat_id or chat_id
     relative_path = (
-        f"chats/{chat_id}/attachments/{message_id}/{attachment_id}_{safe_name}"
+        f"chats/{root_id}/attachments/{message_id}/{attachment_id}_{safe_name}"
     )
     return _write_bytes(relative_path, payload)
 
@@ -141,6 +145,7 @@ def store_chat_attachment_bytes(
     attachment_id: UUID,
     file_name: str,
     data: bytes,
+    filespace_chat_id: UUID | None = None,
 ) -> str:
     relative_path, _size = write_chat_attachment_file(
         chat_id=chat_id,
@@ -148,6 +153,7 @@ def store_chat_attachment_bytes(
         attachment_id=attachment_id,
         file_name=file_name,
         data=data,
+        filespace_chat_id=filespace_chat_id,
     )
     return relative_path
 
@@ -158,11 +164,13 @@ def store_chat_upload_bytes(
     upload_id: UUID,
     file_name: str,
     data: bytes,
+    filespace_chat_id: UUID | None = None,
 ) -> str:
     relative_path, _size = write_chat_upload_file(
         chat_id=chat_id,
         upload_id=upload_id,
         file_name=file_name,
         data=data,
+        filespace_chat_id=filespace_chat_id,
     )
     return relative_path

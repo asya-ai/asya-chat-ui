@@ -48,6 +48,16 @@ def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None)
         return mcp_summary
     if name == "mcp_data_list":
         return "Listing stored MCP data"
+    if name == "spawn_subagent":
+        title = str(args.get("title") or "").strip()
+        mode = str(args.get("mode") or "blocking").strip().lower()
+        if title:
+            return f"Delegating: {title}" + (f" ({mode})" if mode == "background" else "")
+        return "Delegating to subagent" + (f" ({mode})" if mode == "background" else "")
+    if name == "get_subagent_result":
+        return "Checking subagent result"
+    if name == "await_subagents":
+        return "Waiting for subagents"
     if name == "mcp_data_get":
         artifact = str(args.get("artifact_id") or "").strip()
         path = str(args.get("path") or "").strip()

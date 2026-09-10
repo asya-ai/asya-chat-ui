@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import type { ComponentProps, CSSProperties } from "react"
+import { useNavigate } from "@tanstack/react-router"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -35,7 +36,12 @@ import { jsPDF } from "jspdf"
 import { exportCoworkMarkdown } from "@/pages/chat/exportCoworkMarkdown"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
-import { sanitizeMermaidChart } from "@/lib/sanitizeMermaid"
+import {
+  isIncompleteMermaidPrefix,
+  MERMAID_DIAGRAM_START,
+  sanitizeMermaidChart,
+  splitMermaidCharts,
+} from "@/lib/sanitizeMermaid"
 import type { ActionInfoLevel } from "@/lib/storage"
 import type {
   ChatMessage,
@@ -152,9 +158,6 @@ const loadMermaid = async () => {
   }
   return mermaid
 }
-
-const MERMAID_START_PATTERN =
-  /^(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|sankey-beta|block-beta|xychart-beta|C4Context)\b/i
 
 const normalizeMathContent = (content: string) => {
   const lines = content.split(/\r?\n/)
@@ -307,22 +310,27 @@ const completeStreamingMarkdownTables = (markdown: string): string => {
 
 const toMermaidChart = (content: string, language?: string | null): string | null => {
   const normalize = (chart: string) => sanitizeMermaidChart(chart.trim())
+  const readyChart = (chart: string): string | null => {
+    const trimmed = chart.trim()
+    if (!trimmed) return null
+    // Defer while the model is still streaming the diagram keyword ("flow" → "flowchart").
+    if (isIncompleteMermaidPrefix(trimmed)) return null
+    return normalize(trimmed)
+  }
 
   if (language?.toLowerCase() === "mermaid") {
-    const chart = content.trim()
-    return chart ? normalize(chart) : null
+    return readyChart(content)
   }
 
   const trimmed = content.trim()
   if (!trimmed) return null
 
   if (/^mermaid\s*[\r\n]+/i.test(trimmed)) {
-    const chart = trimmed.replace(/^mermaid\s*[\r\n]+/i, "").trim()
-    return chart ? normalize(chart) : null
+    return readyChart(trimmed.replace(/^mermaid\s*[\r\n]+/i, ""))
   }
 
-  if (MERMAID_START_PATTERN.test(trimmed)) {
-    return normalize(trimmed)
+  if (MERMAID_DIAGRAM_START.test(trimmed)) {
+    return readyChart(trimmed)
   }
 
   return null
@@ -794,6 +802,7 @@ const ToolEventDetails = ({
   toolEvent: ToolEvent
   t: I18nContextValue["t"]
 }) => {
+  const navigate = useNavigate()
   if (toolEvent.type === "code_execution") {
     const outputFiles = (toolEvent.output?.output_files ?? []).filter(
       (file): file is NonNullable<typeof file> =>
@@ -848,6 +857,56 @@ const ToolEventDetails = ({
             </div>
           </div>
         ) : null}
+      </div>
+    )
+  }
+  if (toolEvent.type === "subagent") {
+    const status = toolEvent.status || toolEvent.output?.status || "running"
+    const childId = toolEvent.child_chat_id || toolEvent.output?.child_chat_id
+    const title = toolEvent.title || toolEvent.output?.title || t("chat_subagent_default_title")
+    const summary = toolEvent.summary || toolEvent.output?.summary
+    const mode = toolEvent.mode || toolEvent.output?.mode || "blocking"
+    return (
+      <div className="space-y-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-sm text-foreground">{title}</span>
+          <span className="rounded-md border px-1.5 py-0.5 text-[10px] uppercase opacity-70">
+            {mode}
+          </span>
+          <span className="rounded-md border px-1.5 py-0.5 text-[10px] uppercase opacity-70">
+            {status}
+          </span>
+        </div>
+        {summary ? (
+          <p className="text-muted-foreground whitespace-pre-wrap wrap-break-word line-clamp-6">
+            {summary}
+          </p>
+        ) : toolEvent.prompt_preview ? (
+          <p className="text-muted-foreground whitespace-pre-wrap wrap-break-word line-clamp-4">
+            {toolEvent.prompt_preview}
+          </p>
+        ) : null}
+        {toolEvent.output?.error ? (
+          <p className="text-destructive/90">
+            {t("common_error")}: {toolEvent.output.error}
+          </p>
+        ) : null}
+        {childId ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-primary hover:underline"
+            onClick={() =>
+              void navigate({
+                to: "/chat/{-$chatId}",
+                params: { chatId: childId },
+              })
+            }
+          >
+            {t("chat_subagent_open")}
+          </button>
+        ) : (
+          <p className="text-muted-foreground opacity-80">{t("chat_subagent_opening_soon")}</p>
+        )}
       </div>
     )
   }
@@ -1134,16 +1193,25 @@ const MermaidDiagram = ({
       if (!container) return
       container.innerHTML = ""
       setRenderError(null)
+      if (isIncompleteMermaidPrefix(chart)) return
+      const charts = splitMermaidCharts(chart)
+      if (charts.length === 0) return
       try {
         const mermaid = await loadMermaid()
-        const chartToRender = sanitizeMermaidChart(chart)
-        const { svg, bindFunctions } = await mermaid.render(
-          nextMermaidRenderId(),
-          chartToRender
-        )
-        if (cancelled || !containerRef.current) return
-        containerRef.current.innerHTML = svg
-        bindFunctions?.(containerRef.current)
+        for (const part of charts) {
+          if (cancelled) return
+          const chartToRender = sanitizeMermaidChart(part)
+          const wrap = document.createElement("div")
+          wrap.className = "max-w-full [&_svg]:max-w-none [&_svg]:h-auto overflow-x-auto"
+          const { svg, bindFunctions } = await mermaid.render(
+            nextMermaidRenderId(),
+            chartToRender
+          )
+          if (cancelled || !containerRef.current) return
+          wrap.innerHTML = svg
+          containerRef.current.appendChild(wrap)
+          bindFunctions?.(wrap)
+        }
       } catch (error) {
         if (cancelled) return
         setRenderError(
@@ -1183,10 +1251,7 @@ const MermaidDiagram = ({
         copiedLabel={copiedLabel}
         className="top-2 right-2 z-10 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
       />
-      <div
-        ref={containerRef}
-        className="max-w-full [&_svg]:max-w-none [&_svg]:h-auto overflow-x-auto"
-      />
+      <div ref={containerRef} className="flex flex-col gap-3" />
     </div>
   )
 }

@@ -67,6 +67,7 @@ async def search_past_chats(
         Chat.user_id == context.user_id,
         Chat.is_deleted.is_(False),
         Chat.is_incognito.is_(False),
+        Chat.is_subagent.is_(False),
     ]
     if context.agent_id is not None:
         base_chat_filters.append(Chat.agent_id == context.agent_id)

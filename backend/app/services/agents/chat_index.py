@@ -104,7 +104,7 @@ def delete_project_chat_source(session: Session, chat_id: UUID) -> None:
 
 def upsert_project_chat_source(session: Session, chat: Chat) -> AgentSource | None:
     """Create/update a queued chat source for semantic indexing. Caller commits + enqueues."""
-    if not chat.agent_id or chat.is_deleted or chat.is_incognito:
+    if not chat.agent_id or chat.is_deleted or chat.is_incognito or chat.is_subagent:
         return None
 
     transcript = build_chat_transcript(session, chat.id)
@@ -178,6 +178,7 @@ def enqueue_missing_project_chat_indexes(
             Chat.user_id == user_id,
             Chat.is_deleted.is_(False),
             Chat.is_incognito.is_(False),
+            Chat.is_subagent.is_(False),
         )
         .order_by(Chat.last_activity_at.desc())
         .limit(limit * 3)

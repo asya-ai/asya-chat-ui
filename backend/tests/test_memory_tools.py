@@ -52,6 +52,7 @@ async def test_search_past_chats_excludes_the_active_conversation():
     assert order_clause.index("LAST_ACTIVITY_AT") < order_clause.index("DESC")
     assert "agent_id IS NULL" in sql
     assert "is_incognito" in sql or "IS_INCOGNITO" in sql.upper()
+    assert "is_subagent" in sql or "IS_SUBAGENT" in sql.upper()
 
 
 @pytest.mark.asyncio

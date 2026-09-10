@@ -150,6 +150,8 @@ class CodeExecutionContext:
     org_id: str
     chat_id: str
     agent_id: str | None = None
+    filespace_chat_id: str | None = None
+    family_chat_ids: list[str] | None = None
 
 
 def _collect_imports(code: str) -> set[str]:
@@ -851,6 +853,17 @@ async def run_code_execution(
         )
 
     chat_uuid = UUID(context.chat_id)
+    filespace_id = context.filespace_chat_id or context.chat_id
+    family_ids: list[UUID] = []
+    if context.family_chat_ids:
+        for raw_id in context.family_chat_ids:
+            try:
+                family_ids.append(UUID(str(raw_id)))
+            except ValueError:
+                continue
+    if not family_ids:
+        family_ids = [chat_uuid]
+
     cowork_docs = list_documents(context.session, chat_uuid)
     try:
         _validate_imports(code, extra_allowed=_cowork_module_names(cowork_docs))
@@ -858,7 +871,7 @@ async def run_code_execution(
         return ToolResult(name="code_execution", output={"error": str(exc)})
 
     message_ids = context.session.exec(
-        select(ChatMessage.id).where(ChatMessage.chat_id == chat_uuid)
+        select(ChatMessage.id).where(ChatMessage.chat_id.in_(family_ids))
     ).all()
     attachments = []
     if message_ids:
@@ -876,7 +889,7 @@ async def run_code_execution(
             host_inputs_dir,
             host_work_dir,
             host_outputs_dir,
-        ) = _prepare_run_dirs(context.chat_id)
+        ) = _prepare_run_dirs(filespace_id)
     except ValueError as exc:
         return ToolResult(name="code_execution", output={"error": str(exc)})
     inputs = _write_inputs(attachments, inputs_dir)
@@ -914,7 +927,7 @@ async def run_code_execution(
     cowork_files, cowork_path_to_id, cowork_snapshots = _write_cowork_workspace(
         cowork_docs, work_dir
     )
-    mcp_data_files = stage_mcp_data_for_exec(context.chat_id, work_dir)
+    mcp_data_files = stage_mcp_data_for_exec(filespace_id, work_dir)
 
     code_path = work_dir / "main.py"
     code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
