@@ -3828,33 +3828,6 @@ export const ChatPage = () => {
           />
         ) : (
           <div className="flex flex-col flex-1 min-w-0 min-h-0">
-            {cowork.open && cowork.document && isMobile ? (
-              <div className="flex items-center gap-1 px-3 py-2 border-border border-b shrink-0">
-                <div className="flex items-center gap-1 bg-muted p-0.5 rounded-lg">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={cowork.mobileTab === "chat" ? "secondary" : "ghost"}
-                    className="px-2.5 h-7 text-xs"
-                    onClick={() => cowork.setMobileTab("chat")}
-                  >
-                    Chat
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={cowork.mobileTab === "document" ? "secondary" : "ghost"}
-                    className="px-2.5 h-7 text-xs"
-                    onClick={() => cowork.setMobileTab("document")}
-                  >
-                    Document
-                    {cowork.document.version > cowork.document.last_assistant_version ? (
-                      <span className="inline-block bg-amber-500 ml-1 rounded-full size-1.5" />
-                    ) : null}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
             <div className="flex flex-1 min-w-0 min-h-0">
             <div
               className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
@@ -3866,6 +3839,31 @@ export const ChatPage = () => {
                 <div className="flex items-center gap-2 min-w-0">
                   {mobileSidebar}
                   {desktopSidebarToggle}
+                  {isMobile && cowork.open && cowork.document ? (
+                    <div className="flex items-center gap-1 bg-muted p-0.5 rounded-lg shrink-0">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={cowork.mobileTab === "chat" ? "secondary" : "ghost"}
+                        className="px-2.5 h-7 text-xs"
+                        onClick={() => cowork.setMobileTab("chat")}
+                      >
+                        Chat
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={cowork.mobileTab === "document" ? "secondary" : "ghost"}
+                        className="px-2.5 h-7 text-xs"
+                        onClick={() => cowork.setMobileTab("document")}
+                      >
+                        Document
+                        {cowork.document.version > cowork.document.last_assistant_version ? (
+                          <span className="inline-block bg-amber-500 ml-1 rounded-full size-1.5" />
+                        ) : null}
+                      </Button>
+                    </div>
+                  ) : null}
                   {isAgentMode ? (
                     <div className="flex items-center gap-3 text-muted-foreground text-sm">
                       <span>
@@ -4202,6 +4200,16 @@ export const ChatPage = () => {
                 imageUrls={presentationImageUrls}
                 resizable={!isMobile}
                 className={isMobile ? "max-w-none border-l-0" : undefined}
+                mobileTabs={
+                  isMobile
+                    ? {
+                        value: cowork.mobileTab,
+                        onChange: cowork.setMobileTab,
+                        documentDirty:
+                          cowork.document.version > cowork.document.last_assistant_version,
+                      }
+                    : undefined
+                }
                 onClose={cowork.closePanel}
                 onContentChange={cowork.handleContentChange}
                 onDownload={(options) => {

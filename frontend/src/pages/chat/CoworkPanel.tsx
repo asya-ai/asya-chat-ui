@@ -55,6 +55,12 @@ type CoworkPanelProps = {
   content: string
   resizable?: boolean
   className?: string
+  /** When set, Chat/Document switch renders inside the panel nav (mobile). */
+  mobileTabs?: {
+    value: "chat" | "document"
+    onChange: (tab: "chat" | "document") => void
+    documentDirty?: boolean
+  }
   onClose: () => void
   onContentChange: (value: string) => void
   onDownload: (options?: {
@@ -78,6 +84,7 @@ export const CoworkPanel = ({
   content,
   resizable = false,
   className,
+  mobileTabs,
   imageUrls,
   onClose,
   onContentChange,
@@ -211,10 +218,61 @@ export const CoworkPanel = ({
       ) : null}
       <div className="flex h-15 shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <FormatIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <h2 className="truncate text-sm font-semibold leading-5">{localTitle}</h2>
+          {mobileTabs ? (
+            <div className="flex items-center gap-1 bg-muted p-0.5 rounded-lg shrink-0">
+              <Button
+                type="button"
+                size="sm"
+                variant={mobileTabs.value === "chat" ? "secondary" : "ghost"}
+                className="px-2.5 h-7 text-xs"
+                onClick={() => mobileTabs.onChange("chat")}
+              >
+                Chat
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={mobileTabs.value === "document" ? "secondary" : "ghost"}
+                className="px-2.5 h-7 text-xs"
+                onClick={() => mobileTabs.onChange("document")}
+              >
+                Document
+                {mobileTabs.documentDirty ? (
+                  <span className="inline-block bg-amber-500 ml-1 rounded-full size-1.5" />
+                ) : null}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <FormatIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <h2 className="truncate text-sm font-semibold leading-5">{localTitle}</h2>
+                  {writing ? (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+                      <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                      Writing…
+                    </span>
+                  ) : null}
+                  {!writing && userEdited ? (
+                    <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                      Edited
+                    </span>
+                  ) : null}
+                  {saving ? (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">Saving…</span>
+                  ) : null}
+                </div>
+                <p className="truncate text-xs text-muted-foreground">
+                  {document.file_name}
+                  {document.format ? ` · ${document.format}` : ""}
+                  {document.language ? ` · ${document.language}` : ""}
+                </p>
+              </div>
+            </>
+          )}
+          {mobileTabs && (writing || saving || userEdited) ? (
+            <div className="flex min-w-0 items-center gap-1.5">
               {writing ? (
                 <span className="inline-flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
                   <Loader2 className="size-3 animate-spin" aria-hidden="true" />
@@ -230,12 +288,7 @@ export const CoworkPanel = ({
                 <span className="shrink-0 text-[11px] text-muted-foreground">Saving…</span>
               ) : null}
             </div>
-            <p className="truncate text-xs text-muted-foreground">
-              {document.file_name}
-              {document.format ? ` · ${document.format}` : ""}
-              {document.language ? ` · ${document.language}` : ""}
-            </p>
-          </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {selectableDocs.length > 0 ? (
