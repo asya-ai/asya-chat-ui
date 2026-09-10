@@ -246,7 +246,8 @@ def _iter_dates(start: date, end_exclusive: date) -> list[str]:
 
 def _aggregate_daily_points(rows, model_map: dict) -> list[UsageDailyPoint]:
     points: dict[str, UsageDailyPoint] = {}
-    missing_cost_days: set[str] = set()
+    known_cost_days: set[str] = set()
+    unknown_only_days: set[str] = set()
     for row in rows:
         day_key = str(row[0])
         meta = model_map.get(row[1])
@@ -265,10 +266,13 @@ def _aggregate_daily_points(rows, model_map: dict) -> list[UsageDailyPoint]:
         point.thinking_tokens += child.thinking_tokens
         if child.cost_usd is None:
             if child.total_tokens:
-                missing_cost_days.add(day_key)
+                unknown_only_days.add(day_key)
             continue
+        known_cost_days.add(day_key)
         point.cost_usd = (point.cost_usd or 0) + child.cost_usd
-    for day_key in missing_cost_days:
+    # Keep sum of priced models even when some models on the day lack pricing.
+    # Only mark None when every model on that day is unpriced.
+    for day_key in unknown_only_days - known_cost_days:
         points[day_key].cost_usd = None
     return [points[key] for key in sorted(points)]
 
@@ -289,16 +293,17 @@ def _fill_daily_points(
     return [by_date.get(day, _empty_daily_point(day)) for day in days]
 
 
-def _finalize_group_costs(
-    rows: list[UsageSlice], missing_cost_keys: set[str]
-) -> list[UsageSlice]:
+def _finalize_group_costs(rows: list[UsageSlice]) -> list[UsageSlice]:
+    # Sum priced children. Unknown-price models stay None in breakdown, but no longer
+    # wipe the parent total (same policy as estimate_scoped_usage_cost_usd).
     for row in rows:
-        identity = row.id or row.key
-        if identity in missing_cost_keys:
-            row.cost_usd = None
-            continue
         known_costs = [child.cost_usd for child in row.breakdown if child.cost_usd is not None]
-        row.cost_usd = sum(known_costs) if known_costs else row.cost_usd
+        if known_costs:
+            row.cost_usd = sum(known_costs)
+        elif row.total_tokens:
+            row.cost_usd = None
+        else:
+            row.cost_usd = 0.0
     return rows
 
 
@@ -383,7 +388,6 @@ def usage_summary(
         results = session.exec(stmt).all()
         model_map = _model_usage_map(session)
         rows_by_org: dict[str, UsageSlice] = {}
-        missing_cost_orgs: set[str] = set()
         for row in results:
             org_id = _entity_id(row[0])
             org_key = str(row[1] or "Unknown organization")
@@ -395,9 +399,7 @@ def usage_summary(
             parent = rows_by_org.setdefault(dict_key, _empty_slice(org_key, org_id))
             _add_slice_totals(parent, child)
             parent.breakdown.append(child)
-            if child.cost_usd is None and child.total_tokens:
-                missing_cost_orgs.add(dict_key)
-        rows = _finalize_group_costs(list(rows_by_org.values()), missing_cost_orgs)
+        rows = _finalize_group_costs(list(rows_by_org.values()))
         _attach_org_limits(session, rows)
         return rows
 
@@ -423,7 +425,6 @@ def usage_summary(
         results = session.exec(stmt).all()
         model_map = _model_usage_map(session)
         rows_by_user: dict[str, UsageSlice] = {}
-        missing_cost_users: set[str] = set()
         for row in results:
             user_id = _entity_id(row[0])
             user_key = str(row[1] or "Unknown user")
@@ -435,9 +436,7 @@ def usage_summary(
             parent = rows_by_user.setdefault(dict_key, _empty_slice(user_key, user_id))
             _add_slice_totals(parent, child)
             parent.breakdown.append(child)
-            if child.cost_usd is None and child.total_tokens:
-                missing_cost_users.add(dict_key)
-        rows = _finalize_group_costs(list(rows_by_user.values()), missing_cost_users)
+        rows = _finalize_group_costs(list(rows_by_user.values()))
         _attach_user_limits(session, rows)
         return rows
 
@@ -579,7 +578,6 @@ def usage_summary(
 
     model_map = _model_usage_map(session)
     rows_by_model: dict[str, UsageSlice] = {}
-    missing_cost_models: set[str] = set()
     for row in results:
         model_id = _entity_id(row[0])
         meta = model_map.get(row[0])
@@ -591,9 +589,7 @@ def usage_summary(
         parent = rows_by_model.setdefault(dict_key, _empty_slice(model_key, model_id))
         _add_slice_totals(parent, child)
         parent.breakdown.append(child)
-        if child.cost_usd is None and child.total_tokens:
-            missing_cost_models.add(dict_key)
-    return _finalize_group_costs(list(rows_by_model.values()), missing_cost_models)
+    return _finalize_group_costs(list(rows_by_model.values()))
 
 
 @router.get("/months", response_model=list[str])

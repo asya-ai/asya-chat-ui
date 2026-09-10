@@ -3,8 +3,10 @@ from uuid import uuid4
 from app.api.usage import (
     ModelUsageMeta,
     UsageDailyPoint,
+    UsageSlice,
     _aggregate_daily_points,
     _fill_daily_points,
+    _finalize_group_costs,
 )
 
 
@@ -56,6 +58,78 @@ def test_aggregate_daily_points_marks_unknown_cost(monkeypatch):
     )
     assert points[0].cost_usd is None
     assert points[0].total_tokens == 15
+
+
+def test_aggregate_daily_points_keeps_known_cost_when_some_models_unpriced(monkeypatch):
+    priced_model = uuid4()
+    unpriced_model = uuid4()
+    model_map = {
+        priced_model: ModelUsageMeta(
+            display_name="GPT", provider="openai", model_name="gpt-4o"
+        ),
+        unpriced_model: ModelUsageMeta(
+            display_name="Mystery", provider="custom", model_name="secret"
+        ),
+    }
+
+    def _estimate(provider, model_name, *_args):
+        if model_name == "gpt-4o":
+            return 3.5
+        return None
+
+    monkeypatch.setattr("app.api.usage.estimate_token_cost_usd", _estimate)
+
+    points = _aggregate_daily_points(
+        [
+            ("2026-08-01", priced_model, 10, 5, 15, 10, 5, 0, 0),
+            ("2026-08-01", unpriced_model, 100, 50, 150, 100, 50, 0, 0),
+        ],
+        model_map,
+    )
+
+    assert points[0].total_tokens == 165
+    assert points[0].cost_usd == 3.5
+
+
+def test_finalize_group_costs_sums_known_children():
+    row = UsageSlice(
+        key="ASYA",
+        id="org-1",
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=200,
+        input_tokens=150,
+        output_tokens=50,
+        cached_tokens=0,
+        thinking_tokens=0,
+        breakdown=[
+            UsageSlice(
+                key="Claude Opus 5",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=100,
+                input_tokens=80,
+                output_tokens=20,
+                cached_tokens=0,
+                thinking_tokens=0,
+                cost_usd=12.5,
+            ),
+            UsageSlice(
+                key="Mystery",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=100,
+                input_tokens=70,
+                output_tokens=30,
+                cached_tokens=0,
+                thinking_tokens=0,
+                cost_usd=None,
+            ),
+        ],
+    )
+
+    finalized = _finalize_group_costs([row])
+    assert finalized[0].cost_usd == 12.5
 
 
 def test_fill_daily_points_inserts_empty_days_for_month():
