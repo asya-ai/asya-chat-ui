@@ -199,6 +199,13 @@ export const ChatSidebar = ({
     return null
   }
 
+  // Reserve room for the absolute spinner (and hover kebab) so truncate doesn't run under it.
+  const sessionLinkClass = (chatId: string) =>
+    cn(
+      "h-8 w-full min-w-0 justify-start text-left text-sm font-normal hover:bg-transparent",
+      chatSessionStatus(chatId) === "generating" ? "pl-3 pr-8" : "px-3"
+    )
+
   const handleSessionQueryChange = useCallback((value: string) => {
     setSessionQueryDebounced(value)
   }, [])
@@ -461,7 +468,7 @@ export const ChatSidebar = ({
                             <Button
                               asChild
                               variant="ghost"
-                              className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal hover:bg-transparent"
+                              className={sessionLinkClass(chat.id)}
                             >
                               <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                 <span className="min-w-0 flex-1 truncate">
@@ -811,7 +818,7 @@ export const ChatSidebar = ({
                                 <Button
                                   asChild
                                   variant="ghost"
-                                  className="h-8 w-full min-w-0 justify-start px-3 text-left text-sm font-normal hover:bg-transparent"
+                                  className={sessionLinkClass(chat.id)}
                                 >
                                   <Link to={chatHref(chat)} onClick={onChatLinkClick}>
                                     <span className="min-w-0 flex-1 truncate">
