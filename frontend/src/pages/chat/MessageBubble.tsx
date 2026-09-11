@@ -1188,13 +1188,15 @@ const MermaidDiagram = ({
   if (renderError) {
     return (
       <div className="relative my-3">
-        <CopyTextButton
-          text={chart}
-          label={copyLabel}
-          copiedLabel={copiedLabel}
-          className="top-2 right-2 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
-        />
-        <pre className="bg-destructive/10 p-2 rounded text-destructive text-xs whitespace-pre-wrap">
+        <div className={codeCopyStickyClassName}>
+          <CopyTextButton
+            text={chart}
+            label={copyLabel}
+            copiedLabel={copiedLabel}
+            className="pointer-events-auto m-2 bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+          />
+        </div>
+        <pre className="bg-destructive/10 p-2 pt-10 rounded text-destructive text-xs whitespace-pre-wrap">
           {renderError}
         </pre>
       </div>
@@ -1203,13 +1205,15 @@ const MermaidDiagram = ({
 
   return (
     <div className="relative my-3">
-      <CopyTextButton
-        text={chart}
-        label={copyLabel}
-        copiedLabel={copiedLabel}
-        className="top-2 right-2 z-10 absolute bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
-      />
-      <div ref={containerRef} className="flex flex-col gap-3" />
+      <div className={codeCopyStickyClassName}>
+        <CopyTextButton
+          text={chart}
+          label={copyLabel}
+          copiedLabel={copiedLabel}
+          className="pointer-events-auto m-2 bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+        />
+      </div>
+      <div ref={containerRef} className="flex flex-col gap-3 pt-10" />
     </div>
   )
 }
