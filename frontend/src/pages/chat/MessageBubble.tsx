@@ -36,6 +36,7 @@ import { jsPDF } from "jspdf"
 import { exportCoworkMarkdown } from "@/pages/chat/exportCoworkMarkdown"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
+import { normalizeMathContent } from "@/lib/normalizeMathContent"
 import {
   isIncompleteMermaidPrefix,
   MERMAID_DIAGRAM_START,
@@ -157,49 +158,6 @@ const loadMermaid = async () => {
     mermaidInitialized = true
   }
   return mermaid
-}
-
-const normalizeMathContent = (content: string) => {
-  const lines = content.split(/\r?\n/)
-  const output: string[] = []
-  let mathLines: string[] | null = null
-  let isInCodeFence = false
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith("```")) {
-      if (mathLines) {
-        output.push("[", ...mathLines)
-        mathLines = null
-      }
-      isInCodeFence = !isInCodeFence
-      output.push(line)
-      continue
-    }
-
-    if (!isInCodeFence && trimmed === "[" && !mathLines) {
-      mathLines = []
-      continue
-    }
-
-    if (!isInCodeFence && trimmed === "]" && mathLines) {
-      output.push("$$", mathLines.join("\n").trim(), "$$")
-      mathLines = null
-      continue
-    }
-
-    if (mathLines) {
-      mathLines.push(line)
-    } else {
-      output.push(line)
-    }
-  }
-
-  if (mathLines) {
-    output.push("[", ...mathLines)
-  }
-
-  return output.join("\n").replace(/\\text\{([→\-–—]+)\}/g, (_, value) => value)
 }
 
 const OPEN_FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/
