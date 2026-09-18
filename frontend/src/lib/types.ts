@@ -136,6 +136,7 @@ export type MessageUsage = {
   thinking_tokens: number
   total_tokens: number
   cost_usd?: number | null
+  queue_wait_ms?: number | null
   time_to_first_token_ms?: number | null
   generation_time_ms?: number | null
   tokens_per_second?: number | null

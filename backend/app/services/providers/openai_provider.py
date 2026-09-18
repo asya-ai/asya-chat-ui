@@ -111,6 +111,7 @@ def _is_prompt_cache_param_error(exc: Exception) -> bool:
         or "prompt_cache_retention" in message
         or "prompt cache" in message
         or "prompt_cache" in message
+        or "cache_control" in message
     )
 
 
@@ -252,24 +253,49 @@ def _coalesce_usage_tokens(usage: object | None) -> tuple[int, int, int, int, in
     return prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens
 
 
+def _usage_detail_value(details: object | None, key: str) -> int:
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        return int(details.get(key) or 0)
+    return int(getattr(details, key, 0) or 0)
+
+
 def _extract_usage_details(usage: object | None) -> tuple[int, int]:
     if not usage:
         return 0, 0
     # Chat Completions: prompt_tokens_details / completion_tokens_details
     # Responses API: input_tokens_details / output_tokens_details
+    # Anthropic-native fields sometimes appear on OpenRouter-proxied usage objects.
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     input_details = getattr(usage, "input_tokens_details", None)
+    if isinstance(usage, dict):
+        prompt_details = usage.get("prompt_tokens_details", prompt_details)
+        input_details = usage.get("input_tokens_details", input_details)
     cached_tokens = (
-        getattr(prompt_details, "cached_tokens", 0)
-        or getattr(input_details, "cached_tokens", 0)
-        or getattr(usage, "cached_prompt_tokens", 0)
+        _usage_detail_value(prompt_details, "cached_tokens")
+        or _usage_detail_value(input_details, "cached_tokens")
+        or _usage_detail_value(usage if isinstance(usage, dict) else None, "cached_prompt_tokens")
+        or int(getattr(usage, "cached_prompt_tokens", 0) or 0)
+        or int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        or (
+            int(usage.get("cache_read_input_tokens") or 0)
+            if isinstance(usage, dict)
+            else 0
+        )
     )
     completion_details = getattr(usage, "completion_tokens_details", None)
     output_details = getattr(usage, "output_tokens_details", None)
+    if isinstance(usage, dict):
+        completion_details = usage.get("completion_tokens_details", completion_details)
+        output_details = usage.get("output_tokens_details", output_details)
     thinking_tokens = (
-        getattr(completion_details, "reasoning_tokens", 0)
-        or getattr(output_details, "reasoning_tokens", 0)
-        or getattr(usage, "reasoning_tokens", 0)
+        _usage_detail_value(completion_details, "reasoning_tokens")
+        or _usage_detail_value(output_details, "reasoning_tokens")
+        or int(getattr(usage, "reasoning_tokens", 0) or 0)
+        or (
+            int(usage.get("reasoning_tokens") or 0) if isinstance(usage, dict) else 0
+        )
     )
     return cached_tokens or 0, thinking_tokens or 0
 

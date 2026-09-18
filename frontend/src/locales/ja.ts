@@ -517,6 +517,7 @@ export const ja = {
   usage_cost: "コスト",
   usage_ttft: "初回トークン",
   usage_generation_time: "合計時間",
+  usage_wait_time: "待機時間",
   usage_tokens_per_second: "トークン/秒",
   usage_tok_per_sec_unit: "tok/s",
   usage_filter_person: "ユーザー",

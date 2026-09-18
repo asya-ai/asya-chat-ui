@@ -70,6 +70,24 @@ def test_extract_usage_details_from_chat_completions() -> None:
     assert _extract_usage_details(usage) == (120, 40)
 
 
+def test_extract_usage_details_from_dict_shaped_openrouter_usage() -> None:
+    usage = {
+        "prompt_tokens": 8000,
+        "completion_tokens": 50,
+        "prompt_tokens_details": {"cached_tokens": 7500, "cache_write_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 12},
+    }
+
+    assert _extract_usage_details(usage) == (7500, 12)
+
+
+def test_extract_usage_details_from_anthropic_native_fields() -> None:
+    from types import SimpleNamespace
+
+    usage = SimpleNamespace(cache_read_input_tokens=6400, reasoning_tokens=0)
+    assert _extract_usage_details(usage) == (6400, 0)
+
+
 def test_extract_usage_details_from_responses_api() -> None:
     from types import SimpleNamespace
 
@@ -317,6 +335,133 @@ def test_openrouter_endpoint_sets_provider_routing() -> None:
     assert provider.extra_body == {
         "provider": {"only": ["google-vertex/eu"], "allow_fallbacks": False},
     }
+
+
+def test_openrouter_anthropic_applies_cache_control() -> None:
+    from app.services.providers.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider(
+        api_key="test-key",
+        prompt_cache_key="chat:abc",
+        prompt_cache_retention="24h",
+        prompt_cache_enabled=True,
+    )
+    payload: dict = {
+        "model": "anthropic/claude-opus-4.5",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    provider._apply_prompt_cache(payload)
+
+    assert payload["prompt_cache_key"] == "chat:abc"
+    assert "prompt_cache_retention" not in payload
+    assert payload["extra_body"] == {
+        "session_id": "chat:abc",
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+
+
+def test_openrouter_anthropic_default_cache_ttl_is_ephemeral() -> None:
+    from app.services.providers.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider(
+        api_key="test-key",
+        prompt_cache_key="chat:abc",
+        prompt_cache_enabled=True,
+    )
+    # Avoid inheriting a non-None retention from process env / settings.
+    provider.prompt_cache_retention = None
+    payload: dict = {"model": "anthropic/claude-sonnet-4", "messages": []}
+
+    provider._apply_prompt_cache(payload)
+
+    assert payload["extra_body"] == {
+        "session_id": "chat:abc",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_openrouter_non_anthropic_skips_cache_control() -> None:
+    from app.services.providers.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider(
+        api_key="test-key",
+        prompt_cache_key="chat:abc",
+        prompt_cache_retention="24h",
+        prompt_cache_enabled=True,
+    )
+    payload: dict = {"model": "openai/gpt-5", "messages": []}
+
+    provider._apply_prompt_cache(payload)
+
+    assert payload["prompt_cache_key"] == "chat:abc"
+    assert payload["prompt_cache_retention"] == "24h"
+    assert "extra_body" not in payload
+
+
+def test_openrouter_incognito_skips_anthropic_cache_control() -> None:
+    from app.services.providers.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider(
+        api_key="test-key",
+        prompt_cache_key=None,
+        prompt_cache_enabled=False,
+    )
+    payload: dict = {"model": "anthropic/claude-opus-4.5", "messages": []}
+
+    provider._apply_prompt_cache(payload)
+
+    assert payload == {"model": "anthropic/claude-opus-4.5", "messages": []}
+
+
+def test_openrouter_strip_prompt_cache_removes_cache_control() -> None:
+    from app.services.providers.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider(api_key="test-key")
+    payload = {
+        "prompt_cache_key": "chat:abc",
+        "extra_body": {
+            "provider": {"only": ["anthropic"], "allow_fallbacks": False},
+            "cache_control": {"type": "ephemeral"},
+        },
+    }
+
+    assert provider._strip_prompt_cache(payload) is True
+    assert "prompt_cache_key" not in payload
+    assert payload["extra_body"] == {
+        "provider": {"only": ["anthropic"], "allow_fallbacks": False},
+    }
+
+
+@pytest.mark.asyncio
+async def test_openrouter_chat_completion_merges_cache_control_with_routing() -> None:
+    from app.services.providers.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider(
+        api_key="test-key",
+        prompt_cache_key="chat:abc",
+        prompt_cache_enabled=True,
+        extra_body={
+            "provider": {"only": ["anthropic"], "allow_fallbacks": False},
+        },
+    )
+    provider.prompt_cache_retention = None
+    fake_client = _RecordingOpenAIClient()
+    provider.client = fake_client
+
+    payload = {
+        "model": "anthropic/claude-opus-4.5",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    provider._apply_prompt_cache(payload)
+    await provider._create_chat_completion(payload)
+
+    assert fake_client.payloads[0]["extra_body"] == {
+        "provider": {"only": ["anthropic"], "allow_fallbacks": False},
+        "session_id": "chat:abc",
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert fake_client.payloads[0]["prompt_cache_key"] == "chat:abc"
 
 
 def test_extract_response_reasoning_from_summary_items() -> None:

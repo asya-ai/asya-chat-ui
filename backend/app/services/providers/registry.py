@@ -94,6 +94,7 @@ def get_provider(
                 reasoning_effort=reasoning_effort,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
+                prompt_cache_enabled=prompt_cache_enabled,
                 prefer_responses_api=prefer_responses_api,
                 extra_body=body,
             )

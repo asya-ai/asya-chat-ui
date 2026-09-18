@@ -3100,6 +3100,7 @@ class MessageUsageRead(BaseModel):
     thinking_tokens: int = 0
     total_tokens: int = 0
     cost_usd: float | None = None
+    queue_wait_ms: float | None = None
     time_to_first_token_ms: float | None = None
     generation_time_ms: float | None = None
     tokens_per_second: float | None = None
@@ -3156,7 +3157,9 @@ def _attach_generation_timing(
         first_token_at = (
             first_token_by_task.get(task.id) if task is not None else None
         )
+        queued_at = task.created_at if task is not None else None
 
+        usage.queue_wait_ms = _duration_ms(queued_at, started_at)
         usage.generation_time_ms = _duration_ms(started_at, completed_at)
         usage.time_to_first_token_ms = _duration_ms(started_at, first_token_at)
 

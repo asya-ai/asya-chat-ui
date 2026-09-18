@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import CodeMirror from "@uiw/react-codemirror"
 import { EditorView } from "@codemirror/view"
 import { oneDark } from "@codemirror/theme-one-dark"
@@ -12,6 +12,10 @@ import { sql } from "@codemirror/lang-sql"
 import type { Extension } from "@codemirror/state"
 
 import { CoworkMarkdownEditor } from "@/pages/chat/CoworkMarkdownEditor"
+import {
+  classifyCoworkContent,
+  readableCoworkContent,
+} from "@/pages/chat/normalizeCoworkContent"
 import { getTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
@@ -72,9 +76,10 @@ const useAppTheme = (): ThemeMode => {
   return theme
 }
 
-const isMarkdownFormat = (format?: string | null, language?: string | null) => {
+const isDocumentFormat = (format?: string | null, language?: string | null) => {
   const key = (format || language || "").toLowerCase()
-  return key === "markdown" || key === "md"
+  // `text` is a prose cowork document (download exports md/pdf/docx) — not a code buffer.
+  return key === "markdown" || key === "md" || key === "text" || key === "txt"
 }
 
 const isPresentationFormat = (format?: string | null) =>
@@ -91,6 +96,8 @@ export const CoworkEditor = ({
 }: CoworkEditorProps) => {
   const theme = useAppTheme()
   const isDark = theme === "dark"
+  const contentKind = useMemo(() => classifyCoworkContent(value), [value])
+  const previewValue = useMemo(() => readableCoworkContent(value), [value])
 
   if (isPresentationFormat(format)) {
     return (
@@ -117,10 +124,25 @@ export const CoworkEditor = ({
     )
   }
 
-  if (isMarkdownFormat(format, language)) {
+  if (contentKind === "binary-office") {
+    return (
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground",
+          className
+        )}
+      >
+        <p>This looks like a Word/Office binary file.</p>
+        <p>Download it to open in a desktop app — the side panel can&apos;t render it as text.</p>
+      </div>
+    )
+  }
+
+  // Prose documents and RTF/DOCX-like markup → readable rich preview (not raw source).
+  if (isDocumentFormat(format, language) || contentKind === "rtf") {
     return (
       <CoworkMarkdownEditor
-        value={value}
+        value={previewValue}
         readOnly={readOnly}
         className={className}
         onChange={onChange}

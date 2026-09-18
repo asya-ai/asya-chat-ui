@@ -516,6 +516,7 @@ export const en = {
   usage_cost: "Cost",
   usage_ttft: "First token",
   usage_generation_time: "Total time",
+  usage_wait_time: "Wait time",
   usage_tokens_per_second: "Tokens/sec",
   usage_tok_per_sec_unit: "tok/s",
   usage_filter_person: "Person",

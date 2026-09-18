@@ -47,6 +47,7 @@ import type { ActionInfoLevel } from "@/lib/storage"
 import type {
   ChatMessage,
   ChatMessageAttachmentInput,
+  MessageUsage,
   SourceItem,
   ToolEvent,
 } from "@/lib/types"
@@ -131,6 +132,16 @@ const formatDurationMs = (ms: number): string => {
   const minutes = Math.floor(ms / 60_000)
   const seconds = Math.round((ms % 60_000) / 1000)
   return `${minutes}m ${seconds}s`
+}
+
+const resolveTotalTimeMs = (
+  usage: Pick<MessageUsage, "queue_wait_ms" | "generation_time_ms"> | null | undefined
+): number | null => {
+  if (!usage) return null
+  const generation = usage.generation_time_ms
+  const wait = usage.queue_wait_ms
+  if (generation == null && wait == null) return null
+  return (generation ?? 0) + (wait ?? 0)
 }
 
 const formatTokensPerSecond = (value: number): string => {
@@ -1574,7 +1585,7 @@ const MessageBubbleComponent = ({
       Boolean(msg.model_name) ||
       (actionInfoLevel === "detailed" &&
         ((msg.usage?.total_tokens ?? 0) > 0 ||
-          msg.usage?.generation_time_ms != null)) ||
+          resolveTotalTimeMs(msg.usage) != null)) ||
       (actionsEnabled && msg.generation_status === "failed"))
 
   return (
@@ -2256,7 +2267,7 @@ const MessageBubbleComponent = ({
               {uniqueSources.length > 0 ||
               ((msg.usage?.total_tokens ?? 0) > 0) ||
               (actionInfoLevel === "detailed" &&
-                msg.usage?.generation_time_ms != null) ? (
+                resolveTotalTimeMs(msg.usage) != null) ? (
                 <div className="flex items-center gap-2">
                   {uniqueSources.length > 0 ? (
                     <Button
@@ -2325,7 +2336,7 @@ const MessageBubbleComponent = ({
                     </TooltipProvider>
                   ) : null}
                   {actionInfoLevel === "detailed" &&
-                  msg.usage?.generation_time_ms != null ? (
+                  resolveTotalTimeMs(msg.usage) != null ? (
                     <TooltipProvider delayDuration={200}>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -2333,16 +2344,24 @@ const MessageBubbleComponent = ({
                             className="inline-flex items-center bg-background px-2.5 border border-border rounded-full h-7 text-muted-foreground text-xs tabular-nums cursor-default"
                             tabIndex={0}
                           >
-                            {formatDurationMs(msg.usage.generation_time_ms)}
+                            {formatDurationMs(resolveTotalTimeMs(msg.usage)!)}
                           </span>
                         </TooltipTrigger>
                         <TooltipContent className="px-3 py-2">
                           <div className="gap-x-4 gap-y-1 grid grid-cols-[1fr_auto] min-w-[9rem] text-xs">
                             <span>{t("usage_generation_time")}</span>
                             <span className="tabular-nums text-right">
-                              {formatDurationMs(msg.usage.generation_time_ms)}
+                              {formatDurationMs(resolveTotalTimeMs(msg.usage)!)}
                             </span>
-                            {msg.usage.time_to_first_token_ms != null ? (
+                            {msg.usage?.queue_wait_ms != null ? (
+                              <>
+                                <span>{t("usage_wait_time")}</span>
+                                <span className="tabular-nums text-right">
+                                  {formatDurationMs(msg.usage.queue_wait_ms)}
+                                </span>
+                              </>
+                            ) : null}
+                            {msg.usage?.time_to_first_token_ms != null ? (
                               <>
                                 <span>{t("usage_ttft")}</span>
                                 <span className="tabular-nums text-right">
@@ -2350,7 +2369,7 @@ const MessageBubbleComponent = ({
                                 </span>
                               </>
                             ) : null}
-                            {msg.usage.tokens_per_second != null ? (
+                            {msg.usage?.tokens_per_second != null ? (
                               <>
                                 <span>{t("usage_tokens_per_second")}</span>
                                 <span className="tabular-nums text-right">

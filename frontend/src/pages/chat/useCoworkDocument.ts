@@ -3,6 +3,10 @@ import { toast } from "sonner"
 
 import { ApiError, chatApi } from "@/lib/api"
 import type { CoworkDocument, CoworkingToolEvent } from "@/lib/types"
+import {
+  classifyCoworkContent,
+  readableCoworkContent,
+} from "@/pages/chat/normalizeCoworkContent"
 
 const SAVE_DEBOUNCE_MS = 450
 
@@ -529,8 +533,14 @@ export function useCoworkDocument(chatId: string | undefined): UseCoworkDocument
               ? null
               : toast.loading(format === "docx" ? "Building Word doc…" : "Building PDF…")
           try {
+            const exportBody = readableCoworkContent(contentRef.current)
+            if (classifyCoworkContent(contentRef.current) === "binary-office") {
+              if (toastId) toast.dismiss(toastId)
+              toast.error("This document is a binary Office file — use Download to save the original.")
+              return
+            }
             const { exportCoworkMarkdown } = await import("@/pages/chat/exportCoworkMarkdown")
-            const { blob, fileName } = await exportCoworkMarkdown(contentRef.current, {
+            const { blob, fileName } = await exportCoworkMarkdown(exportBody, {
               format,
               fileName: document?.file_name || document?.title || "document",
               title: document?.title || undefined,

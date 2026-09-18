@@ -518,6 +518,7 @@ export const lv = {
   usage_cost: "Izmaksas",
   usage_ttft: "Pirmā tekstvienība",
   usage_generation_time: "Kopējais laiks",
+  usage_wait_time: "Gaidīšanas laiks",
   usage_tokens_per_second: "Tekstvienības/sek",
   usage_tok_per_sec_unit: "tok/s",
   usage_filter_person: "Persona",

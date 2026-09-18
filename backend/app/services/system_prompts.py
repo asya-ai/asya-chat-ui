@@ -189,23 +189,16 @@ def build_system_prompt_messages(
     memories: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     tool_names = set(enabled_tool_names or [])
-    # Bake datetime into the first system message so aggressive provider trims that
-    # keep only messages[0] (see openai_provider._trim_messages_for_context) still
-    # retain the clock, and so HEAD/SUMMARY truncation cannot drop it.
+    # Stable prefix first so Anthropic/OpenRouter prompt caching can hit across turns.
+    # Dynamic bits (memories, clock) come last — prefix hash must not change every minute.
+    # _trim_messages_for_context keeps all leading system messages, so the clock survives
+    # context-limit retries without baking it into messages[0].
     messages: list[dict[str, str]] = [
-        {
-            "role": "system",
-            "content": f"{MAIN_SYSTEM_PROMPT}\n\n{_time_prompt(timezone)}",
-        },
+        {"role": "system", "content": MAIN_SYSTEM_PROMPT},
     ]
     locale_instruction = _locale_prompt(locale)
     if locale_instruction:
         messages.append({"role": "system", "content": locale_instruction})
-    memory_tools_enabled = bool(
-        tool_names.intersection({"store_memory", "remove_memory", "search_past_chats"})
-    )
-    if memories or memory_tools_enabled:
-        messages.append({"role": "system", "content": _memories_prompt(memories)})
     for name in TOOL_PROMPT_ORDER:
         if name in tool_names:
             prompt = TOOL_SYSTEM_PROMPTS.get(name)
@@ -214,4 +207,10 @@ def build_system_prompt_messages(
     mcp_guidance = mcp_guidance_for_tools(tool_names)
     if mcp_guidance:
         messages.append({"role": "system", "content": mcp_guidance})
+    memory_tools_enabled = bool(
+        tool_names.intersection({"store_memory", "remove_memory", "search_past_chats"})
+    )
+    if memories or memory_tools_enabled:
+        messages.append({"role": "system", "content": _memories_prompt(memories)})
+    messages.append({"role": "system", "content": _time_prompt(timezone)})
     return messages
