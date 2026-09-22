@@ -16,7 +16,10 @@ MAIN_SYSTEM_PROMPT = (
     "Quote node labels that contain @, /, parentheses, or other special characters "
     '(e.g. C["@scope/pkg"] not C[@scope/pkg]). '
     "Do not spam diagrams where they do not actually help explanation. "
-    "Always try to be helpful but not tease/request user to ask formore relevant info (you are not a youtuber and you do not need to raise engagement byy using these techniques)."
+    "Always try to be helpful but not tease/request user to ask formore relevant info (you are not a youtuber and you do not need to raise engagement byy using these techniques). "
+    "Request-specific facts arrive in a <context> block on user messages: each turn "
+    "keeps a frozen <current_time> stamp; <memories> appear only on the latest user "
+    "message. Treat that block as authoritative."
 )
 
 MEMORY_SYSTEM_PROMPT = (
@@ -143,28 +146,46 @@ def _locale_prompt(locale: str | None) -> str | None:
     )
 
 
-def _time_prompt(user_timezone: str | None) -> str:
-    now = datetime.now(timezone.utc)
+def _coerce_utc(at: datetime | None) -> datetime:
+    if at is None:
+        return datetime.now(timezone.utc)
+    if at.tzinfo is None:
+        # ChatMessage.created_at is stored as naive UTC via datetime.utcnow.
+        return at.replace(tzinfo=timezone.utc)
+    return at.astimezone(timezone.utc)
+
+
+def _floor_to_minute(at: datetime) -> datetime:
+    return at.replace(second=0, microsecond=0)
+
+
+def _current_time_context(
+    user_timezone: str | None,
+    *,
+    at: datetime | None = None,
+) -> str:
+    now = _floor_to_minute(_coerce_utc(at))
     # Spell the calendar date multiple ways — small models often mangle ISO day numbers.
     utc_long = f"{now.strftime('%A')}, {now.day} {now.strftime('%B %Y')}"
     lines = [
-        "## Current time (authoritative — do not invent a different date)",
-        f"- Today's date: {now.strftime('%Y-%m-%d')} ({utc_long})",
-        f"- Current UTC time: {now.strftime('%H:%M')} UTC",
+        f"Today's date: {now.strftime('%Y-%m-%d')} ({utc_long})",
+        f"Current UTC time: {now.strftime('%H:%M')} UTC",
     ]
     if user_timezone:
         try:
             from zoneinfo import ZoneInfo
+
             local_now = now.astimezone(ZoneInfo(user_timezone))
             local_long = (
-                f"{local_now.strftime('%A')}, {local_now.day} {local_now.strftime('%B %Y')}"
+                f"{local_now.strftime('%A')}, {local_now.day} "
+                f"{local_now.strftime('%B %Y')}"
             )
             lines.append(
-                f"- User timezone: {user_timezone}"
+                f"User timezone: {user_timezone}"
                 f" (local: {local_now.strftime('%Y-%m-%d %H:%M %Z')}, {local_long})"
             )
         except Exception:
-            lines.append(f"- User timezone: {user_timezone}")
+            lines.append(f"User timezone: {user_timezone}")
     lines.append(
         "Use these values for today/tomorrow/this week and clock questions. "
         "Never substitute a different calendar date."
@@ -172,27 +193,132 @@ def _time_prompt(user_timezone: str | None) -> str:
     return "\n".join(lines)
 
 
-def _memories_prompt(memories: list[dict[str, str]] | None) -> str:
-    lines = [MEMORY_SYSTEM_PROMPT]
-    if memories:
-        lines.extend(["", "## Stored memories"])
-        for mem in memories:
-            lines.append(f"- [{mem['id']}] {mem['content']}")
-    return "\n".join(lines)
+def _memories_context(memories: list[dict[str, str]] | None) -> str:
+    if not memories:
+        return "(none)"
+    return "\n".join(f"- [{mem['id']}] {mem['content']}" for mem in memories)
+
+
+def build_request_context_block(
+    *,
+    timezone: str | None = None,
+    at: datetime | None = None,
+    memories: list[dict[str, str]] | None = None,
+    include_memories: bool = False,
+) -> str:
+    """Per-user-turn context stamp.
+
+    Time is frozen to ``at`` (message created_at) so historical stamps stay identical
+    across requests and keep the prompt-cache prefix stable. Memories are bulky and
+    change often — attach them only on the latest user turn.
+    """
+    parts = [
+        "<context>",
+        "<current_time>",
+        _current_time_context(timezone, at=at),
+        "</current_time>",
+    ]
+    if include_memories:
+        parts.extend(["<memories>", _memories_context(memories), "</memories>"])
+    parts.append("</context>")
+    return "\n".join(parts)
+
+
+def _prepend_context_to_content(content: object, context_block: str) -> object:
+    if not context_block:
+        return content
+    if isinstance(content, list):
+        return [{"type": "text", "text": context_block}, *content]
+    text = content if isinstance(content, str) else ("" if content is None else str(content))
+    if not text:
+        return context_block
+    return f"{context_block}\n\n{text}"
+
+
+_CREATED_AT_KEY = "_created_at"
+
+
+def provider_chat_message(
+    role: str,
+    content: object,
+    *,
+    created_at: datetime | None = None,
+) -> dict:
+    """Build a provider message; stash created_at on user rows for frozen time stamps."""
+    message: dict[str, object] = {"role": role, "content": content}
+    if role == "user" and created_at is not None:
+        message[_CREATED_AT_KEY] = created_at
+    return message
+
+
+def attach_user_context_stamps(
+    messages: list[dict],
+    *,
+    timezone: str | None = None,
+    memories: list[dict[str, str]] | None = None,
+    include_memories: bool = False,
+) -> list[dict]:
+    """Stamp every user message with frozen ``<current_time>``; memories only on latest.
+
+    Pass ``_created_at`` on each user message dict (from ChatMessage.created_at) so
+    historical stamps reconstruct identically on later turns. Missing timestamps fall
+    back to "now" (acceptable for short sync paths without history).
+    """
+    if not messages:
+        return messages
+    user_indices = [
+        index for index, message in enumerate(messages) if message.get("role") == "user"
+    ]
+    if not user_indices:
+        return messages
+
+    updated = [dict(message) for message in messages]
+    latest_user_idx = user_indices[-1]
+    for index in user_indices:
+        created_at = updated[index].pop(_CREATED_AT_KEY, None)
+        block = build_request_context_block(
+            timezone=timezone,
+            at=created_at if isinstance(created_at, datetime) else None,
+            memories=memories,
+            include_memories=include_memories and index == latest_user_idx,
+        )
+        updated[index]["content"] = _prepend_context_to_content(
+            updated[index].get("content"), block
+        )
+    # Drop any leftover private keys on non-user rows.
+    for message in updated:
+        message.pop(_CREATED_AT_KEY, None)
+    return updated
+
+
+# Back-compat alias used by older call sites / tests.
+def attach_request_context_to_latest_user_message(
+    messages: list[dict],
+    context_block: str,
+) -> list[dict]:
+    if not context_block or not messages:
+        return messages
+    last_user_idx: int | None = None
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            last_user_idx = index
+            break
+    if last_user_idx is None:
+        return messages
+    updated = list(messages)
+    message = dict(updated[last_user_idx])
+    message["content"] = _prepend_context_to_content(message.get("content"), context_block)
+    updated[last_user_idx] = message
+    return updated
 
 
 def build_system_prompt_messages(
     *,
     locale: str | None = None,
-    timezone: str | None = None,
     enabled_tool_names: Iterable[str] | None = None,
-    memories: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
+    """Stable system prefix only — clocks/memories ride on user-message <context> stamps."""
     tool_names = set(enabled_tool_names or [])
-    # Stable prefix first so Anthropic/OpenRouter prompt caching can hit across turns.
-    # Dynamic bits (memories, clock) come last — prefix hash must not change every minute.
-    # _trim_messages_for_context keeps all leading system messages, so the clock survives
-    # context-limit retries without baking it into messages[0].
     messages: list[dict[str, str]] = [
         {"role": "system", "content": MAIN_SYSTEM_PROMPT},
     ]
@@ -210,7 +336,6 @@ def build_system_prompt_messages(
     memory_tools_enabled = bool(
         tool_names.intersection({"store_memory", "remove_memory", "search_past_chats"})
     )
-    if memories or memory_tools_enabled:
-        messages.append({"role": "system", "content": _memories_prompt(memories)})
-    messages.append({"role": "system", "content": _time_prompt(timezone)})
+    if memory_tools_enabled:
+        messages.append({"role": "system", "content": MEMORY_SYSTEM_PROMPT})
     return messages

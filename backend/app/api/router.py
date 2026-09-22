@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -33,6 +35,10 @@ api_router.include_router(prompts_router)
 api_router.include_router(teams_router)
 api_router.include_router(usage_router)
 
+# Fallback when CHATUI_BUILD_ID is unset so container restarts are still detectable.
+# Local --reload stacks should set CHATUI_BUILD_ID to a stable value (see override).
+_PROCESS_BUILD_ID = secrets.token_hex(8)
+
 
 class AttachmentLimitsRead(BaseModel):
     max_files: int
@@ -42,7 +48,8 @@ class AttachmentLimitsRead(BaseModel):
 
 @api_router.get("/healthz", tags=["health"])
 def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+    build_id = (settings.chatui_build_id or "").strip() or _PROCESS_BUILD_ID
+    return {"status": "ok", "build_id": build_id}
 
 
 @api_router.get("/config/attachment-limits", response_model=AttachmentLimitsRead)

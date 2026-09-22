@@ -75,7 +75,11 @@ from app.services.model_capabilities import (
 )
 from app.services.providers.base import ChatResponse, ChatUsage
 from app.services.instance_providers import get_provider_for_org
-from app.services.system_prompts import build_system_prompt_messages
+from app.services.system_prompts import (
+    attach_user_context_stamps,
+    build_system_prompt_messages,
+    provider_chat_message,
+)
 from app.services.tools.image_tool import (
     ImageToolContext,
     edit_image,
@@ -342,9 +346,7 @@ def _prepend_tool_guidance(
 ) -> list[dict]:
     system_messages = build_system_prompt_messages(
         locale=locale,
-        timezone=timezone,
         enabled_tool_names=enabled_tool_names,
-        memories=memories,
     )
     enabled = set(enabled_tool_names or [])
     if "code_execution" in enabled:
@@ -422,7 +424,17 @@ def _prepend_tool_guidance(
                 ),
             }
         )
-    return [*system_messages, *messages]
+    include_memories = bool(
+        enabled.intersection({"store_memory", "remove_memory", "search_past_chats"})
+        or memories
+    )
+    messages_with_context = attach_user_context_stamps(
+        messages,
+        timezone=timezone,
+        memories=memories,
+        include_memories=include_memories,
+    )
+    return [*system_messages, *messages_with_context]
 
 
 def _is_image_output_model(model: ChatModel) -> bool:
@@ -5091,11 +5103,15 @@ async def create_message(
                 break
         for msg in history:
             if msg.role != "user":
-                items.append({"role": msg.role, "content": msg.content})
+                items.append(provider_chat_message(msg.role, msg.content))
                 continue
             msg_attachments = attachments_by_message.get(msg.id, [])
             if not msg_attachments:
-                items.append({"role": msg.role, "content": msg.content})
+                items.append(
+                    provider_chat_message(
+                        msg.role, msg.content, created_at=msg.created_at
+                    )
+                )
                 continue
             image_attachments = [
                 attachment
@@ -5119,7 +5135,9 @@ async def create_message(
                         "\n\nAttachments (available in /inputs for code execution):\n"
                         + "\n".join(attachment_lines)
                     )
-                items.append({"role": msg.role, "content": text})
+                items.append(
+                    provider_chat_message(msg.role, text, created_at=msg.created_at)
+                )
                 continue
             content_parts: list[dict] = []
             if msg.content:
@@ -5141,7 +5159,11 @@ async def create_message(
                         },
                     }
                 )
-            items.append({"role": msg.role, "content": content_parts})
+            items.append(
+                provider_chat_message(
+                    msg.role, content_parts, created_at=msg.created_at
+                )
+            )
         return items
 
     messages = _truncate_messages(
@@ -5934,11 +5956,15 @@ async def edit_message(
                 break
         for msg in history:
             if msg.role != "user":
-                items.append({"role": msg.role, "content": msg.content})
+                items.append(provider_chat_message(msg.role, msg.content))
                 continue
             msg_attachments = attachments_by_message.get(msg.id, [])
             if not msg_attachments:
-                items.append({"role": msg.role, "content": msg.content})
+                items.append(
+                    provider_chat_message(
+                        msg.role, msg.content, created_at=msg.created_at
+                    )
+                )
                 continue
             image_attachments = [
                 attachment
@@ -5962,7 +5988,9 @@ async def edit_message(
                         "\n\nAttachments (available in /inputs for code execution):\n"
                         + "\n".join(attachment_lines)
                     )
-                items.append({"role": msg.role, "content": text})
+                items.append(
+                    provider_chat_message(msg.role, text, created_at=msg.created_at)
+                )
                 continue
             content_parts: list[dict] = []
             if msg.content:
@@ -5984,7 +6012,11 @@ async def edit_message(
                         },
                     }
                 )
-            items.append({"role": msg.role, "content": content_parts})
+            items.append(
+                provider_chat_message(
+                    msg.role, content_parts, created_at=msg.created_at
+                )
+            )
         return items
 
     messages = _truncate_messages(

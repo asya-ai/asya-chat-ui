@@ -35,6 +35,7 @@ from app.services.model_capabilities import (
     persist_responses_api_discovery,
     supports_image_input,
 )
+from app.services.system_prompts import provider_chat_message
 from app.core.config import settings
 from app.db.session import engine
 from app.models.entities import (
@@ -250,11 +251,13 @@ def _build_provider_messages(
 
     for msg in history:
         if msg.role != "user":
-            items.append({"role": msg.role, "content": msg.content})
+            items.append(provider_chat_message(msg.role, msg.content))
             continue
         msg_attachments = attachments_by_message.get(msg.id, [])
         if not msg_attachments:
-            items.append({"role": msg.role, "content": msg.content})
+            items.append(
+                provider_chat_message(msg.role, msg.content, created_at=msg.created_at)
+            )
             continue
         image_attachments = [
             attachment
@@ -276,7 +279,9 @@ def _build_provider_messages(
                     "\n\nAttachments (available in /inputs for code execution):\n"
                     + "\n".join(attachment_lines)
                 )
-            items.append({"role": msg.role, "content": text})
+            items.append(
+                provider_chat_message(msg.role, text, created_at=msg.created_at)
+            )
             continue
         content_parts: list[dict[str, Any]] = []
         if msg.content:
@@ -298,7 +303,9 @@ def _build_provider_messages(
                     },
                 }
             )
-        items.append({"role": msg.role, "content": content_parts})
+        items.append(
+            provider_chat_message(msg.role, content_parts, created_at=msg.created_at)
+        )
     return _prepend_tool_guidance(
         items,
         locale=locale,

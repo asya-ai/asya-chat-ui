@@ -4,6 +4,11 @@ import { Outlet, useLocation } from "@tanstack/react-router"
 
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
+import {
+  hardReloadOnce,
+  isStaleChunkError,
+  startDeployReloadWatcher,
+} from "@/lib/deploy-reload"
 import { useI18n } from "@/lib/i18n-context"
 
 const App = () => {
@@ -43,8 +48,15 @@ const App = () => {
     document.title = appTitle
   }, [location.pathname, t])
 
+  useEffect(() => startDeployReloadWatcher(), [])
+
   return (
     <ErrorBoundary
+      onError={(error) => {
+        if (isStaleChunkError(error)) {
+          hardReloadOnce()
+        }
+      }}
       fallbackRender={({ error, resetErrorBoundary }) => {
         const message = error instanceof Error ? error.message : t("common_error")
         return (

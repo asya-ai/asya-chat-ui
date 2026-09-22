@@ -51,6 +51,7 @@ services:
       - .env
     environment:
       APP_ENV: production
+      CHATUI_BUILD_ID: ${CHATUI_BUILD_ID:-${CHATUI_TAG:-latest}}
       FILES_BASE_DIR: /data/files
       EXEC_HOST_FILES_DIR: /data/files
       DOCKER_HOST: tcp://dind:2375

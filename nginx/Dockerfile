@@ -11,6 +11,8 @@ RUN --mount=type=cache,id=chatui-pnpm-store,target=/root/.local/share/pnpm/store
     pnpm install --frozen-lockfile
 
 COPY . .
+ARG CHATUI_BUILD_ID=
+ENV CHATUI_BUILD_ID=${CHATUI_BUILD_ID}
 RUN pnpm build
 
 FROM nginx:1.27-alpine

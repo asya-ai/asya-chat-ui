@@ -49,6 +49,7 @@ services:
       context: ./backend
       args:
         AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
+        CHATUI_BUILD_ID: ${CHATUI_BUILD_ID:-}
     env_file:
       - .env
     environment:
@@ -59,6 +60,7 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       - SCRAPER_URL=http://scraper:3001
+      - CHATUI_BUILD_ID=${CHATUI_BUILD_ID:-}
     volumes:
       - ./data/files:/data/files
     # Boot deps only. scraper / dind / executor-bootstrap are runtime; they
@@ -175,6 +177,8 @@ services:
       dockerfile: ../nginx/Dockerfile
       additional_contexts:
         nginx_cfg: ./nginx
+      args:
+        CHATUI_BUILD_ID: ${CHATUI_BUILD_ID:-}
     ports:
       - "127.0.0.1:8085:80"
     depends_on:

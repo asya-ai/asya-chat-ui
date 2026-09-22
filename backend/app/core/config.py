@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_env: str = Field(default="development", validation_alias="APP_ENV")
+    chatui_build_id: str = Field(default="", validation_alias="CHATUI_BUILD_ID")
     database_url: str = Field(
         default="postgresql+psycopg://chatui:chatui@postgres:5432/chatui",
         validation_alias="DATABASE_URL",

@@ -1,5 +1,8 @@
 services:
   backend:
+    # Stable build id so uvicorn --reload does not force browser hard-reloads.
+    environment:
+      - CHATUI_BUILD_ID=${CHATUI_BUILD_ID:-dev}
     command: >
       sh -c "uv run python app/db/wait_for_db.py &&
              uv run alembic upgrade head &&

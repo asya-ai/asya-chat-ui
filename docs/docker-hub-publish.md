@@ -91,6 +91,7 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f nginx/Dockerfile \
   --build-context nginx_cfg=nginx \
+  --build-arg CHATUI_BUILD_ID=$VERSION \
   -t asyaai/asya-chat-ui-web:$VERSION \
   -t asyaai/asya-chat-ui-web:latest \
   --sbom=true --provenance=mode=max --push frontend
@@ -123,6 +124,7 @@ docker buildx build \
   --builder chatui-publisher \
   --platform linux/amd64 \
   -f backend/Dockerfile \
+  --build-arg CHATUI_BUILD_ID=$VERSION \
   -t asyaai/asya-chat-ui-backend:$VERSION-amd64 \
   -t asyaai/asya-chat-ui-backend:latest-amd64 \
   --sbom=true --provenance=mode=max --push backend
@@ -133,6 +135,7 @@ docker buildx build \
   --builder chatui-publisher \
   --platform linux/arm64 \
   -f backend/Dockerfile \
+  --build-arg CHATUI_BUILD_ID=$VERSION \
   -t asyaai/asya-chat-ui-backend:$VERSION-arm64 \
   -t asyaai/asya-chat-ui-backend:latest-arm64 \
   --sbom=true --provenance=mode=max --push backend
