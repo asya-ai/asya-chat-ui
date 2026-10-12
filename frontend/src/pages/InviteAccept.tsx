@@ -6,6 +6,7 @@ import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n } from "@/lib/i18n-context"
 import { isValidPassword } from "@/lib/password"
+import { BrandLogo } from "@/components/BrandLogo"
 import { LanguageSelect } from "@/components/LanguageSelect"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -65,7 +66,7 @@ export const InviteAcceptPage = () => {
         </div>
         <Card className="bg-card">
           <CardHeader className="text-center">
-            <img src="/favicon.svg" alt="Eldigen" className="mx-auto size-10 object-contain" />
+            <BrandLogo className="mx-auto size-10" />
             <CardTitle>{t("auth_accept_invite")}</CardTitle>
           </CardHeader>
           <CardContent>

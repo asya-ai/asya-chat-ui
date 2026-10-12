@@ -110,6 +110,16 @@ def resolve_auth_headers(
         connection = _user_connection(session, user_id, row.id)
         if not connection:
             return {}
+        from app.services.integrations.oauth import refresh_user_connection_tokens
+
+        refreshed = refresh_user_connection_tokens(
+            session, auth_config=connection.auth_config
+        )
+        if refreshed and refreshed != connection.auth_config:
+            connection.auth_config = refreshed
+            session.add(connection)
+            session.commit()
+            session.refresh(connection)
         return headers_from_user_connection(connection.auth_config)
 
     return headers_from_shared_auth(auth_type, auth_config)
@@ -136,8 +146,28 @@ def resolve_test_auth(
         connection = _user_connection(session, user_id, row.id)
         if not connection:
             return auth_type, {}
-        return auth_type, headers_from_user_connection(connection.auth_config)
-    return auth_type, headers_from_shared_auth(auth_type, auth_config)
+        from app.services.integrations.oauth import refresh_user_connection_tokens
+
+        refreshed = refresh_user_connection_tokens(
+            session, auth_config=connection.auth_config
+        )
+        if refreshed and refreshed != connection.auth_config:
+            connection.auth_config = refreshed
+            session.add(connection)
+            session.commit()
+            session.refresh(connection)
+        headers = headers_from_user_connection(connection.auth_config)
+    else:
+        headers = headers_from_shared_auth(auth_type, auth_config)
+    if getattr(row, "origin", None) == "catalog" and row.catalog_id:
+        from app.services.integrations.catalog import (
+            graph_mcp_request_headers,
+            is_microsoft_catalog,
+        )
+
+        if is_microsoft_catalog(row.catalog_id):
+            headers = {**graph_mcp_request_headers(row.catalog_id), **headers}
+    return auth_type, headers
 
 
 def resolve_effective_mcp_servers(
@@ -171,6 +201,11 @@ def resolve_effective_mcp_servers(
             continue
         if row.slug in seen_slugs:
             continue
+        if getattr(row, "origin", None) == "catalog" and row.catalog_id:
+            from app.services.integrations.materialize import should_expose_catalog_server
+
+            if not should_expose_catalog_server(session, row, org_id=org_id):
+                continue
         auth_type, auth_config = _effective_auth(row, binding)
         if auth_type == "user_provided":
             connection = _user_connection(session, user_id, row.id)
@@ -180,12 +215,50 @@ def resolve_effective_mcp_servers(
         else:
             fingerprint = auth_fingerprint(auth_type, auth_config)
         config = _row_to_config(row)
+        if getattr(row, "origin", None) == "catalog" and row.catalog_id:
+            from app.services.integrations.catalog import get_catalog
+            from app.services.integrations.store import resolve_effective_admin_config
+
+            entry = get_catalog(row.catalog_id)
+            if entry and entry.mcp.url_from:
+                cfg, _, _ = resolve_effective_admin_config(
+                    session,
+                    target_kind="catalog",
+                    target_id=row.catalog_id,
+                    org_id=org_id,
+                )
+                url = str(cfg.get(entry.mcp.url_from) or "").strip()
+                if url:
+                    config = McpServerConfig(
+                        id=config.id,
+                        name=config.name,
+                        transport=config.transport,
+                        enabled=config.enabled,
+                        description=config.description,
+                        url=url,
+                        command=config.command,
+                        args=config.args,
+                        env=config.env,
+                        headers=config.headers,
+                        include=config.include,
+                        tool_allowlist=config.tool_allowlist,
+                        tool_blocklist=config.tool_blocklist,
+                    )
         headers = resolve_auth_headers(
             session,
             ResolvedMcpServer(db_id=row.id, config=config, auth_type=auth_type, auth_fingerprint=fingerprint),
             org_id=org_id,
             user_id=user_id,
         )
+        if getattr(row, "origin", None) == "catalog" and row.catalog_id:
+            from app.services.integrations.catalog import (
+                graph_mcp_request_headers,
+                is_microsoft_catalog,
+            )
+
+            if is_microsoft_catalog(row.catalog_id):
+                # Authorization from the user connection must win.
+                headers = {**graph_mcp_request_headers(row.catalog_id), **headers}
         config = McpServerConfig(
             id=config.id,
             name=config.name,

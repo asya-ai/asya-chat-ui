@@ -62,6 +62,19 @@ export type AttachmentLimits = {
   max_total_bytes: number
 }
 
+export type Branding = {
+  app_title: string | null
+  has_logo: boolean
+  logo_updated_at: string | null
+}
+
+export type WhitelabelSettings = {
+  app_title: string | null
+  has_logo: boolean
+  logo_content_type: string | null
+  updated_at: string
+}
+
 export type ApiKey = {
   id: string
   name: string
@@ -70,6 +83,8 @@ export type ApiKey = {
   last_used_at?: string | null
   revoked_at?: string | null
 }
+
+export type ModelCostTier = 1 | 2 | 3 | 4
 
 export type ChatModel = {
   id: string
@@ -85,6 +100,17 @@ export type ChatModel = {
   reasoning_effort?: string | null
   openrouter_endpoint?: string | null
   is_available?: boolean
+  input_cost_per_million?: number | null
+  cached_input_cost_per_million?: number | null
+  output_cost_per_million?: number | null
+  /** USD per generated image when billed per image */
+  cost_per_image?: number | null
+  /** Auto-derived from live pricing */
+  auto_cost_tier?: ModelCostTier | null
+  /** Admin override; null means follow auto */
+  cost_tier_override?: ModelCostTier | null
+  /** Effective tier (override ?? auto); null when unknown */
+  cost_tier?: ModelCostTier | null
 }
 
 export type ModelSuggestionItem = {
@@ -122,6 +148,7 @@ export type Chat = {
   agent_id?: string | null
   parent_chat_id?: string | null
   is_shared?: boolean
+  share_token?: string | null
   is_incognito?: boolean
   is_subagent?: boolean
   is_pinned?: boolean
@@ -147,6 +174,8 @@ export type ChatMessage = {
   role: string
   content: string
   created_at: string
+  started_at?: string | null
+  completed_at?: string | null
   model_id?: string | null
   model_name?: string | null
   attachments?: ChatMessageAttachmentLike[] | null
@@ -175,6 +204,37 @@ export type SourceItem = {
   snippet?: string | null
 }
 
+const BLOCKED_SOURCE_HOSTS = new Set([
+  "localhost",
+  "metadata",
+  "metadata.google.internal",
+  "host.docker.internal",
+  "gateway.docker.internal",
+  "kubernetes.docker.internal",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+])
+const BLOCKED_SOURCE_HOST_SUFFIXES = [".local", ".internal", ".localhost", ".lan", ".home", ".corp"]
+
+/** Hide private / MCP-endpoint URLs that must not appear as citations. */
+export const isUsableSourceUrl = (url: string | null | undefined): boolean => {
+  const text = url?.trim()
+  if (!text) return false
+  let parsed: URL
+  try {
+    parsed = new URL(text)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
+  const host = parsed.hostname.replace(/\.$/, "").toLowerCase()
+  if (!host || BLOCKED_SOURCE_HOSTS.has(host)) return false
+  if (BLOCKED_SOURCE_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))) return false
+  if (!host.includes(".")) return false
+  return true
+}
+
 /** Same site/file once — matches backend `_dedupe_sources` identity rules. */
 export const dedupeSources = (sources: SourceItem[]): SourceItem[] => {
   const seen = new Set<string>()
@@ -182,6 +242,9 @@ export const dedupeSources = (sources: SourceItem[]): SourceItem[] => {
   for (const source of sources) {
     const sourceId = source.source_id?.trim()
     const url = source.url?.trim()
+    // Drop private MCP endpoints and other non-citation URLs; keep title-only rows.
+    if (url && !isUsableSourceUrl(url)) continue
+    if (sourceId?.startsWith("mcp:") && !url) continue
     const title = source.title?.trim()
     const key = sourceId
       ? `id:${sourceId}`
@@ -681,6 +744,7 @@ export type Agent = {
   visibility: AgentVisibility
   is_owner: boolean
   role: AgentRole
+  display_order?: number | null
   created_at: string
   updated_at: string
 }
@@ -788,10 +852,72 @@ export type McpServer = {
   user_instructions?: string | null
   api_token_header_name?: string | null
   api_token_header_format?: string | null
+  origin?: string
+  catalog_id?: string | null
   is_enabled: boolean
   connection_status?: string | null
   created_at: string
   updated_at: string
+}
+
+export type IntegrationAdminField = {
+  key: string
+  label: string
+  required: boolean
+  secret: boolean
+  placeholder?: string | null
+  help_text?: string | null
+  default?: string | null
+}
+
+export type CatalogIntegrationStatus = {
+  catalog_id: string
+  name: string
+  description: string
+  connect_kind: "bearer_api_key" | "oauth"
+  oauth_provider_id?: string | null
+  oauth_scopes: string[]
+  user_instructions?: string | null
+  icon_key?: string | null
+  mcp_slug: string
+  admin_config_fields: IntegrationAdminField[]
+  enabled: boolean
+  configured: boolean
+  config_source?: string | null
+  config_enabled: boolean
+  installable: boolean
+  connected: boolean
+  connection_status: string
+  effective_mcp_url?: string | null
+  allowed_embed_origins?: string | null
+}
+
+export type IntegrationAdminConfig = {
+  target_kind: string
+  target_id: string
+  scope: string
+  org_id?: string | null
+  is_enabled: boolean
+  configured: boolean
+  values: Record<string, string | null | undefined>
+} & Record<string, unknown>
+
+export type OAuthProviderConfig = {
+  provider_id: string
+  name: string
+  description: string
+  docs_url?: string | null
+  default_scopes: string[]
+  fields: IntegrationAdminField[]
+} & IntegrationAdminConfig
+
+export type IntegrationTestResult = {
+  status: string
+  detail?: string | null
+  latency_ms?: number | null
+  tools?: number | null
+  resources?: number | null
+  prompts?: number | null
 }
 
 export type McpServerWrite = {

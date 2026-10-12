@@ -48,10 +48,11 @@ body {
 }
 
 /*
-  Asya / Eldigen tokens from Figma Chat page (node 2223:105368).
-  body/bg #f5f3f2 · card white · primary button #006b89 ·
-  interaction hover rgba(0,133,169,0.1) · text rgba(25,9,6,*) ·
-  card radius 14px · Google Sans Flex + Instrument Serif.
+  Eldigen tokens from Figma Updates (node 3585:223253).
+  body/bg #e3e7f3 · card #f5f6fa · primary #475582 ·
+  badge-fg #434d71 · interaction hover #4755821a ·
+  dark body/bg #111319 · card #020409 · primary #1d284a ·
+  badge-fg #9eaddc · card radius 14px · Google Sans Flex + Instrument Serif.
 */
 @theme inline {
   --font-sans: "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
@@ -66,6 +67,8 @@ body {
   --radius-card: 0.875rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-tooltip: var(--tooltip);
+  --color-tooltip-foreground: var(--tooltip-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -89,6 +92,7 @@ body {
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-badge-fg: var(--badge-fg);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -114,24 +118,31 @@ body {
   --chat-content-width: clamp(35.9375rem, 52vw, 52rem);
   --radius: 0.5rem;
 
-  --background: #f5f3f2;
-  --foreground: rgba(25, 9, 6, 0.79);
-  --content-secondary: rgba(25, 9, 6, 0.39);
-  --icon-solid: #190906;
-  --card: #ffffff;
-  --card-foreground: rgba(25, 9, 6, 0.79);
-  --popover: #ffffff;
-  --popover-foreground: rgba(25, 9, 6, 0.79);
+  --background: #e3e7f3;
+  --foreground: rgba(7, 12, 28, 0.79);
+  --content-secondary: rgba(7, 12, 28, 0.39);
+  --icon-solid: #070c1c;
+  /* Opaque inverted surface — never use --foreground (it has alpha). */
+  --tooltip: #070c1c;
+  --tooltip-foreground: #e3e7f3;
+  /* Figma: switch-primary-bg — Switch checked fill (= --primary) */
+  --switch-primary-bg: var(--primary);
+  /* Figma: button-primary-bg — CTA / default Button fill (= --primary) */
+  --button-primary-bg: var(--primary);
+  --card: #f5f6fa;
+  --card-foreground: rgba(7, 12, 28, 0.79);
+  --popover: #f5f6fa;
+  --popover-foreground: rgba(7, 12, 28, 0.79);
 
-  --primary: #006b89;
+  --primary: #475582;
   --primary-foreground: #ffffff;
 
-  --secondary: rgba(25, 9, 6, 0.06);
-  --secondary-foreground: rgba(25, 9, 6, 0.79);
-  --muted: rgba(25, 9, 6, 0.06);
-  --muted-foreground: rgba(25, 9, 6, 0.57);
-  --accent: rgba(0, 133, 169, 0.1);
-  --accent-foreground: rgba(25, 9, 6, 0.79);
+  --secondary: rgba(7, 12, 28, 0.06);
+  --secondary-foreground: rgba(7, 12, 28, 0.79);
+  --muted: rgba(7, 12, 28, 0.06);
+  --muted-foreground: rgba(7, 12, 28, 0.57);
+  --accent: rgba(71, 85, 130, 0.1);
+  --accent-foreground: rgba(7, 12, 28, 0.79);
 
   --destructive: #e21d12;
   --destructive-foreground: #ffffff;
@@ -139,14 +150,15 @@ body {
   --success: #158444;
   --success-foreground: #ffffff;
   --warning: #ffcc00;
-  --warning-foreground: rgba(25, 9, 6, 0.94);
+  --warning-foreground: rgba(7, 12, 28, 0.94);
 
   --code: oklch(0.141 0.004 285.823);
   --code-foreground: oklch(0.93 0.01 250);
 
-  --border: rgba(25, 9, 6, 0.09);
-  --input: rgba(25, 9, 6, 0.09);
-  --ring: rgba(0, 133, 169, 0.5);
+  --border: rgba(7, 12, 28, 0.09);
+  --input: rgba(7, 12, 28, 0.09);
+  --ring: rgba(71, 85, 130, 0.5);
+  --badge-fg: #434d71;
 
   --chart-1: oklch(0.491 0.094 225.693);
   --chart-2: oklch(0.54 0.136 151.688);
@@ -154,35 +166,39 @@ body {
   --chart-4: oklch(0.582 0.226 29.444);
   --chart-5: oklch(0.648 0.222 33.45);
 
-  --sidebar: #f5f3f2;
-  --sidebar-foreground: rgba(25, 9, 6, 0.79);
-  --sidebar-primary: #006b89;
+  --sidebar: #e3e7f3;
+  --sidebar-foreground: rgba(7, 12, 28, 0.79);
+  --sidebar-primary: #475582;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: rgba(0, 133, 169, 0.1);
-  --sidebar-accent-foreground: rgba(25, 9, 6, 0.79);
-  --sidebar-border: rgba(25, 9, 6, 0.09);
-  --sidebar-ring: rgba(0, 133, 169, 0.5);
+  --sidebar-accent: rgba(71, 85, 130, 0.1);
+  --sidebar-accent-foreground: rgba(7, 12, 28, 0.79);
+  --sidebar-border: rgba(7, 12, 28, 0.09);
+  --sidebar-ring: rgba(71, 85, 130, 0.5);
 }
 
 .dark {
-  --background: #261715;
-  --foreground: rgba(248, 248, 248, 0.79);
-  --content-secondary: rgba(248, 248, 248, 0.39);
-  --icon-solid: #f8f8f8;
-  --card: #190906;
-  --card-foreground: rgba(248, 248, 248, 0.79);
-  --popover: #190906;
-  --popover-foreground: rgba(248, 248, 248, 0.79);
+  --background: #111319;
+  --foreground: rgba(228, 233, 238, 0.79);
+  --content-secondary: rgba(228, 233, 238, 0.39);
+  --icon-solid: #e4e9ee;
+  --tooltip: #e4e9ee;
+  --tooltip-foreground: #111319;
+  --switch-primary-bg: var(--primary);
+  --button-primary-bg: var(--primary);
+  --card: #020409;
+  --card-foreground: rgba(228, 233, 238, 0.79);
+  --popover: #020409;
+  --popover-foreground: rgba(228, 233, 238, 0.79);
 
-  --primary: #005066;
+  --primary: #1d284a;
   --primary-foreground: #ffffff;
 
-  --secondary: rgba(248, 248, 248, 0.06);
-  --secondary-foreground: rgba(248, 248, 248, 0.79);
-  --muted: rgba(248, 248, 248, 0.06);
-  --muted-foreground: rgba(248, 248, 248, 0.57);
-  --accent: rgba(0, 133, 169, 0.2);
-  --accent-foreground: rgba(248, 248, 248, 0.79);
+  --secondary: rgba(228, 233, 238, 0.06);
+  --secondary-foreground: rgba(228, 233, 238, 0.79);
+  --muted: rgba(228, 233, 238, 0.06);
+  --muted-foreground: rgba(228, 233, 238, 0.57);
+  --accent: rgba(69, 84, 128, 0.1);
+  --accent-foreground: rgba(228, 233, 238, 0.79);
 
   --destructive: #e21d12;
   --destructive-foreground: #ffffff;
@@ -190,14 +206,15 @@ body {
   --success: #158444;
   --success-foreground: #ffffff;
   --warning: #ffcc00;
-  --warning-foreground: rgba(25, 9, 6, 0.94);
+  --warning-foreground: rgba(7, 12, 28, 0.94);
 
   --code: oklch(0.12 0.01 285);
   --code-foreground: oklch(0.93 0.01 250);
 
-  --border: rgba(248, 248, 248, 0.09);
-  --input: rgba(248, 248, 248, 0.09);
-  --ring: rgba(0, 133, 169, 0.5);
+  --border: rgba(228, 233, 238, 0.09);
+  --input: rgba(228, 233, 238, 0.09);
+  --ring: rgba(71, 85, 130, 0.5);
+  --badge-fg: #9eaddc;
 
   --chart-1: oklch(0.62 0.1 225);
   --chart-2: oklch(0.62 0.13 151);
@@ -205,14 +222,14 @@ body {
   --chart-4: oklch(0.65 0.2 25);
   --chart-5: oklch(0.68 0.2 33);
 
-  --sidebar: #261715;
-  --sidebar-foreground: rgba(248, 248, 248, 0.79);
-  --sidebar-primary: #005066;
+  --sidebar: #111319;
+  --sidebar-foreground: rgba(228, 233, 238, 0.79);
+  --sidebar-primary: #1d284a;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: rgba(0, 133, 169, 0.2);
-  --sidebar-accent-foreground: rgba(248, 248, 248, 0.79);
-  --sidebar-border: rgba(248, 248, 248, 0.09);
-  --sidebar-ring: rgba(0, 133, 169, 0.5);
+  --sidebar-accent: rgba(69, 84, 128, 0.1);
+  --sidebar-accent-foreground: rgba(228, 233, 238, 0.79);
+  --sidebar-border: rgba(228, 233, 238, 0.09);
+  --sidebar-ring: rgba(71, 85, 130, 0.5);
 }
 
 @layer base {
@@ -232,9 +249,52 @@ body {
   mask-size: contain;
 }
 
+/* Sidebar tab content — fade-in stagger top → bottom (~0.7s) */
+@keyframes sidebar-stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sidebar-stagger-item {
+  --stagger: 0;
+  animation: sidebar-stagger-in 0.28s ease-in-out both;
+  animation-delay: calc(min(var(--stagger), 12) * 35ms);
+}
+
+/* Chat message reveal — last visible bubble(s) when opening / appending */
+@keyframes chat-message-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-message-reveal {
+  --reveal: 0;
+  animation: chat-message-reveal 0.35s ease-in-out both;
+  animation-delay: calc(var(--reveal) * 45ms);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-bounce {
     animation: none !important;
+  }
+
+  .sidebar-stagger-item,
+  .chat-message-reveal {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
   }
 
   *,
@@ -331,4 +391,17 @@ body {
   border-radius: 9999px;
   background: var(--primary);
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* Chat markdown lists — native markers; ch padding fits multi-digit numbers. */
+.chat-markdown ul {
+  list-style: disc outside;
+  padding-inline-start: 1.25rem;
+}
+
+.chat-markdown ol {
+  list-style: decimal outside;
+  font-variant-numeric: tabular-nums;
+  /* ~4 digits + "." inside the padding gutter (avoids overflow-x clip). */
+  padding-inline-start: 4.5ch;
 }

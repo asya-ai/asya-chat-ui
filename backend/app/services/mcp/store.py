@@ -72,6 +72,8 @@ def server_to_read(row: McpServer, *, connection_status: str | None = None) -> d
                 else None
             )
         ),
+        "origin": getattr(row, "origin", None) or "custom",
+        "catalog_id": getattr(row, "catalog_id", None),
         "is_enabled": row.is_enabled,
         "connection_status": connection_status,
         "created_at": row.created_at.isoformat(),
@@ -242,6 +244,8 @@ def update_server(session: Session, row: McpServer, **updates: Any) -> McpServer
 
 
 def delete_server(session: Session, row: McpServer) -> None:
+    # No ORM relationships to bindings/connections — delete children and flush
+    # before the server row, or Postgres rejects the FK.
     bindings = session.exec(
         select(McpOrgBinding).where(McpOrgBinding.instance_server_id == row.id)
     ).all()
@@ -252,6 +256,7 @@ def delete_server(session: Session, row: McpServer) -> None:
     ).all()
     for connection in connections:
         session.delete(connection)
+    session.flush()
     session.delete(row)
     session.commit()
 

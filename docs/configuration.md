@@ -22,8 +22,8 @@ This file documents runtime configuration from `backend/app/core/config.py`, com
 - Storage/attachments:
   - `FILES_BASE_DIR` (default: `/data/files`)
   - `ATTACHMENTS_MAX_FILES` (default: 50)
-  - `ATTACHMENTS_MAX_FILE_BYTES` (default: 20000000)
-  - `ATTACHMENTS_MAX_TOTAL_BYTES` (default: 50000000)
+  - `ATTACHMENTS_MAX_FILE_BYTES` (default: 50000000)
+  - `ATTACHMENTS_MAX_TOTAL_BYTES` (default: 100000000)
   - `ATTACHMENT_URL_EXPIRE_MINUTES` (default: 60)
 - Execution sandbox:
   - `EXEC_HOST_FILES_DIR`
@@ -102,7 +102,10 @@ Model IDs are configured in the Models settings UI, not via env vars.
 - `CELERY_RESULT_BACKEND` (defaults to Redis in compose)
 - `WORKER_REPLICAS` (compose deploy replicas, default: 1)
 - `WORKER_CONCURRENCY` (Celery worker `--concurrency`, default: 2)
+- `CELERY_MAX_TASKS_PER_CHILD` (default: `40`) — recycle a prefork child after N tasks
+- `CELERY_MAX_MEMORY_PER_CHILD_KB` (default: `2560000` ≈ 2.5 GiB) — recycle after task if RSS exceeds this
 - Workers consume queues in order `generation,celery,embedding` so chat answers preempt project reindex/embedding work.
+- Generation and embedding share the same workers; project RAG/search loads ONNX `bge-m3` (quantized ~0.6 GiB) into that process. Prefer fewer replicas × concurrency over unbounded long-lived children.
 
 ## Scraper Variables
 
@@ -143,6 +146,20 @@ Large tool/resource/prompt responses are written under `chats/{chat_id}/mcp/` an
 ### System diagnosis
 
 Super-admin **System diagnosis** probes enabled **instance** MCP servers. User-provided servers show as configured and require a user connection before tools appear in chat.
+
+### Microsoft 365 (Outlook, OneDrive, SharePoint, Teams, To Do)
+
+Microsoft catalog apps use OAuth in ChatUI, then call Graph through the compose service `msgraph-mcp` ([ms-graph-mcp](https://github.com/nitin27may/ms-graph-mcp), MIT). Official Microsoft “Enterprise MCP” is Entra-directory only and is not used here.
+
+1. Register one Entra app (delegated Graph permissions for the apps you offer).
+2. Set the same **Application (client) ID** and **Directory (tenant) ID** in:
+   - `.env`: `GRAPH_MCP_CLIENT_ID`, `GRAPH_MCP_TENANT_ID`
+   - **Settings → Integrations → OAuth providers → Microsoft**
+3. Redirect URI: `{public_origin}/api/integrations/oauth/callback` (also paste into the provider form).
+4. Default MCP URL for Microsoft catalog cards: `http://msgraph-mcp:8094/mcp` (overridable per app).
+5. Offer apps, then **Connect** as a user.
+
+ChatUI forwards the user’s Graph access token as `Authorization: Bearer …` and adds `X-Toolsets` / `X-Write-Scope` so each card only sees its tool family (mail, calendar, files, chat, tasks, people).
 
 ## Network and Port Configuration
 

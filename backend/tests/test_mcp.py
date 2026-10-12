@@ -323,9 +323,60 @@ def test_mcp_source_items_from_tool_result_adds_server_and_urls() -> None:
             "is_error": False,
         },
     )
-    assert items[0]["source_id"] == "mcp:data-lv"
-    assert items[0]["title"] == "Latvia Open Data"
+    # MCP endpoint itself is never cited — only usable URLs from the payload.
+    assert all(item["url"] != server.url for item in items)
     assert any(item["url"] == "https://data.gov.lv/dataset/buses" for item in items)
+    assert any(item.get("title") == "Buses" for item in items)
+
+
+def test_mcp_source_items_skips_integration_mcp_endpoint() -> None:
+    from app.services.mcp.bridge import mcp_source_items_from_tool_result
+
+    mcp_url = "http://host.docker.internal:9020/mcp"
+    server = McpServerConfig(
+        id="pitchpatterns",
+        name="PitchPatterns",
+        transport="http",
+        url=mcp_url,
+    )
+    set_active_mcp_snapshots([McpServerSnapshot(server=server)])
+
+    assert (
+        mcp_source_items_from_tool_result(
+            "pitchpatterns__search",
+            {"content": [{"type": "text", "text": "ok"}], "is_error": False},
+        )
+        == []
+    )
+
+    # MCP URL echoed in the payload must not become a citation either.
+    assert (
+        mcp_source_items_from_tool_result(
+            "pitchpatterns__search",
+            {
+                "content": [{"type": "text", "text": mcp_url}],
+                "is_error": False,
+            },
+        )
+        == []
+    )
+
+    items = mcp_source_items_from_tool_result(
+        "pitchpatterns__search",
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "hit",
+                    "url": "https://app.pitchpatterns.com/patterns/abc",
+                    "title": "Pattern ABC",
+                }
+            ],
+            "is_error": False,
+        },
+    )
+    assert len(items) == 1
+    assert items[0]["url"] == "https://app.pitchpatterns.com/patterns/abc"
 
 
 def test_mcp_source_items_skips_errors() -> None:
@@ -437,3 +488,56 @@ async def test_mcp_spill_and_data_tools(tmp_path, monkeypatch) -> None:
     staged = stage_mcp_data_for_exec("chat-1", work)
     assert staged
     assert (work / "data" / stub["file_name"]).is_file()
+
+
+def test_delete_server_removes_user_connections() -> None:
+    from uuid import uuid4
+
+    from sqlmodel import Session, SQLModel, create_engine, select
+    from sqlmodel.pool import StaticPool
+
+    from app.models import McpServer, McpUserConnection, User
+    from app.services.mcp.store import delete_server
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    session = Session(engine)
+
+    user = User(email=f"u-{uuid4().hex[:8]}@example.com", hashed_password="x")
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    server = McpServer(
+        slug=f"s-{uuid4().hex[:8]}",
+        name="Server",
+        scope="org",
+        transport="http",
+        url="http://example.com/mcp",
+        auth_type="user_provided",
+    )
+    session.add(server)
+    session.commit()
+    session.refresh(server)
+
+    session.add(
+        McpUserConnection(
+            user_id=user.id,
+            server_id=server.id,
+            auth_config="enc:test",
+            status="connected",
+        )
+    )
+    session.commit()
+
+    delete_server(session, server)
+
+    assert session.get(McpServer, server.id) is None
+    leftover = session.exec(
+        select(McpUserConnection).where(McpUserConnection.server_id == server.id)
+    ).all()
+    assert leftover == []

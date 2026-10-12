@@ -13,6 +13,8 @@ import {
   modelStore,
   orgStore,
   reasoningEffortStore,
+  sidebarPinnedStore,
+  sidebarWidthStore,
   webSearchEnabledStore,
   type ActionInfoLevel,
 } from "@/lib/storage"
@@ -27,23 +29,23 @@ import type {
   SourceItem,
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
-import { supportsImageInput, supportsImageOutput } from "@/lib/modelCapabilities"
+import { useBranding } from "@/lib/branding"
+import {
+  splitModelDisplayName,
+  supportsImageInput,
+} from "@/lib/modelCapabilities"
 import { cn } from "@/lib/utils"
-import { ProviderIcon } from "@/components/ProviderIcon"
+import { useSidebarHover, useSidebarPinnedMount } from "@/lib/sidebar-hover"
+import { AppNavRail } from "@/components/AppNavRail"
+import { EldigenTreeRive } from "@/components/EldigenTreeRive"
 import { UsageLimitBanners } from "@/components/UsageLimitBanners"
-import { getProviderIconCandidates } from "@/lib/providerIcons"
+import { ChatModelSelect } from "@/pages/chat/ChatModelSelect"
 import { Button } from "@/components/ui/button"
 import { PromptFormDialog } from "@/components/PromptFormDialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { Check, ChevronDown, Image as ImageIcon, Menu, PanelLeftOpen, Plus } from "lucide-react"
+import { Menu, PanelLeftOpen, Plus, X } from "lucide-react"
 import { toast } from "sonner"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -80,8 +82,8 @@ import {
 
 const DEFAULT_ATTACHMENT_LIMITS = {
   max_files: 50,
-  max_file_bytes: 20_000_000,
-  max_total_bytes: 50_000_000,
+  max_file_bytes: 50_000_000,
+  max_total_bytes: 100_000_000,
 }
 
 const PROVIDER_REASONING_LEVELS: Record<string, string[]> = {
@@ -609,7 +611,6 @@ export const ChatPage = () => {
   )
   const [reasoningStopIndex, setReasoningStopIndex] = useState(0)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
-  const modelMenuListRef = useRef<HTMLDivElement>(null)
   const [loadingByChat, setLoadingByChat] = useState<Record<string, boolean>>({})
   const chatIdRef = useRef(chatId)
   chatIdRef.current = chatId
@@ -667,7 +668,19 @@ export const ChatPage = () => {
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true)
+  const [sidebarPinned, setSidebarPinned] = useState(() => sidebarPinnedStore.get())
+  const [sidebarWidthPx, setSidebarWidthPx] = useState(() => sidebarWidthStore.get())
+  const { hoverOpen: sidebarHoverOpen, openHover: openSidebarHover, closeHover: closeSidebarHover } =
+    useSidebarHover(sidebarPinned)
+  const sidebarPinnedMounted = useSidebarPinnedMount(sidebarPinned)
+  const sidebarResizeStartXRef = useRef(0)
+  const sidebarResizeStartWidthRef = useRef(sidebarWidthStore.default)
+  const sidebarWidthPxRef = useRef(sidebarWidthPx)
+  const [sidebarResizing, setSidebarResizing] = useState(false)
+
+  useEffect(() => {
+    sidebarWidthPxRef.current = sidebarWidthPx
+  }, [sidebarWidthPx])
   const [chatSearchDebounced, setChatSearchDebounced] = useState("")
   const [blockedLinkDialogOpen, setBlockedLinkDialogOpen] = useState(false)
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
@@ -678,6 +691,7 @@ export const ChatPage = () => {
   const [sourcesPanelSources, setSourcesPanelSources] = useState<SourceItem[] | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const { locale, t, tCount } = useI18n()
+  const { appTitle: brandingTitle } = useBranding()
   const isHistoryView = location.pathname === "/history"
   const codeTheme = useMemo<Record<string, CSSProperties>>(() => oneDark, [])
 
@@ -839,12 +853,10 @@ export const ChatPage = () => {
 
 
   const modelNameById = useMemo(() => {
-    return Object.fromEntries(models.map((model) => [model.id, model.display_name]))
+    return Object.fromEntries(
+      models.map((model) => [model.id, splitModelDisplayName(model.display_name).label])
+    )
   }, [models])
-  const isImageOutputModel = useCallback(
-    (model: ChatModel) => supportsImageOutput(model),
-    []
-  )
   const isEmbeddingModel = useCallback((model: ChatModel) => {
     const name = `${model.display_name} ${model.model_name}`.toLowerCase()
     return /(^|[\s/_-])(embedding|embeddings|text-embedding|embed)([\s/_-]|$)/.test(
@@ -872,13 +884,6 @@ export const ChatPage = () => {
     return effortIndex >= 0 ? effortIndex : reasoningStopIndex
   }, [providerReasoningLevels, selectedReasoningEffort, reasoningStopIndex])
 
-  useEffect(() => {
-    if (!modelMenuOpen || !selectedModel || !modelMenuListRef.current) return
-    const selectedEl = modelMenuListRef.current.querySelector(
-      `[data-model-id="${selectedModel}"]`
-    )
-    selectedEl?.scrollIntoView({ block: "nearest" })
-  }, [modelMenuOpen, selectedModel])
   const rejectUnsupportedImageAttachments = useCallback(
     (
       items: Array<{ content_type?: string | null }>,
@@ -1903,11 +1908,15 @@ export const ChatPage = () => {
     // Otherwise the cursor advances against an empty list and live deltas
     // create a partial timeline that hides persisted content.
     if (isMessagesLoading) return
+    // Live send/edit already owns the HTTP stream for this chat. Re-running
+    // resume on optimistic length bumps would also subscribe and double-apply
+    // deltas (users see duplicate writing until refresh).
+    if (localStreamChatIdsRef.current.has(chatId)) return
     let cancelled = false
     const resumeTasks = async () => {
       try {
         const tasks = await chatApi.listGenerationTasks(chatId, true)
-        if (cancelled) return
+        if (cancelled || localStreamChatIdsRef.current.has(chatId)) return
 
         let messages =
           queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
@@ -1916,32 +1925,44 @@ export const ChatPage = () => {
         // generation is still marked loading, always re-fetch history first.
         if (messages.length === 0) {
           const freshMessages = await chatApi.messages(chatId)
-          if (cancelled) return
+          if (cancelled || localStreamChatIdsRef.current.has(chatId)) return
           replaceChatMessagesFor(chatId, freshMessages)
           messages = freshMessages
         }
 
         if (tasks.length === 0) {
-          // Already have history (or just fetched it); nothing to attach.
+          // Persisted/rehydrated generating flags can outlive the task.
+          // Clear them so the stop button doesn't stick after completion.
+          // Never clear while this mount's live send/edit still owns the stream.
+          if (
+            !localStreamChatIdsRef.current.has(chatId) &&
+            (loadingByChat[chatId] ||
+              chatGenerationIndicatorsStore.getSnapshot()[chatId] === "generating")
+          ) {
+            setChatGenerating(chatId, false, { unreadIfAway: false })
+          }
           return
         }
 
         // Live send/edit on this mount already owns the stream — don't
         // double-subscribe. Still allow the empty-cache fetch above.
-        if (loadingByChat[chatId]) {
+        if (localStreamChatIdsRef.current.has(chatId) || loadingByChat[chatId]) {
           const ownsAllAssistants = tasks.every((task) =>
             messages.some(
               (msg) =>
                 msg.role === "assistant" &&
-                (msg.id === task.assistant_message_id || msg.task_id === task.id)
+                (msg.id === task.assistant_message_id ||
+                  msg.task_id === task.id ||
+                  // Optimistic bubble before task_id remap — still owned by live send.
+                  msg.id.startsWith("temp-assistant-"))
             )
           )
-          if (ownsAllAssistants) return
+          if (ownsAllAssistants || localStreamChatIdsRef.current.has(chatId)) return
         }
 
         let attached = 0
         for (const task of tasks) {
-          if (cancelled) return
+          if (cancelled || localStreamChatIdsRef.current.has(chatId)) return
           messages =
             queryClient.getQueryData<ChatMessage[]>(["chatMessages", chatId]) ?? []
           let hasAssistant = messages.some(
@@ -1952,7 +1973,7 @@ export const ChatPage = () => {
           if (!hasAssistant) {
             // Cache may still be optimistic/stale; pull server messages once.
             const freshMessages = await chatApi.messages(chatId)
-            if (cancelled) return
+            if (cancelled || localStreamChatIdsRef.current.has(chatId)) return
             replaceChatMessagesFor(chatId, freshMessages)
             messages = freshMessages
             hasAssistant = messages.some(
@@ -1966,7 +1987,8 @@ export const ChatPage = () => {
             taskSubscriptionsRef.current[task.id] ||
             taskPollingRef.current[task.id]
           ) {
-            setChatGenerating(chatId, true)
+            // Subscription already owns the stream — don't flip generating
+            // back on after a done event cleared it during cleanup.
             continue
           }
           taskCursorRef.current[task.id] = taskCursorRef.current[task.id] ?? 0
@@ -1988,7 +2010,7 @@ export const ChatPage = () => {
           // Catch up from DB first, then subscribe from the advanced cursor so
           // activity/tool events are not applied twice on refresh.
           await fetchTaskEvents(chatId, task.id, task.assistant_message_id)
-          if (cancelled) return
+          if (cancelled || localStreamChatIdsRef.current.has(chatId)) return
           subscribeToTask(chatId, task.id, task.assistant_message_id)
           attached += 1
         }
@@ -2074,7 +2096,7 @@ export const ChatPage = () => {
     }
     const merged = mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
       if (!msg.tool_event) return true
-      if (actionInfoLevel !== "detailed") return false
+      if (isSharedView || actionInfoLevel !== "detailed") return false
       const event = msg.tool_event
       if (event.id && nestedToolEventIds.has(event.id)) return false
       // Hide generic tool_call / specialized bubbles already nested under a timeline action.
@@ -2099,6 +2121,7 @@ export const ChatPage = () => {
     serverMessages,
     toolEvents,
     actionInfoLevel,
+    isSharedView,
   ])
 
   const presentationImageUrls = useMemo(
@@ -2192,7 +2215,7 @@ export const ChatPage = () => {
     visibleMessages,
   ])
 
-  const startNewChat = () => {
+  const startNewChat = (options?: { agentId?: string | null }) => {
     // Do not clear the previous chat's message cache — generations may still be
     // streaming into it, and wiping leaves an empty shell when navigating back.
     const leavingId = chatId ?? pendingChatIdRef.current
@@ -2224,11 +2247,16 @@ export const ChatPage = () => {
     // Admin may have changed availability since this tab loaded; refresh so the
     // picker doesn't keep disabled/stale models selected.
     void refetchModels()
+    const nextAgentId =
+      options && "agentId" in options
+        ? options.agentId
+        : isAgentMode && activeAgentId
+          ? activeAgentId
+          : null
     navigate({
-      href:
-        isAgentMode && activeAgentId
-          ? `/chat?agent=${encodeURIComponent(activeAgentId)}`
-          : "/chat",
+      href: nextAgentId
+        ? `/chat?agent=${encodeURIComponent(nextAgentId)}`
+        : "/chat",
       replace: true,
     })
   }
@@ -2315,6 +2343,11 @@ export const ChatPage = () => {
   useEffect(() => {
     if (!chatId) {
       restoredDraftChatIdRef.current = null
+      // Drop stale pending ids when landing on an empty chat route. Otherwise
+      // typing / send continues the previous chat (common after opening a project).
+      if (!ensureChatPromiseRef.current && !justCreatedChatIdRef.current) {
+        pendingChatIdRef.current = null
+      }
       return
     }
     pendingChatIdRef.current = chatId
@@ -2469,7 +2502,27 @@ export const ChatPage = () => {
     }
   }
 
+  const copyShareLink = useCallback(
+    async (url: string) => {
+      try {
+        await navigator.clipboard.writeText(url)
+        toast.success(t("chat_share_dialog_title"), {
+          description: t("chat_share_dialog_copied"),
+        })
+      } catch {
+        toast.message(t("chat_share_dialog_title"), {
+          description: url,
+        })
+      }
+    },
+    [t]
+  )
+
   const toggleShareChat = async (chat: Chat) => {
+    if (chat.is_incognito) {
+      toast.error(t("chat_share_incognito_blocked"))
+      return
+    }
     if (chat.is_shared) {
       await chatApi.unshare(chat.id)
       queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
@@ -2479,6 +2532,7 @@ export const ChatPage = () => {
                 ? {
                     ...item,
                     is_shared: false,
+                    share_token: null,
                   }
                 : item
             )
@@ -2486,7 +2540,10 @@ export const ChatPage = () => {
       )
       return
     }
-    await chatApi.share(chat.id)
+    const shared = await chatApi.share(chat.id)
+    const sharePath =
+      shared.share_url ||
+      (shared.share_token ? `/shared/${shared.share_token}` : `/chat/${chat.id}`)
     queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
       prev
         ? prev.map((item) =>
@@ -2494,20 +2551,13 @@ export const ChatPage = () => {
               ? {
                   ...item,
                   is_shared: true,
+                  share_token: shared.share_token ?? item.share_token,
                 }
               : item
           )
         : prev
     )
-    const fullUrl = `${window.location.origin}/chat/${chat.id}`
-    try {
-      await navigator.clipboard.writeText(fullUrl)
-      toast.success(t("chat_share_dialog_copied"))
-    } catch {
-      toast.message(t("chat_share_dialog_title"), {
-        description: fullUrl,
-      })
-    }
+    await copyShareLink(`${window.location.origin}${sharePath}`)
   }
 
   const shareMessage = useCallback(
@@ -2518,8 +2568,10 @@ export const ChatPage = () => {
         toast.error(t("chat_share_incognito_blocked"))
         return
       }
-      if (!activeChat.is_shared) {
-        await chatApi.share(chatId)
+      let shareToken = activeChat.share_token
+      if (!activeChat.is_shared || !shareToken) {
+        const shared = await chatApi.share(chatId)
+        shareToken = shared.share_token ?? null
         queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
           prev
             ? prev.map((item) =>
@@ -2527,23 +2579,20 @@ export const ChatPage = () => {
                   ? {
                       ...item,
                       is_shared: true,
+                      share_token: shareToken,
                     }
                   : item
               )
             : prev
         )
       }
-      const fullUrl = `${window.location.origin}/chat/${chatId}?message=${encodeURIComponent(msg.id)}`
-      try {
-        await navigator.clipboard.writeText(fullUrl)
-        toast.success(t("chat_share_dialog_copied"))
-      } catch {
-        toast.message(t("chat_share_dialog_title"), {
-          description: fullUrl,
-        })
-      }
+      const sharePath = shareToken
+        ? `/shared/${shareToken}`
+        : `/chat/${chatId}`
+      const fullUrl = `${window.location.origin}${sharePath}?message=${encodeURIComponent(msg.id)}`
+      await copyShareLink(fullUrl)
     },
-    [activeChat, chatId, orgId, queryClient, t]
+    [activeChat, chatId, copyShareLink, orgId, queryClient, t]
   )
 
   const sendMessage = async () => {
@@ -2638,6 +2687,10 @@ export const ChatPage = () => {
         await promise
         if (generationEpochRef.current === generationEpoch) {
           refetchChats()
+          // Title may finish after done now; pick it up shortly.
+          window.setTimeout(() => {
+            if (generationEpochRef.current === generationEpoch) refetchChats()
+          }, 2500)
         }
       } catch {
         if (generationEpochRef.current !== generationEpoch) return
@@ -3333,6 +3386,9 @@ export const ChatPage = () => {
       await promise
       if (generationEpochRef.current === generationEpoch) {
         refetchChats()
+        window.setTimeout(() => {
+          if (generationEpochRef.current === generationEpoch) refetchChats()
+        }, 2500)
       }
     } catch {
       if (generationEpochRef.current !== generationEpoch) return
@@ -3548,9 +3604,9 @@ export const ChatPage = () => {
           .find((label) => Boolean(label)) ?? null
       const isThinking =
         msg.role === "assistant" &&
-        !isTerminalStatus(msg.generation_status ?? null) &&
-        (msg.content.trim().length === 0 || activeThinking.length > 0) &&
-        (!isImageMessage || activeThinking.length > 0)
+        (msg.generation_status === "queued" ||
+          msg.generation_status === "running" ||
+          msg.generation_status === "streaming")
       const thinkingLabels =
         nonStepThinking.length > 0
           ? nonStepThinking
@@ -3573,11 +3629,11 @@ export const ChatPage = () => {
           msg={msg}
           isUser={isUser}
           isCodeEvent={isCodeEvent}
-          isThinking={isThinking}
-          thinkingLabels={thinkingLabels}
-          currentStepLabel={stepLabel}
-          currentToolLabel={currentToolLabel}
-          actionInfoLevel={actionInfoLevel}
+          isThinking={isSharedView ? false : isThinking}
+          thinkingLabels={isSharedView ? [] : thinkingLabels}
+          currentStepLabel={isSharedView ? null : stepLabel}
+          currentToolLabel={isSharedView ? null : currentToolLabel}
+          actionInfoLevel={isSharedView ? "none" : actionInfoLevel}
           actionsEnabled={!isSharedView}
           isEditing={isEditing}
           isEditDragActive={isEditing && isEditDragActive}
@@ -3627,6 +3683,7 @@ export const ChatPage = () => {
       handleEditDragLeave,
       handleEditDrop,
       removeEditingAttachment,
+      actionInfoLevel,
       isSharedView,
       actionInfoLevel,
       visibleMessages,
@@ -3661,8 +3718,8 @@ export const ChatPage = () => {
   }, [activeAgent, chats, chatId, isHistoryView, t])
 
   useEffect(() => {
-    document.title = `${activeChatTitle} - ${t("app_title")}`
-  }, [activeChatTitle, t])
+    document.title = `${activeChatTitle} - ${brandingTitle || t("app_title")}`
+  }, [activeChatTitle, brandingTitle, t])
 
   const isEmptyChat = !isMessagesLoading && visibleMessages.length === 0
   const activeOrgName = orgs.find((org) => org.id === orgId)?.name
@@ -3670,8 +3727,9 @@ export const ChatPage = () => {
     ? currentUser.display_name || currentUser.username || currentUser.email || t("me_settings")
     : null
   const profileFirstName = profileLabel?.trim().split(/\s+/)[0] ?? ""
-  const welcomeTitle =
-    currentUser?.display_name || currentUser?.username
+  const welcomeTitle = isAgentMode
+    ? activeAgent?.name ?? t("project_unknown")
+    : currentUser?.display_name || currentUser?.username
       ? t("chat_welcome_named").replace("{name}", profileFirstName)
       : t("chat_welcome_title")
   const sidebarFooter = (
@@ -3712,9 +3770,9 @@ export const ChatPage = () => {
           <Menu aria-hidden="true" />
         </Button>
       </SheetTrigger>
-      <SheetContent side="left" className="bg-sidebar p-2 w-57.25" showCloseButton={false}>
+      <SheetContent side="left" className="w-96 bg-sidebar p-0" showCloseButton={false}>
         <ChatSidebar
-          title={t("chat_title")}
+          title={brandingTitle || t("chat_title")}
           labels={{
             newChat: t("chat_new"),
             history: t("chat_history"),
@@ -3742,15 +3800,52 @@ export const ChatPage = () => {
       </SheetContent>
     </Sheet>
   )
+  const toggleSidebarPinned = useCallback(() => {
+    setSidebarPinned((prev) => {
+      const next = !prev
+      sidebarPinnedStore.set(next)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!sidebarResizing) return
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    const onMove = (event: PointerEvent) => {
+      const delta = event.clientX - sidebarResizeStartXRef.current
+      const next = Math.min(
+        sidebarWidthStore.max,
+        Math.max(sidebarWidthStore.min, sidebarResizeStartWidthRef.current + delta)
+      )
+      setSidebarWidthPx(next)
+    }
+    const onUp = () => {
+      setSidebarResizing(false)
+      sidebarWidthStore.set(sidebarWidthPxRef.current)
+    }
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    return () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+    }
+  }, [sidebarResizing])
+
   const desktopSidebarToggle = (
     <Button
       variant="ghost"
       size="icon"
       className="hidden md:inline-flex"
-      onClick={() => setDesktopSidebarOpen((open) => !open)}
+      onClick={toggleSidebarPinned}
       aria-label={t("sidebar_toggle")}
+      aria-pressed={sidebarPinned}
     >
-      {desktopSidebarOpen ? (
+      {sidebarPinned ? (
         <span
           aria-hidden="true"
           className="size-4 figma-icon"
@@ -3762,38 +3857,105 @@ export const ChatPage = () => {
     </Button>
   )
 
+  const sidebarPanel = (
+    <ChatSidebar
+      title={brandingTitle || t("chat_title")}
+      labels={{
+        newChat: t("chat_new"),
+        history: t("chat_history"),
+        projects: t("project_title"),
+        prompts: t("prompt_library"),
+      }}
+      activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
+      activeChatId={chatId}
+      activeAgentId={activeAgentId}
+      onNewChat={startNewChat}
+      onOpenHistory={() => navigate({ to: "/history" })}
+      onOpenProjects={() => navigate({ to: "/projects" })}
+      onToggleShareChat={toggleShareChat}
+      onInsertPrompt={insertPromptIntoComposer}
+      hideBrandHeader
+      footer={null}
+    />
+  )
+
   return (
-    <div className="flex bg-background h-svh overflow-hidden">
+    <div className="relative flex h-svh overflow-hidden bg-background">
+      <AppNavRail
+        profileLabel={profileLabel}
+        avatarUrl={currentUser?.avatar_url}
+        settingsLabel={t("me_settings")}
+        onLogoClick={() => {
+          openSidebarHover()
+        }}
+        onMouseEnter={openSidebarHover}
+        onMouseLeave={closeSidebarHover}
+      />
+
       <aside
-        className={`hidden min-h-0 w-57.25 shrink-0 flex-col bg-sidebar p-2 text-sidebar-foreground ${
-          desktopSidebarOpen ? "md:flex" : ""
-        }`}
+        className={cn(
+          "relative my-2 ml-0 hidden min-h-0 shrink-0 flex-col overflow-hidden rounded-card md:flex",
+          "transition-[width,opacity,transform] duration-600 ease-in-out",
+          sidebarPinned
+            ? "border border-sidebar-border bg-sidebar text-sidebar-foreground opacity-100 translate-x-0"
+            : "pointer-events-none border-transparent opacity-0 -translate-x-1"
+        )}
+        style={{ width: sidebarPinned ? sidebarWidthPx : 0 }}
+        aria-hidden={!sidebarPinned}
       >
-        <ChatSidebar
-          title={t("chat_title")}
-          labels={{
-            newChat: t("chat_new"),
-            history: t("chat_history"),
-            projects: t("project_title"),
-            prompts: t("prompt_library"),
-          }}
-          activeSection={isHistoryView ? "history" : activeAgentId ? "projects" : null}
-          activeChatId={chatId}
-          activeAgentId={activeAgentId}
-          onNewChat={startNewChat}
-          onOpenHistory={() => navigate({ to: "/history" })}
-          onOpenProjects={() => navigate({ to: "/projects" })}
-          onToggleShareChat={toggleShareChat}
-          onInsertPrompt={insertPromptIntoComposer}
-          footer={sidebarFooter}
-        />
+        {sidebarPinnedMounted ? (
+          <div
+            className="relative flex h-full min-h-0 flex-col"
+            style={{ width: sidebarWidthPx }}
+          >
+            {sidebarPanel}
+            {sidebarPinned ? (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t("sidebar_toggle")}
+                title="Drag to resize"
+                className={cn(
+                  "absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none",
+                  sidebarResizing && "bg-primary/20"
+                )}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  sidebarResizeStartXRef.current = event.clientX
+                  sidebarResizeStartWidthRef.current = sidebarWidthPx
+                  setSidebarResizing(true)
+                }}
+                onDoubleClick={() => {
+                  setSidebarWidthPx(sidebarWidthStore.default)
+                  sidebarWidthStore.set(sidebarWidthStore.default)
+                }}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </aside>
+
+      {!sidebarPinned && sidebarHoverOpen ? (
+        <aside
+          className="absolute top-2 bottom-2 left-18 z-40 hidden min-h-0 animate-in fade-in slide-in-from-left-2 flex-col overflow-hidden rounded-card border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_25px_50px_-12px_rgba(7,12,28,0.21)] duration-600 ease-in-out md:flex"
+          style={{ width: sidebarWidthPx }}
+          onMouseEnter={openSidebarHover}
+          onMouseLeave={closeSidebarHover}
+        >
+          {sidebarPanel}
+        </aside>
+      ) : null}
+
       <main
         id="main-content"
-        className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
-          desktopSidebarOpen ? "md:ml-0" : "md:ml-2"
-        }`}
+        className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border"
       >
+        {isAgentMode && !isHistoryView ? (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 -z-10 bg-linear-to-b from-background from-60% to-ring"
+          />
+        ) : null}
         {!isSharedView ? <UsageLimitBanners orgId={orgId} /> : null}
         {isHistoryView ? (
           <HistoryPanel
@@ -3805,7 +3967,7 @@ export const ChatPage = () => {
               </>
             }
             trailingAction={
-              <Button onClick={startNewChat}>
+              <Button onClick={() => startNewChat()}>
                 <Plus aria-hidden="true" />
                 {t("chat_new")}
               </Button>
@@ -3835,17 +3997,22 @@ export const ChatPage = () => {
               }`}
             >
               <h1 className="sr-only">{activeChatTitle}</h1>
-              <div className="-top-px -left-px relative flex justify-between items-center bg-background px-3 py-2.5 w-[calc(100%+2px)] h-15 shrink-0">
-                <div className="flex items-center gap-2 min-w-0">
+              <div
+                className={cn(
+                  "relative z-10 grid h-15 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2.5",
+                  !isAgentMode && "bg-background"
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-2 justify-self-start">
                   {mobileSidebar}
                   {desktopSidebarToggle}
                   {isMobile && cowork.open && cowork.document ? (
-                    <div className="flex items-center gap-1 bg-muted p-0.5 rounded-lg shrink-0">
+                    <div className="flex shrink-0 items-center gap-1 rounded-lg bg-muted p-0.5">
                       <Button
                         type="button"
                         size="sm"
                         variant={cowork.mobileTab === "chat" ? "secondary" : "ghost"}
-                        className="px-2.5 h-7 text-xs"
+                        className="h-7 px-2.5 text-xs"
                         onClick={() => cowork.setMobileTab("chat")}
                       >
                         Chat
@@ -3854,53 +4021,31 @@ export const ChatPage = () => {
                         type="button"
                         size="sm"
                         variant={cowork.mobileTab === "document" ? "secondary" : "ghost"}
-                        className="px-2.5 h-7 text-xs"
+                        className="h-7 px-2.5 text-xs"
                         onClick={() => cowork.setMobileTab("document")}
                       >
                         Document
                         {cowork.document.version > cowork.document.last_assistant_version ? (
-                          <span className="inline-block bg-amber-500 ml-1 rounded-full size-1.5" />
+                          <span className="ml-1 inline-block size-1.5 rounded-full bg-amber-500" />
                         ) : null}
                       </Button>
                     </div>
                   ) : null}
+                </div>
+                <div className="justify-self-center">
                   {isAgentMode ? (
-                    <div className="flex items-center gap-3 text-muted-foreground text-sm">
-                      <span>
-                        {t("project_label")}{" "}
-                        {activeAgentId ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              navigate({ href: `/projects/${encodeURIComponent(activeAgentId)}` })
-                            }
-                            className="font-medium text-foreground hover:underline"
-                          >
-                            {activeAgent?.name ?? t("project_unknown")}
-                          </button>
-                        ) : (
-                          <span className="font-medium text-foreground">
-                            {t("project_unknown")}
-                          </span>
-                        )}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate({ to: "/chat/{-$chatId}" })}
-                      >
-                        {t("project_leave")}
-                      </Button>
-                    </div>
+                    <span className="inline-flex h-5 items-center rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
+                      {t("project_badge")}
+                    </span>
                   ) : null}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-end gap-2 justify-self-end">
                   {cowork.document && !cowork.open ? (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="hidden md:inline-flex h-8"
+                      className="hidden h-8 md:inline-flex"
                       onClick={() => {
                         cowork.setOpen(true)
                         cowork.setMobileTab("document")
@@ -3908,24 +4053,26 @@ export const ChatPage = () => {
                     >
                       Document
                       {cowork.document.version > cowork.document.last_assistant_version ? (
-                        <span className="bg-amber-500 ml-1 rounded-full size-1.5" />
+                        <span className="ml-1 size-1.5 rounded-full bg-amber-500" />
                       ) : null}
                     </Button>
                   ) : null}
-                  {/*                   <label className="hidden md:inline-flex items-center gap-2 cursor-pointer">
-                    <span className="text-sm leading-5">{t("chat_save_session")}</span>
-                    <Switch
-                      checked={!incognitoEnabled}
-                      onCheckedChange={(checked) => setIncognitoEnabled(!checked)}
-                      aria-label={t("chat_save_session")}
-                    />
-                  </label> */}
+                  {isAgentMode ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t("project_leave")}
+                      onClick={() => startNewChat({ agentId: null })}
+                    >
+                      <X aria-hidden="true" />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
               <MessageList
                 key={chatId ?? "new"}
                 messages={visibleMessages}
-                welcomeTitle={welcomeTitle}
                 isLoading={isMessagesLoading}
                 onScroll={handleMessagesScroll}
                 containerRef={messagesContainerRef}
@@ -3979,105 +4126,17 @@ export const ChatPage = () => {
                 slashCommands={slashCommands}
                 onDraftChange={handleComposerDraftChange}
                 modelSelect={
-                  <DropdownMenu
-                    modal={false}
+                  <ChatModelSelect
+                    models={selectableChatModels}
+                    selectedModelId={selectedModel}
                     open={modelMenuOpen}
                     onOpenChange={setModelMenuOpen}
-                  >
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="h-9 max-w-full min-w-0 gap-1.5 px-2 font-normal"
-                        aria-label={t("chat_select_model")}
-                        disabled={isSharedView}
-                      >
-                        {selectedChatModel ? (
-                          <>
-                            {getProviderIconCandidates(
-                              selectedChatModel.provider,
-                              selectedChatModel.model_name
-                            ).length > 0 ? (
-                              <ProviderIcon
-                                provider={selectedChatModel.provider}
-                                modelName={selectedChatModel.model_name}
-                                className="size-5 shrink-0"
-                              />
-                            ) : isImageOutputModel(selectedChatModel) ? (
-                              <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                            ) : null}
-                            <span className="min-w-0 truncate">
-                              {selectedChatModel.display_name}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="min-w-0 truncate text-muted-foreground">
-                            {t("chat_best_available_model")}
-                          </span>
-                        )}
-                        <ChevronDown
-                          aria-hidden="true"
-                          className="size-4 shrink-0 opacity-50"
-                        />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="end"
-                      className="z-100 flex w-72 min-h-0 max-h-(--radix-dropdown-menu-content-available-height) flex-col overflow-hidden p-0"
-                    >
-                      <div
-                        ref={modelMenuListRef}
-                        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
-                      >
-                        {selectableChatModels.map((model) => {
-                          const hasProviderIcon =
-                            getProviderIconCandidates(
-                              model.provider,
-                              model.model_name
-                            ).length > 0
-                          const isSelected = model.id === selectedModel
-                          return (
-                            <DropdownMenuItem
-                              key={model.id}
-                              data-model-id={model.id}
-                              disabled={model.is_available === false}
-                              className="cursor-pointer gap-2"
-                              onClick={() => setSelectedModel(model.id)}
-                            >
-                              <span className="inline-flex min-w-0 flex-1 items-center gap-2">
-                                {hasProviderIcon ? (
-                                  <ProviderIcon
-                                    provider={model.provider}
-                                    modelName={model.model_name}
-                                    className="size-5 shrink-0"
-                                  />
-                                ) : isImageOutputModel(model) ? (
-                                  <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                ) : null}
-                                <span className="truncate">{model.display_name}</span>
-                              </span>
-                              {isSelected ? (
-                                <Check aria-hidden="true" className="size-4 shrink-0" />
-                              ) : (
-                                <span className="size-4 shrink-0" aria-hidden="true" />
-                              )}
-                            </DropdownMenuItem>
-                          )
-                        })}
-                      </div>
-                      <div
-                        className="shrink-0 space-y-3 border-t px-3 py-2"
-                        onPointerDown={(event) => {
-                          const target = event.target
-                          if (
-                            target instanceof Element &&
-                            target.closest("input, button, label, [role='switch']")
-                          ) {
-                            return
-                          }
-                          event.preventDefault()
-                        }}
-                      >
+                    onSelect={setSelectedModel}
+                    selectLabel={t("chat_select_model")}
+                    emptyLabel={t("chat_best_available_model")}
+                    disabled={isSharedView}
+                    footer={
+                      <>
                         <div>
                           <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
                             <span>{t("chat_thinking_level")}</span>
@@ -4163,9 +4222,9 @@ export const ChatPage = () => {
                             />
                           </label>
                         </div>
-                      </div>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                      </>
+                    }
+                  />
                 }
                 onSend={sendMessage}
                 onStop={stopGeneration}
@@ -4184,7 +4243,15 @@ export const ChatPage = () => {
                 sendLabel={t("common_send")}
                 stopLabel={t("common_stop")}
                 welcomeTitle={welcomeTitle}
+                projects={agents.map((agent) => ({ id: agent.id, name: agent.name }))}
+                selectedProjectId={activeAgentId}
+                onSelectProject={(projectId) => startNewChat({ agentId: projectId })}
                 centered={isEmptyChat}
+                centeredLeading={
+                  isEmptyChat ? (
+                    <EldigenTreeRive className="aspect-[157/175] h-[min(32svh,20rem)] w-auto max-h-full" />
+                  ) : null
+                }
               />
               )}
             </div>

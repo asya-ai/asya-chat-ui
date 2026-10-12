@@ -11,6 +11,7 @@ from app.models import (
     AgentAccess,
     AgentAccessRole,
     AgentTeamAccess,
+    AgentUserOrder,
     Team,
     TeamMembership,
 )
@@ -115,18 +116,32 @@ def accessible_agent_ids(session: Session, org_id: UUID, user_id: UUID) -> set[U
 
 def list_accessible_agents(
     session: Session, org_id: UUID, user_id: UUID
-) -> list[tuple[Agent, AgentAccessRole]]:
+) -> list[tuple[Agent, AgentAccessRole, int | None]]:
     agent_ids = accessible_agent_ids(session, org_id, user_id)
     if not agent_ids:
         return []
     agents = session.exec(
-        select(Agent)
-        .where(Agent.org_id == org_id, Agent.id.in_(agent_ids))
-        .order_by(Agent.updated_at.desc())
+        select(Agent).where(Agent.org_id == org_id, Agent.id.in_(agent_ids))
     ).all()
-    result: list[tuple[Agent, AgentAccessRole]] = []
+    order_rows = session.exec(
+        select(AgentUserOrder).where(
+            AgentUserOrder.org_id == org_id,
+            AgentUserOrder.user_id == user_id,
+            AgentUserOrder.agent_id.in_(agent_ids),
+        )
+    ).all()
+    orders = {row.agent_id: row.display_order for row in order_rows}
+    ranked: list[tuple[Agent, AgentAccessRole, int | None]] = []
     for agent in agents:
         role = get_agent_role(session, agent, user_id)
         if role is not None:
-            result.append((agent, role))
-    return result
+            ranked.append((agent, role, orders.get(agent.id)))
+    ranked.sort(
+        key=lambda item: (
+            0 if item[2] is not None else 1,
+            item[2] if item[2] is not None else 0,
+            -(item[0].updated_at.timestamp() if item[0].updated_at else 0.0),
+            str(item[0].id),
+        )
+    )
+    return ranked

@@ -6,6 +6,8 @@ from app.services.providers.openai_provider import (
     OpenAIProvider,
     _coalesce_usage_tokens,
     _extract_usage_details,
+    _is_function_tools_with_reasoning_effort_error,
+    _is_non_chat_model_error,
     _is_prompt_cache_param_error,
     _is_unsupported_auto_tool_choice_error,
     _is_unsupported_reasoning_effort_error,
@@ -48,6 +50,20 @@ def test_detects_reasoning_effort_errors() -> None:
 
     assert _is_unsupported_reasoning_effort_error(exc) is True
     assert _is_prompt_cache_param_error(exc) is False
+
+
+def test_detects_function_tools_with_reasoning_effort_errors() -> None:
+    exc = ValueError(
+        "Error code: 400 - {'error': {'message': \"Function tools with reasoning_effort "
+        "are not supported for gpt-6-sol in /v1/chat/completions. To use function tools, "
+        "use /v1/responses or set reasoning_effort to 'none'.\", "
+        "'type': 'invalid_request_error', 'param': 'reasoning_effort', 'code': None}}"
+    )
+
+    assert _is_function_tools_with_reasoning_effort_error(exc) is True
+    assert _is_unsupported_reasoning_effort_error(exc) is False
+    # Prefer /v1/responses so tools can keep reasoning_effort.
+    assert _is_non_chat_model_error(exc) is True
 
 
 def test_detects_unsupported_auto_tool_choice_errors() -> None:
@@ -172,6 +188,88 @@ async def test_chat_completion_retry_strips_only_unsupported_reasoning_effort() 
     assert "reasoning_effort" not in fake_client.payloads[1]
     assert fake_client.payloads[1]["prompt_cache_key"] == "chat:123"
     assert fake_client.payloads[1]["prompt_cache_retention"] == "24h"
+
+
+class _FakeToolsReasoningChatCompletions:
+    def __init__(self, parent: "_FakeOpenAIClient") -> None:
+        self._parent = parent
+
+    async def create(self, **payload):
+        self._parent.payloads.append(dict(payload))
+        raise ValueError(
+            "Error code: 400 - {'error': {'message': \"Function tools with reasoning_effort "
+            "are not supported for gpt-6-sol in /v1/chat/completions. To use function tools, "
+            "use /v1/responses or set reasoning_effort to 'none'.\", "
+            "'type': 'invalid_request_error', 'param': 'reasoning_effort', 'code': None}}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_tools_reasoning_conflict_raises_non_chat() -> None:
+    from app.services.providers.openai_provider import NonChatModelError
+
+    provider = OpenAIProvider(api_key="test-key", reasoning_effort="high")
+    fake_client = _FakeOpenAIClient()
+    fake_client.chat.completions = _FakeToolsReasoningChatCompletions(fake_client)
+    provider.client = fake_client
+    payload = {
+        "model": "gpt-6-sol",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "search", "parameters": {}}}],
+        "tool_choice": "auto",
+        "reasoning_effort": "high",
+    }
+
+    with pytest.raises(NonChatModelError):
+        await provider._create_chat_completion(payload)
+
+    assert len(fake_client.payloads) == 1
+    assert fake_client.payloads[0]["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_chat_with_tools_preserves_reasoning_effort_on_completions() -> None:
+    provider = OpenAIProvider(api_key="test-key", reasoning_effort="high")
+    fake_client = _FakeOpenAIClient()
+    provider.client = fake_client
+
+    class _Usage:
+        prompt_tokens = 1
+        completion_tokens = 1
+        total_tokens = 2
+        input_tokens = 0
+        output_tokens = 0
+
+    class _Message:
+        content = "ok"
+        tool_calls = None
+        reasoning_content = None
+
+    class _Choice:
+        message = _Message()
+        finish_reason = "stop"
+
+    class _Result:
+        choices = [_Choice()]
+        usage = _Usage()
+
+    async def _create(**payload):
+        fake_client.payloads.append(dict(payload))
+        return _Result()
+
+    fake_client.chat.completions.create = _create
+
+    from app.services.providers.base import ChatToolSpec
+
+    response = await provider.chat_with_tools(
+        "claude-opus",
+        [{"role": "user", "content": "hello"}],
+        [ChatToolSpec(name="search", description="", parameters={})],
+    )
+
+    assert response.content == "ok"
+    assert len(fake_client.payloads) == 1
+    assert fake_client.payloads[0]["reasoning_effort"] == "high"
 
 
 def test_prefer_responses_api_comes_from_constructor() -> None:

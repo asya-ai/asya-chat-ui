@@ -21,6 +21,25 @@ QUEUE_EMBEDDING = "embedding"
 QUEUE_DEFAULT = "celery"
 WORKER_QUEUES = f"{QUEUE_GENERATION},{QUEUE_DEFAULT},{QUEUE_EMBEDDING}"
 
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Prefork children keep ONNX + allocator growth forever unless recycled.
+# Defaults: replace after 40 tasks, or after ~2.5GiB RSS (KiB).
+_MAX_TASKS_PER_CHILD = _positive_int_env("CELERY_MAX_TASKS_PER_CHILD", 40)
+_MAX_MEMORY_PER_CHILD_KB = _positive_int_env(
+    "CELERY_MAX_MEMORY_PER_CHILD_KB", 2_560_000
+)
+
 celery_app = Celery("chatui", broker=_get_broker_url(), backend=_get_backend_url())
 celery_app.conf.update(
     task_track_started=True,
@@ -28,6 +47,8 @@ celery_app.conf.update(
     task_time_limit=60 * 60 * 12 + 300,
     task_soft_time_limit=60 * 60 * 12,
     worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=_MAX_TASKS_PER_CHILD,
+    worker_max_memory_per_child=_MAX_MEMORY_PER_CHILD_KB,
     task_default_queue=QUEUE_DEFAULT,
     task_routes={
         "chatui.generate_chat_response": {"queue": QUEUE_GENERATION},

@@ -22,8 +22,13 @@ from app.services.org_service import (
 )
 from app.services.team_service import allowed_model_ids, seed_default_team_model
 from app.services.instance_providers import get_provider_for_org
+from app.services.model_pricing import (
+    classify_model_cost_tier,
+    resolve_model_token_price,
+)
 
 router = APIRouter(prefix="/models", tags=["models"])
+_COST_TIER_VALUES = frozenset({1, 2, 3, 4})
 _VERTEX_INVOCATION_CACHE_TTL_SECONDS = 600
 _VERTEX_INVOCATION_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
 
@@ -56,6 +61,13 @@ class ModelRead(BaseModel):
     reasoning_effort: str | None = None
     openrouter_endpoint: str | None = None
     is_available: bool = True
+    input_cost_per_million: float | None = None
+    cached_input_cost_per_million: float | None = None
+    output_cost_per_million: float | None = None
+    cost_per_image: float | None = None
+    auto_cost_tier: int | None = None
+    cost_tier_override: int | None = None
+    cost_tier: int | None = None
 
 
 class ModelUpdateRequest(BaseModel):
@@ -63,6 +75,8 @@ class ModelUpdateRequest(BaseModel):
     reasoning_effort: str | None = None
     uses_responses_api: bool | None = None
     openrouter_endpoint: str | None = None
+    # 1–4 to override; null (when field is set) clears back to auto.
+    cost_tier: int | None = None
 
 
 class ModelOrderUpdateRequest(BaseModel):
@@ -98,7 +112,21 @@ class OpenRouterEndpointsResponse(BaseModel):
     error: str | None = None
 
 
+def _normalize_cost_tier_override(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value not in _COST_TIER_VALUES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cost_tier must be 1–4 or null",
+        )
+    return value
+
+
 def _model_read(model: ChatModel, *, is_available: bool = True) -> ModelRead:
+    price = resolve_model_token_price(model.provider, model.model_name)
+    auto_tier = classify_model_cost_tier(model.provider, model.model_name)
+    override = model.cost_tier_override if model.cost_tier_override in _COST_TIER_VALUES else None
     return ModelRead(
         id=str(model.id),
         provider=model.provider,
@@ -113,6 +141,21 @@ def _model_read(model: ChatModel, *, is_available: bool = True) -> ModelRead:
         reasoning_effort=model.reasoning_effort,
         openrouter_endpoint=model.openrouter_endpoint,
         is_available=is_available,
+        input_cost_per_million=(
+            price.input_per_million if price and price.cost_per_image is None else None
+        ),
+        cached_input_cost_per_million=(
+            price.cached_input_per_million
+            if price and price.cost_per_image is None
+            else None
+        ),
+        output_cost_per_million=(
+            price.output_per_million if price and price.cost_per_image is None else None
+        ),
+        cost_per_image=price.cost_per_image if price else None,
+        auto_cost_tier=auto_tier,
+        cost_tier_override=override,
+        cost_tier=override if override is not None else auto_tier,
     )
 
 
@@ -126,6 +169,30 @@ def _normalize_reasoning_effort(value: str | None) -> str | None:
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Invalid reasoning effort (use none/low/medium/high)",
     )
+
+
+def _normalize_display_name(value: str) -> str:
+    """Allow at most one `/` for dropdown grouping (`Group/name`)."""
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Display name is required",
+        )
+    if normalized.count("/") > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Display name may contain at most one '/'",
+        )
+    if "/" in normalized:
+        group, _, label = normalized.partition("/")
+        if not group.strip() or not label.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Display name group and label must both be non-empty",
+            )
+        return f"{group.strip()}/{label.strip()}"
+    return normalized
 
 
 def _normalize_openrouter_endpoint(value: str | None) -> str | None:
@@ -262,7 +329,7 @@ def create_model(
     model = ChatModel(
         provider=payload.provider,
         model_name=normalized_model_name,
-        display_name=payload.display_name,
+        display_name=_normalize_display_name(payload.display_name),
         is_active=payload.is_active,
         display_order=max_order + 1,
         context_length=context_length,
@@ -514,7 +581,7 @@ def update_model(
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     if payload.display_name is not None:
-        model.display_name = payload.display_name.strip() or model.display_name
+        model.display_name = _normalize_display_name(payload.display_name)
     if payload.reasoning_effort is not None:
         model.reasoning_effort = _normalize_reasoning_effort(payload.reasoning_effort)
     if payload.uses_responses_api is not None:
@@ -526,6 +593,8 @@ def update_model(
                 detail="openrouter_endpoint is only valid for openrouter models",
             )
         model.openrouter_endpoint = _normalize_openrouter_endpoint(payload.openrouter_endpoint)
+    if "cost_tier" in payload.model_fields_set:
+        model.cost_tier_override = _normalize_cost_tier_override(payload.cost_tier)
     session.add(model)
     session.commit()
     session.refresh(model)

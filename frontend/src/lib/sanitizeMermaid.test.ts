@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   isIncompleteMermaidPrefix,
+  prepareMermaidChart,
   sanitizeMermaidChart,
   splitMermaidCharts,
 } from "./sanitizeMermaid"
@@ -69,6 +70,34 @@ describe("sanitizeMermaidChart", () => {
   it("normalizes curly quotes around labels", () => {
     const input = "flowchart TD\n  A[\u201Chello & world\u201D]"
     expect(sanitizeMermaidChart(input)).toBe('flowchart TD\n  A["hello #amp; world"]')
+  })
+})
+
+describe("prepareMermaidChart", () => {
+  it("fixes single-dash arrows via Maid then keeps sanitize quirks", async () => {
+    const input = "flowchart TD\nA->B"
+    const output = await prepareMermaidChart(input)
+    expect(output).toContain("-->")
+    expect(output).not.toMatch(/(?<!-)->(?!-)/)
+  })
+
+  it("still quotes @ labels after Maid autofix", async () => {
+    const input = "flowchart TD\n  C[@splinetool/viewer] --> D[ok]"
+    const output = await prepareMermaidChart(input)
+    expect(output).toContain('C["@splinetool/viewer"]')
+  })
+
+  it("still escapes ampersands after Maid autofix", async () => {
+    const input =
+      'flowchart TD\n  A["safety & connectivity"] --> B[End]'
+    const output = await prepareMermaidChart(input)
+    expect(output).toContain("#amp;")
+  })
+
+  it("quotes unquoted labels that need it", async () => {
+    const input = "flowchart TD\n  A[Demo runbook, roles] --> B[ok]"
+    const output = await prepareMermaidChart(input)
+    expect(output).toContain('A["Demo runbook, roles"]')
   })
 })
 

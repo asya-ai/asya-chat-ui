@@ -11,12 +11,18 @@ class ModelTokenPrice:
     input_per_million: float
     output_per_million: float
     cached_input_per_million: float | None = None
+    # Flat per-image USD when the model is billed per image (or estimated from image tokens).
+    cost_per_image: float | None = None
 
 
 @dataclass(frozen=True)
 class _PricingCache:
     fetched_at: float
     by_provider: dict[str, dict[str, ModelTokenPrice]]
+
+
+# Rough medium-quality square image token count used when LiteLLM only lists image-token rates.
+_IMAGE_TOKEN_ESTIMATE = 1050
 
 
 _PRICING_URLS = (
@@ -147,6 +153,16 @@ def _merge_api_pricing(
         _index_model_price(by_provider, provider, item.get("name"), price)
 
 
+def _is_size_or_quality_variant(key: str) -> bool:
+    normalized = key.lower()
+    if re.search(r"(^|/)\d+-x-\d+(/|$)", normalized):
+        return True
+    return any(
+        part in normalized.split("/")
+        for part in ("low", "medium", "high", "xhigh", "hd", "standard")
+    )
+
+
 def _merge_litellm_pricing(
     by_provider: dict[str, dict[str, ModelTokenPrice]], payload: dict
 ) -> None:
@@ -155,22 +171,48 @@ def _merge_litellm_pricing(
             continue
         input_price = item.get("input_cost_per_token")
         output_price = item.get("output_cost_per_token")
+        image_out_token = item.get("output_cost_per_image_token")
+        per_image = item.get("output_cost_per_image")
+        if not isinstance(per_image, (int, float)):
+            per_image = item.get("input_cost_per_image")
         provider = item.get("litellm_provider")
-        if not isinstance(input_price, (int, float)) or not isinstance(output_price, (int, float)):
+        has_text_tokens = isinstance(input_price, (int, float)) and isinstance(
+            output_price, (int, float)
+        )
+        has_image_flat = isinstance(per_image, (int, float))
+        has_image_tokens = isinstance(input_price, (int, float)) and isinstance(
+            image_out_token, (int, float)
+        )
+        if not has_text_tokens and not has_image_flat and not has_image_tokens:
             continue
         if not isinstance(provider, str):
             provider = key.split("/", 1)[0] if "/" in key else ""
         if not provider:
             continue
         cached_price = item.get("cache_read_input_token_cost")
+        cost_per_image = float(per_image) if has_image_flat else None
+        if cost_per_image is None and has_image_tokens:
+            cost_per_image = float(image_out_token) * _IMAGE_TOKEN_ESTIMATE
+        output_per_million = 0.0
+        if isinstance(output_price, (int, float)):
+            output_per_million = float(output_price) * 1_000_000
+        elif isinstance(image_out_token, (int, float)):
+            output_per_million = float(image_out_token) * 1_000_000
         price = ModelTokenPrice(
-            input_per_million=float(input_price) * 1_000_000,
-            output_per_million=float(output_price) * 1_000_000,
+            input_per_million=(
+                float(input_price) * 1_000_000 if isinstance(input_price, (int, float)) else 0.0
+            ),
+            output_per_million=output_per_million,
             cached_input_per_million=float(cached_price) * 1_000_000
             if isinstance(cached_price, (int, float))
             else None,
+            cost_per_image=cost_per_image,
         )
-        _index_litellm_key(by_provider, provider, key, price)
+        # Size/quality variants must not clobber the base model slug entry.
+        if _is_size_or_quality_variant(key):
+            _index_model_price(by_provider, provider, key, price)
+        else:
+            _index_litellm_key(by_provider, provider, key, price)
 
 
 def _merge_openrouter_pricing(
@@ -281,3 +323,39 @@ def estimate_token_cost_usd(
         + (cached_tokens * cached_rate)
         + ((output_tokens + thinking_tokens) * price.output_per_million)
     ) / 1_000_000
+
+
+# Fixed workload used to bucket models into € / €€ / €€€ / €€€€ UI tiers.
+_COST_TIER_INPUT_TOKENS = 1_000_000
+_COST_TIER_OUTPUT_TOKENS = 100_000
+
+
+def cost_tier_from_price(price: ModelTokenPrice) -> int:
+    """Map prices to 1–4 (€–€€€€). Image models use per-image USD; others a fixed token mix."""
+    if price.cost_per_image is not None:
+        cost = price.cost_per_image
+        if cost < 0.02:
+            return 1
+        if cost < 0.08:
+            return 2
+        if cost < 0.20:
+            return 3
+        return 4
+    cost = (
+        _COST_TIER_INPUT_TOKENS * price.input_per_million
+        + _COST_TIER_OUTPUT_TOKENS * price.output_per_million
+    ) / 1_000_000
+    if cost < 1:
+        return 1
+    if cost < 12:
+        return 2
+    if cost < 20:
+        return 3
+    return 4
+
+
+def classify_model_cost_tier(provider: str | None, model_name: str | None) -> int | None:
+    price = resolve_model_token_price(provider, model_name)
+    if not price:
+        return None
+    return cost_tier_from_price(price)

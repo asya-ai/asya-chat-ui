@@ -205,6 +205,7 @@ def build_request_context_block(
     at: datetime | None = None,
     memories: list[dict[str, str]] | None = None,
     include_memories: bool = False,
+    page_context: dict | list | str | None = None,
 ) -> str:
     """Per-user-turn context stamp.
 
@@ -218,10 +219,27 @@ def build_request_context_block(
         _current_time_context(timezone, at=at),
         "</current_time>",
     ]
+    page_xml = _page_context_xml(page_context)
+    if page_xml:
+        parts.extend(["<page_context>", page_xml, "</page_context>"])
     if include_memories:
         parts.extend(["<memories>", _memories_context(memories), "</memories>"])
     parts.append("</context>")
     return "\n".join(parts)
+
+
+def _page_context_xml(page_context: dict | list | str | None) -> str | None:
+    if page_context is None:
+        return None
+    if isinstance(page_context, str):
+        text = page_context.strip()
+        return text or None
+    try:
+        import json
+
+        return json.dumps(page_context, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(page_context)
 
 
 def _prepend_context_to_content(content: object, context_block: str) -> object:
@@ -236,6 +254,7 @@ def _prepend_context_to_content(content: object, context_block: str) -> object:
 
 
 _CREATED_AT_KEY = "_created_at"
+_PAGE_CONTEXT_KEY = "_page_context"
 
 
 def provider_chat_message(
@@ -243,11 +262,14 @@ def provider_chat_message(
     content: object,
     *,
     created_at: datetime | None = None,
+    page_context: dict | list | str | None = None,
 ) -> dict:
-    """Build a provider message; stash created_at on user rows for frozen time stamps."""
+    """Build a provider message; stash created_at/page_context on user rows for stamps."""
     message: dict[str, object] = {"role": role, "content": content}
     if role == "user" and created_at is not None:
         message[_CREATED_AT_KEY] = created_at
+    if role == "user" and page_context is not None:
+        message[_PAGE_CONTEXT_KEY] = page_context
     return message
 
 
@@ -263,6 +285,8 @@ def attach_user_context_stamps(
     Pass ``_created_at`` on each user message dict (from ChatMessage.created_at) so
     historical stamps reconstruct identically on later turns. Missing timestamps fall
     back to "now" (acceptable for short sync paths without history).
+    Optional ``_page_context`` (from ChatMessage.page_context) is stamped as
+    ``<page_context>`` inside the same ``<context>`` block.
     """
     if not messages:
         return messages
@@ -276,11 +300,13 @@ def attach_user_context_stamps(
     latest_user_idx = user_indices[-1]
     for index in user_indices:
         created_at = updated[index].pop(_CREATED_AT_KEY, None)
+        page_context = updated[index].pop(_PAGE_CONTEXT_KEY, None)
         block = build_request_context_block(
             timezone=timezone,
             at=created_at if isinstance(created_at, datetime) else None,
             memories=memories,
             include_memories=include_memories and index == latest_user_idx,
+            page_context=page_context,  # type: ignore[arg-type]
         )
         updated[index]["content"] = _prepend_context_to_content(
             updated[index].get("content"), block
@@ -288,6 +314,7 @@ def attach_user_context_stamps(
     # Drop any leftover private keys on non-user rows.
     for message in updated:
         message.pop(_CREATED_AT_KEY, None)
+        message.pop(_PAGE_CONTEXT_KEY, None)
     return updated
 
 

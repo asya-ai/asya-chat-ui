@@ -77,6 +77,7 @@ export const useSettingsNav = (options: { isAdmin: boolean; isSuperAdmin: boolea
       {
         label: t("settings_nav_system"),
         items: [
+          item(t("whitelabel_title"), "/settings/whitelabel", options.isSuperAdmin),
           item(t("instance_providers_title"), "/settings/providers", options.isSuperAdmin),
           item(t("diagnosis_title"), "/settings/diagnosis", options.isSuperAdmin),
         ],

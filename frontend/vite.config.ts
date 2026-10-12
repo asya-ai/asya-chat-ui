@@ -50,61 +50,15 @@ export default defineConfig({
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
     chatuiBuildIdPlugin(chatuiBuildId),
+    // Online-only app: do not cache the shell/assets. selfDestroying replaces any
+    // previously installed SW, clears Cache Storage, unregisters, and reloads tabs.
     VitePWA({
+      selfDestroying: true,
       registerType: "autoUpdate",
-      includeAssets: [
-        "favicon.svg",
-        "apple-touch-icon.png",
-        "logo_chat.svg",
-        "pwa-192x192.png",
-        "pwa-512x512.png",
-      ],
-      manifest: {
-        name: "Chat UI",
-        short_name: "Chat UI",
-        description:
-          "ChatUI by asya.ai - secure, multi-model AI chat with tools, sharing, and organization controls.",
-        theme_color: "#f5f3f2",
-        background_color: "#f5f3f2",
-        display: "standalone",
-        orientation: "any",
-        start_url: "/",
-        scope: "/",
-        lang: "en",
-        icons: [
-          {
-            src: "pwa-192x192.png",
-            sizes: "192x192",
-            type: "image/png",
-          },
-          {
-            src: "pwa-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-          },
-          {
-            src: "pwa-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
-          },
-        ],
-      },
-      workbox: {
-        navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//],
-        // App requires network for API; precache only the SPA shell (+ includeAssets icons).
-        // Hashed /assets/* rely on nginx immutable headers instead of SW install bulk fetch.
-        globPatterns: ["index.html"],
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) => url.pathname.startsWith("/api/"),
-            handler: "NetworkOnly",
-          },
-        ],
-      },
+      injectRegister: "script",
+      manifest: false,
       devOptions: {
-        enabled: true,
+        enabled: false,
       },
     }),
   ],

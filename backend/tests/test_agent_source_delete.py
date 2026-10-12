@@ -22,6 +22,10 @@ from app.models import (
     Chat,
     Org,
     OrgMembership,
+    Prompt,
+    PromptTeamShare,
+    PromptUserShare,
+    PromptVisibility,
     Role,
     Team,
     TeamMembership,
@@ -52,6 +56,9 @@ def _session() -> Session:
             AgentChunk.__table__,
             AgentEmbedding.__table__,
             Chat.__table__,
+            Prompt.__table__,
+            PromptTeamShare.__table__,
+            PromptUserShare.__table__,
         ],
     )
     return Session(engine)
@@ -137,6 +144,42 @@ def test_delete_agent_while_source_indexing() -> None:
 
     assert session.get(Agent, agent.id) is None
     assert session.get(AgentSource, source.id) is None
+
+
+def test_delete_agent_removes_project_only_prompts_and_unlinks_others() -> None:
+    session = _session()
+    org, owner, agent, _source = _seed(session)
+    auth = AuthContext(user=owner, org_id=org.id)
+    project_only = Prompt(
+        org_id=org.id,
+        owner_user_id=owner.id,
+        agent_id=agent.id,
+        name="Project-only prompt",
+        body="hello",
+        visibility=PromptVisibility.project,
+    )
+    shared_elsewhere = Prompt(
+        org_id=org.id,
+        owner_user_id=owner.id,
+        agent_id=agent.id,
+        name="Also org-wide",
+        body="world",
+        visibility=PromptVisibility.org,
+    )
+    session.add(project_only)
+    session.add(shared_elsewhere)
+    session.commit()
+    session.refresh(project_only)
+    session.refresh(shared_elsewhere)
+
+    delete_agent(agent.id, session=session, auth=auth)
+
+    assert session.get(Agent, agent.id) is None
+    assert session.get(Prompt, project_only.id) is None
+    refreshed = session.get(Prompt, shared_elsewhere.id)
+    assert refreshed is not None
+    assert refreshed.agent_id is None
+    assert refreshed.visibility == PromptVisibility.org
 
 
 def test_reindex_source_exits_when_source_deleted_mid_run(monkeypatch) -> None:

@@ -178,7 +178,6 @@ Defaults:
 
 - bind address/port: `127.0.0.1:8085` (`CHATUI_BIND_ADDRESS`, `CHATUI_PORT`)
 - image tag: `latest` when `CHATUI_TAG` is unset
-
 `executor-bootstrap` pulls `asyaai/asya-chat-ui-executor` into DinD and tags it as `chatui-python-exec:latest` so code execution works without a local executor build.
 
 ## Disk space notes

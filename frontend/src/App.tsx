@@ -4,6 +4,7 @@ import { Outlet, useLocation } from "@tanstack/react-router"
 
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
+import { useBranding } from "@/lib/branding"
 import {
   hardReloadOnce,
   isStaleChunkError,
@@ -14,9 +15,10 @@ import { useI18n } from "@/lib/i18n-context"
 const App = () => {
   const { t } = useI18n()
   const location = useLocation()
+  const { appTitle: brandingTitle } = useBranding()
 
   useEffect(() => {
-    const appTitle = t("app_title")
+    const appTitle = brandingTitle || t("app_title")
     const path = location.pathname
     if (path.startsWith("/chat") || path === "/history" || path.startsWith("/shared/")) {
       return
@@ -46,7 +48,7 @@ const App = () => {
       return
     }
     document.title = appTitle
-  }, [location.pathname, t])
+  }, [brandingTitle, location.pathname, t])
 
   useEffect(() => startDeployReloadWatcher(), [])
 

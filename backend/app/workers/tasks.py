@@ -256,7 +256,7 @@ def _build_provider_messages(
         msg_attachments = attachments_by_message.get(msg.id, [])
         if not msg_attachments:
             items.append(
-                provider_chat_message(msg.role, msg.content, created_at=msg.created_at)
+                provider_chat_message(msg.role, msg.content, created_at=msg.created_at, page_context=msg.page_context)
             )
             continue
         image_attachments = [
@@ -280,7 +280,7 @@ def _build_provider_messages(
                     + "\n".join(attachment_lines)
                 )
             items.append(
-                provider_chat_message(msg.role, text, created_at=msg.created_at)
+                provider_chat_message(msg.role, text, created_at=msg.created_at, page_context=msg.page_context)
             )
             continue
         content_parts: list[dict[str, Any]] = []
@@ -304,7 +304,7 @@ def _build_provider_messages(
                 }
             )
         items.append(
-            provider_chat_message(msg.role, content_parts, created_at=msg.created_at)
+            provider_chat_message(msg.role, content_parts, created_at=msg.created_at, page_context=msg.page_context)
         )
     return _prepend_tool_guidance(
         items,
@@ -1028,11 +1028,8 @@ async def _run_generation(task_id: UUID) -> None:
                 )
                 session.add(usage_event)
                 session.commit()
-                if title_task is not None:
-                    try:
-                        await title_task
-                    except Exception:
-                        logger.debug("Chat title job failed", exc_info=True)
+                # Do not await title before done — that leaves the stop button
+                # stuck after the answer is already on screen. finally awaits it.
                 if image_result.attachments:
                     _append_event(
                         session,
@@ -1285,12 +1282,9 @@ async def _run_generation(task_id: UUID) -> None:
                 )
                 session.commit()
 
-            if title_task is not None:
-                try:
-                    await title_task
-                except Exception:
-                    logger.debug("Chat title job failed", exc_info=True)
-
+            # Emit done before awaiting the title job so the client can clear
+            # the stop button as soon as the answer is finished. Title still
+            # runs in finally and updates chat.title in the DB for refetch.
             completed_at = datetime.utcnow()
             assistant_message.status = "done"
             assistant_message.completed_at = completed_at
@@ -1372,7 +1366,9 @@ async def _run_generation(task_id: UUID) -> None:
             session.commit()
             if title_task is not None:
                 try:
-                    await title_task
+                    await asyncio.wait_for(asyncio.shield(title_task), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.debug("Chat title job still running after generation error")
                 except Exception:
                     logger.debug("Chat title job failed", exc_info=True)
             _append_event(
@@ -1385,7 +1381,10 @@ async def _run_generation(task_id: UUID) -> None:
         finally:
             if title_task is not None and not title_task.done():
                 try:
-                    await title_task
+                    await asyncio.wait_for(asyncio.shield(title_task), timeout=30.0)
+                except asyncio.TimeoutError:
+                    logger.debug("Chat title job timed out after generation finished")
+                    title_task.cancel()
                 except Exception:
                     logger.debug("Chat title job failed", exc_info=True)
             try:

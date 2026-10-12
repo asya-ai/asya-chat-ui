@@ -8,22 +8,74 @@ export type DeploySignal = {
   backend?: string
 }
 
+type ReloadWindow = Pick<Window, "location" | "addEventListener" | "removeEventListener">
+
 export const isStaleChunkError = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error ?? "")
-  return /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Loading chunk [\d]+ failed/i.test(
+  return /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Loading chunk [\d]+ failed|Expected a JavaScript.*module script but the server responded with a MIME type/i.test(
     message
   )
 }
 
-export const hardReloadOnce = (storage: Storage = sessionStorage): boolean => {
+const canReloadNow = (storage: Storage = sessionStorage): boolean => {
   const now = Date.now()
-  const previous = Number(storage.getItem(RELOAD_GUARD_KEY) || 0)
-  if (Number.isFinite(previous) && previous > 0 && now - previous < RELOAD_GUARD_MS) {
-    return false
+  try {
+    const previous = Number(storage.getItem(RELOAD_GUARD_KEY) || 0)
+    if (Number.isFinite(previous) && previous > 0 && now - previous < RELOAD_GUARD_MS) {
+      return false
+    }
+    storage.setItem(RELOAD_GUARD_KEY, String(now))
+    return true
+  } catch {
+    return true
   }
-  storage.setItem(RELOAD_GUARD_KEY, String(now))
-  window.location.reload()
+}
+
+/** Reload once after a deploy or a missing hashed chunk (no SW/cache games). */
+export const hardReloadOnce = (
+  storage: Storage = sessionStorage,
+  win: ReloadWindow = window
+): boolean => {
+  if (!canReloadNow(storage)) return false
+  win.location.reload()
   return true
+}
+
+type PreloadErrorEventLike = Event & {
+  preventDefault: () => void
+}
+
+/** Vite emits this when a lazy chunk 404s after a redeploy; reload onto fresh HTML. */
+export const installStaleAssetRecovery = (options?: {
+  storage?: Storage
+  reload?: (storage?: Storage) => boolean
+  win?: ReloadWindow
+}): (() => void) => {
+  const storage = options?.storage ?? sessionStorage
+  const reload = options?.reload ?? hardReloadOnce
+  const win = options?.win ?? window
+
+  const onPreloadError = (event: Event) => {
+    const preloadEvent = event as PreloadErrorEventLike
+    if (reload(storage)) {
+      preloadEvent.preventDefault()
+    }
+  }
+
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    if (!isStaleChunkError(event.reason)) return
+    if (reload(storage)) {
+      event.preventDefault()
+    }
+  }
+
+  win.addEventListener("vite:preloadError", onPreloadError)
+  win.addEventListener("unhandledrejection", onUnhandledRejection)
+
+  return () => {
+    win.removeEventListener("vite:preloadError", onPreloadError)
+    win.removeEventListener("unhandledrejection", onUnhandledRejection)
+  }
 }
 
 const readJson = async (url: string): Promise<Record<string, unknown> | null> => {

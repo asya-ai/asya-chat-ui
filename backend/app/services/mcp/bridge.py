@@ -533,6 +533,23 @@ def _host_for_url(url: str) -> str:
         return url
 
 
+def _normalize_url_key(url: str) -> str:
+    return url.strip().rstrip("/")
+
+
+def _is_usable_citation_url(url: str, *, exclude: set[str] | None = None) -> bool:
+    """True when a URL is safe to show as a user-facing source citation."""
+    text = (url or "").strip()
+    if not text.startswith(("http://", "https://")):
+        return False
+    if exclude and _normalize_url_key(text) in exclude:
+        return False
+    from app.core.url_safety import is_blocked_http_url
+
+    # Literal SSRF checks only — citations must not expose private MCP endpoints.
+    return not is_blocked_http_url(text, resolve_dns=False)
+
+
 def _walk_http_urls(value: Any, *, depth: int = 0) -> list[tuple[str, str | None]]:
     if depth > 8 or value is None:
         return []
@@ -568,6 +585,11 @@ def _walk_http_urls(value: Any, *, depth: int = 0) -> list[tuple[str, str | None
 def mcp_source_items_from_tool_result(
     tool_name: str, output: object
 ) -> list[dict[str, Any]]:
+    """Build citation sources from an MCP tool result.
+
+    Never cite the MCP server endpoint itself (integration MCP URLs are
+    internal). Only surface usable http(s) URLs found in the tool payload.
+    """
     parsed = parse_mcp_tool_name(tool_name)
     if not parsed:
         return []
@@ -589,36 +611,20 @@ def mcp_source_items_from_tool_result(
             server = snap.server
             break
 
+    exclude: set[str] = set()
+    if server is not None and (server.url or "").strip():
+        exclude.add(_normalize_url_key(server.url or ""))
+
     items: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
 
-    if server is not None:
-        url = (server.url or "").strip() or f"mcp://{server.id}"
-        seen_urls.add(url)
-        items.append(
-            {
-                "url": url,
-                "title": server.name,
-                "host": _host_for_url(url),
-                "source_id": f"mcp:{server.id}",
-            }
-        )
-    else:
-        url = f"mcp://{server_id}"
-        seen_urls.add(url)
-        items.append(
-            {
-                "url": url,
-                "title": server_id,
-                "host": server_id,
-                "source_id": f"mcp:{server_id}",
-            }
-        )
-
     for url, title in _walk_http_urls(output):
-        if url in seen_urls:
+        key = _normalize_url_key(url)
+        if key in seen_urls:
             continue
-        seen_urls.add(url)
+        if not _is_usable_citation_url(url, exclude=exclude):
+            continue
+        seen_urls.add(key)
         items.append(
             {
                 "url": url,

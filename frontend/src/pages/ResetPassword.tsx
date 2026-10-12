@@ -5,6 +5,7 @@ import { useNavigate, useLocation, Link } from "@tanstack/react-router"
 import { authApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
 import { isValidPassword } from "@/lib/password"
+import { BrandLogo } from "@/components/BrandLogo"
 import { LanguageSelect } from "@/components/LanguageSelect"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -75,7 +76,7 @@ export const ResetPasswordPage = () => {
         <Card className="rounded-[var(--radius-card)] border-border bg-card shadow-none">
           <CardHeader>
             <div className="flex flex-col items-center gap-3 text-center">
-              <img src="/favicon.svg" alt="Eldigen" className="size-10 object-contain" />
+              <BrandLogo className="size-10" />
               <CardTitle className="font-heading text-4xl font-normal leading-10">
               {token ? t("auth_reset_title") : t("auth_reset_request_title")}
               </CardTitle>

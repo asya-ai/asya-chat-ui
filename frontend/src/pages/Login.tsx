@@ -4,13 +4,15 @@ import { useNavigate, Link, useLocation } from "@tanstack/react-router"
 
 import { authApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { markEmbedAuthPopup, tryCompleteEmbedAuth, isEmbedAuthPopup } from "@/lib/embed-auth"
 import { useI18n } from "@/lib/i18n-context"
+import { BrandLogo } from "@/components/BrandLogo"
 import { LanguageSelect } from "@/components/LanguageSelect"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { loginOrgStore } from "@/lib/storage"
+import { loginOrgStore, tokenStore } from "@/lib/storage"
 
 type Stage = "org" | "sso" | "credentials"
 
@@ -40,8 +42,23 @@ export const LoginPage = () => {
   const searchParams = useMemo(() => new URLSearchParams(location.searchStr), [location.searchStr])
   // Undocumented break-glass: /login?direct=1 forces password login when SSO is stuck.
   const directLogin = searchParams.get("direct") === "1"
+  const embedPopup = searchParams.get("embed") === "1"
+  const [embedHandoff, setEmbedHandoff] = useState(false)
 
   useEffect(() => {
+    if (!embedPopup) return
+    markEmbedAuthPopup()
+    // Already signed in (e.g. top-level ChatUI session) — hand token to iframe and close.
+    const existing = tokenStore.get()
+    if (existing && tryCompleteEmbedAuth(existing)) {
+      setEmbedHandoff(true)
+    }
+  }, [embedPopup])
+
+  useEffect(() => {
+    if (embedHandoff) return
+    // Handoff started this tick but state not flushed yet.
+    if (embedPopup && tokenStore.get() && isEmbedAuthPopup()) return
     const orgParam = searchParams.get("org")
     const initialOrg = orgParam ? orgParam.trim().toLowerCase() : loginOrgStore.get()
     const clientHost = window.location.host
@@ -116,14 +133,15 @@ export const LoginPage = () => {
     return () => {
       cancelled = true
     }
-  }, [searchParams])
+  }, [directLogin, embedHandoff, searchParams])
 
   useEffect(() => {
+    if (embedHandoff) return
     authApi
       .registrationEnabled()
       .then((data) => setRegistrationEnabled(data.enabled))
       .catch(() => setRegistrationEnabled(false))
-  }, [])
+  }, [embedHandoff])
 
   const resetToOrg = () => {
     if (!orgSelectionRequired) return
@@ -170,6 +188,10 @@ export const LoginPage = () => {
         return
       }
       const data = await authApi.login(identifier, password, orgValue, clientHost)
+      if (tryCompleteEmbedAuth(data.access_token)) {
+        setEmbedHandoff(true)
+        return
+      }
       setToken(data.access_token)
       navigate({ to: "/chat/{-$chatId}" })
     } catch (err) {
@@ -194,6 +216,14 @@ export const LoginPage = () => {
   const showOrgStage = !resolving && stage === "org" && orgSelectionRequired
   const showOrgSwitcher = stage !== "org" && orgSelectionRequired && Boolean(org)
 
+  if (embedHandoff) {
+    return (
+      <div className="flex min-h-svh items-center justify-center bg-background p-4 text-center text-sm text-muted-foreground">
+        {t("embed_auth_close_window")}
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-4 sm:p-6">
       <div className="w-full max-w-md space-y-3">
@@ -203,7 +233,7 @@ export const LoginPage = () => {
         <Card className="rounded-[var(--radius-card)] border-border bg-card shadow-none">
           <CardHeader>
             <div className="flex flex-col items-center gap-3 text-center">
-              <img src="/favicon.svg" alt="Eldigen" className="size-10 object-contain" />
+              <BrandLogo className="size-10" />
               <div className="flex flex-col gap-1">
                 <CardTitle className="font-heading text-4xl font-normal leading-10">
                   {t("auth_sign_in")}

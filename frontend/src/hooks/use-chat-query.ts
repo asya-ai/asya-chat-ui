@@ -209,7 +209,7 @@ export const useUpdateAgent = (_orgId: string | null) => {
   })
 }
 
-export const useDeleteAgent = (_orgId: string | null) => {
+export const useDeleteAgent = (orgId: string | null) => {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (agentId: string) => agentApi.remove(agentId),
@@ -217,6 +217,48 @@ export const useDeleteAgent = (_orgId: string | null) => {
       queryClient.setQueryData<Agent[]>(agentKeys.all, (prev) =>
         prev ? prev.filter((agent) => agent.id !== agentId) : prev
       )
+      if (orgId) {
+        queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) =>
+          prev
+            ? prev.map((chat) =>
+                chat.agent_id === agentId ? { ...chat, agent_id: null } : chat
+              )
+            : prev
+        )
+        queryClient.invalidateQueries({ queryKey: [...chatKeys.list(orgId), "search"] })
+      }
+      queryClient.invalidateQueries({ queryKey: promptKeys.all })
+    },
+  })
+}
+
+export const useUpdateAgentOrder = (_orgId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ordered: Agent[]) =>
+      agentApi.updateOrder(
+        ordered.map((agent, idx) => ({
+          agent_id: agent.id,
+          display_order: idx + 1,
+        }))
+      ),
+    onMutate: async (ordered) => {
+      await queryClient.cancelQueries({ queryKey: agentKeys.all })
+      const previous = queryClient.getQueryData<Agent[]>(agentKeys.all)
+      const next = ordered.map((agent, idx) => ({
+        ...agent,
+        display_order: idx + 1,
+      }))
+      queryClient.setQueryData<Agent[]>(agentKeys.all, next)
+      return { previous }
+    },
+    onError: (_err, _ordered, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData<Agent[]>(agentKeys.all, context.previous)
+      }
+    },
+    onSuccess: (ordered) => {
+      queryClient.setQueryData<Agent[]>(agentKeys.all, ordered)
     },
   })
 }
@@ -289,9 +331,13 @@ export const useCreateChat = (orgId: string | null) => {
     onSuccess: (chat) => {
       if (!orgId) return
       if (!chat.is_incognito) {
-        queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) =>
-          prev ? [chat, ...prev] : [chat]
-        )
+        queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) => {
+          if (!prev) return [chat]
+          if (prev.some((item) => item.id === chat.id)) {
+            return prev.map((item) => (item.id === chat.id ? chat : item))
+          }
+          return [chat, ...prev]
+        })
       }
     },
   })

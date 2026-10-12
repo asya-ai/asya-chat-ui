@@ -35,15 +35,34 @@ def test_request_context_block_freezes_time_from_created_at() -> None:
     assert "15:42:59" not in block
 
 
-def test_request_context_block_includes_memories_when_requested() -> None:
+def test_request_context_block_includes_page_context() -> None:
     block = build_request_context_block(
         timezone="UTC",
-        memories=[{"id": "m1", "content": "likes dark mode"}],
-        include_memories=True,
+        at=datetime(2026, 9, 18, 15, 0, 0, tzinfo=timezone.utc),
+        page_context={"route": "/songs/1", "title": "Demo"},
     )
 
-    assert "<memories>" in block
-    assert "[m1] likes dark mode" in block
+    assert "<page_context>" in block
+    assert '"route":"/songs/1"' in block
+    assert '"title":"Demo"' in block
+    assert block.index("<current_time>") < block.index("<page_context>")
+
+
+def test_attach_stamps_include_page_context_from_provider_message() -> None:
+    t1 = datetime(2026, 9, 18, 10, 0, 0)
+    messages = [
+        provider_chat_message(
+            "user",
+            "what is this?",
+            created_at=t1,
+            page_context={"page": "home"},
+        ),
+    ]
+    updated = attach_user_context_stamps(messages, timezone="UTC")
+    assert "<page_context>" in updated[0]["content"]
+    assert '"page":"home"' in updated[0]["content"]
+    assert "_page_context" not in updated[0]
+    assert updated[0]["content"].endswith("what is this?")
 
 
 def test_attach_stamps_every_user_message_with_frozen_time() -> None:

@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from app.core.security import decode_access_token_claims, oauth2_scheme
 from app.db.session import get_session
-from app.models import OrgMembership, User
+from app.models import OidcSession, OrgMembership, User
 from app.services.api_keys import API_KEY_PREFIX, authenticate_api_key
 
 
@@ -51,6 +51,21 @@ def _resolve_user_from_token_claims(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         )
+    sid = claims.get("sid")
+    if sid is not None:
+        try:
+            sid_uuid = UUID(str(sid))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+            ) from exc
+        oidc_session = session.get(OidcSession, sid_uuid)
+        if not oidc_session or oidc_session.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+            )
     return user
 
 

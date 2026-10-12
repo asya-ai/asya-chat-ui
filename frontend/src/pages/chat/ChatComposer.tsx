@@ -8,7 +8,6 @@ import {
   type ChangeEvent,
   type ReactNode,
   type Ref,
-  type PointerEvent as ReactPointerEvent,
 } from "react"
 
 import type { ChatMessageAttachmentInput, McpPrompt, Prompt } from "@/lib/types"
@@ -21,9 +20,13 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowUp, Plus, Square, X } from "lucide-react"
+import { ArrowUp, Check, ChevronDown, Maximize2, Minimize2, Plus, Square, X } from "lucide-react"
 import { useI18n } from "@/lib/i18n-context"
-import { getSlashPromptTrigger, shouldSubmitOnEnter } from "@/lib/chat-input"
+import {
+  getSlashPromptTrigger,
+  shouldSubmitOnEnter,
+  type SlashPromptTrigger,
+} from "@/lib/chat-input"
 import {
   filterSlashCommands,
   type ComposerSlashCommand,
@@ -89,7 +92,14 @@ type ChatComposerProps = {
   sendLabel: string
   stopLabel: string
   welcomeTitle: string
+  projects?: Array<{ id: string; name: string }>
+  selectedProjectId?: string | null
+  onSelectProject?: (projectId: string | null) => void
   centered?: boolean
+  /** Keep centered layout on narrow viewports (embed). */
+  pinCentered?: boolean
+  centeredLeading?: ReactNode
+  centeredExtras?: ReactNode
 }
 
 export const ChatComposer = ({
@@ -123,115 +133,126 @@ export const ChatComposer = ({
   sendLabel,
   stopLabel,
   welcomeTitle,
+  projects = [],
+  selectedProjectId = null,
+  onSelectProject,
   centered = false,
+  pinCentered = false,
+  centeredLeading,
+  centeredExtras,
 }: ChatComposerProps) => {
   const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const heightPxRef = useRef(clampComposerTextareaHeight(composerTextareaHeightStore.get()))
-  const heightFloorRef = useRef(clampComposerTextareaHeight(composerTextareaHeightStore.get()))
-  const autoGrowRef = useRef(true)
-  const resizeStartYRef = useRef(0)
-  const resizeStartHeightRef = useRef(0)
+  const heightPxRef = useRef(composerTextareaHeightStore.min)
+  const expandedRef = useRef(false)
+  const cursorPositionRef = useRef(0)
+  const growRafRef = useRef<number | null>(null)
   const [hasText, setHasText] = useState(false)
-  const [textareaHeightPx, setTextareaHeightPx] = useState(() =>
-    clampComposerTextareaHeight(composerTextareaHeightStore.get())
-  )
-  const [isResizing, setIsResizing] = useState(false)
-  const [cursorPosition, setCursorPosition] = useState(0)
+  const [expanded, setExpanded] = useState(false)
+  const [showExpandButton, setShowExpandButton] = useState(false)
+  const [slashTrigger, setSlashTrigger] = useState<SlashPromptTrigger | null>(null)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const slashListRef = useRef<HTMLDivElement | null>(null)
   const onDraftChangeRef = useRef(onDraftChange)
   onDraftChangeRef.current = onDraftChange
 
-  useEffect(() => {
-    heightPxRef.current = textareaHeightPx
-  }, [textareaHeightPx])
-
-  useEffect(() => {
-    if (!isResizing) return
-    const previousCursor = globalThis.document.body.style.cursor
-    const previousUserSelect = globalThis.document.body.style.userSelect
-    globalThis.document.body.style.cursor = "row-resize"
-    globalThis.document.body.style.userSelect = "none"
-    return () => {
-      globalThis.document.body.style.cursor = previousCursor
-      globalThis.document.body.style.userSelect = previousUserSelect
-    }
-  }, [isResizing])
-
   const applyHeight = useCallback((next: number, maxHeightVh?: number) => {
     const clamped = clampComposerTextareaHeight(next, maxHeightVh)
-    heightPxRef.current = clamped
-    setTextareaHeightPx(clamped)
+    if (heightPxRef.current !== clamped) {
+      heightPxRef.current = clamped
+    }
+    const el = textareaRef.current
+    if (el && el.style.height !== `${clamped}px`) {
+      el.style.height = `${clamped}px`
+    }
     return clamped
   }, [])
 
-  const resetHeightToDefault = useCallback(() => {
-    autoGrowRef.current = true
-    heightFloorRef.current = composerTextareaHeightStore.default
-    composerTextareaHeightStore.set(composerTextareaHeightStore.default)
-    applyHeight(composerTextareaHeightStore.default)
-  }, [applyHeight])
-
-  const syncAutoGrowHeight = useCallback(() => {
-    if (centered || !autoGrowRef.current) return
+  const syncAutoGrowHeight = useCallback((nextExpanded = expandedRef.current) => {
     const el = textareaRef.current
     if (!el) return
+    if (nextExpanded) {
+      applyHeight(
+        getMaxComposerTextareaHeight(composerTextareaHeightStore.maxHeightVh),
+        composerTextareaHeightStore.maxHeightVh
+      )
+      setShowExpandButton((prev) => (prev ? prev : true))
+      return
+    }
     const previousHeight = el.style.height
     el.style.height = "0px"
     const contentHeight = el.scrollHeight
     el.style.height = previousHeight
-    applyHeight(
-      Math.max(heightFloorRef.current, contentHeight),
+    const autoMax = getMaxComposerTextareaHeight(
       composerTextareaHeightStore.autoGrowMaxHeightVh
     )
-  }, [applyHeight, centered])
+    const nextShow = contentHeight > autoMax
+    setShowExpandButton((prev) => (prev === nextShow ? prev : nextShow))
+    applyHeight(
+      Math.max(composerTextareaHeightStore.min, contentHeight),
+      composerTextareaHeightStore.autoGrowMaxHeightVh
+    )
+  }, [applyHeight])
 
-  const stopResizing = () => {
-    setIsResizing(false)
-    heightFloorRef.current = heightPxRef.current
-    composerTextareaHeightStore.set(heightPxRef.current)
+  const scheduleAutoGrowHeight = useCallback(() => {
+    if (growRafRef.current != null) cancelAnimationFrame(growRafRef.current)
+    growRafRef.current = requestAnimationFrame(() => {
+      growRafRef.current = null
+      syncAutoGrowHeight()
+    })
+  }, [syncAutoGrowHeight])
+
+  const resetHeightToDefault = useCallback(() => {
+    expandedRef.current = false
+    setExpanded(false)
+    setShowExpandButton((prev) => (prev ? false : prev))
+    applyHeight(
+      composerTextareaHeightStore.min,
+      composerTextareaHeightStore.autoGrowMaxHeightVh
+    )
+  }, [applyHeight])
+
+  const toggleExpanded = () => {
+    const next = !expandedRef.current
+    expandedRef.current = next
+    setExpanded(next)
+    syncAutoGrowHeight(next)
   }
 
-  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (centered || event.button !== 0) return
-    event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    autoGrowRef.current = false
-    resizeStartYRef.current = event.clientY
-    resizeStartHeightRef.current =
-      textareaRef.current?.offsetHeight ?? heightPxRef.current
-    setIsResizing(true)
-  }
-
-  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!isResizing) return
-    const delta = resizeStartYRef.current - event.clientY
-    applyHeight(resizeStartHeightRef.current + delta)
-  }
-
-  const handleResizePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!isResizing) return
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    stopResizing()
-  }
-
-  const handleResizeDoubleClick = () => {
-    if (centered) return
-    resetHeightToDefault()
-    requestAnimationFrame(() => syncAutoGrowHeight())
-  }
+  const refreshSlashTrigger = useCallback(
+    (cursor = cursorPositionRef.current) => {
+      cursorPositionRef.current = cursor
+      if (
+        readOnly ||
+        (slashCommands.length === 0 && prompts.length === 0 && mcpPrompts.length === 0)
+      ) {
+        setSlashTrigger((prev) => (prev === null ? prev : null))
+        return
+      }
+      const value = textareaRef.current?.value ?? ""
+      const next = getSlashPromptTrigger(value, cursor)
+      setSlashTrigger((prev) => {
+        if (prev == null && next == null) return prev
+        if (prev && next && prev.start === next.start && prev.query === next.query) {
+          return prev
+        }
+        return next
+      })
+    },
+    [mcpPrompts.length, prompts.length, readOnly, slashCommands.length]
+  )
 
   const assignTextareaRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
       textareaRef.current = el
       if (inputRef) inputRef.current = el
-      if (el) requestAnimationFrame(() => syncAutoGrowHeight())
+      if (el) {
+        el.style.height = `${heightPxRef.current}px`
+        scheduleAutoGrowHeight()
+      }
     },
-    [inputRef, syncAutoGrowHeight]
+    [inputRef, scheduleAutoGrowHeight]
   )
 
   const syncDraft = (next: string) => {
@@ -242,33 +263,26 @@ export const ChatComposer = ({
       resetHeightToDefault()
       return
     }
-    requestAnimationFrame(() => syncAutoGrowHeight())
+    scheduleAutoGrowHeight()
   }
 
   useEffect(() => {
-    if (centered) return
     const onViewportResize = () => {
-      applyHeight(heightPxRef.current)
       syncAutoGrowHeight()
     }
     window.addEventListener("resize", onViewportResize)
     return () => window.removeEventListener("resize", onViewportResize)
-  }, [applyHeight, centered, syncAutoGrowHeight])
+  }, [syncAutoGrowHeight])
+
+  useEffect(() => {
+    return () => {
+      if (growRafRef.current != null) cancelAnimationFrame(growRafRef.current)
+    }
+  }, [])
 
   const updateCursorFromTextarea = (el: HTMLTextAreaElement) => {
-    setCursorPosition(el.selectionStart ?? 0)
+    refreshSlashTrigger(el.selectionStart ?? 0)
   }
-
-  const slashTrigger = useMemo(() => {
-    if (
-      readOnly ||
-      (slashCommands.length === 0 && prompts.length === 0 && mcpPrompts.length === 0)
-    ) {
-      return null
-    }
-    const value = textareaRef.current?.value ?? ""
-    return getSlashPromptTrigger(value, cursorPosition)
-  }, [cursorPosition, mcpPrompts.length, prompts.length, readOnly, slashCommands.length])
 
   const filteredCommands = useMemo(() => {
     if (!slashTrigger) return []
@@ -330,15 +344,16 @@ export const ChatComposer = ({
     const el = textareaRef.current
     if (!el) return
     const current = el.value
+    const cursor = cursorPositionRef.current
     const next =
-      current.slice(0, slashTrigger.start) + replacement + current.slice(cursorPosition)
+      current.slice(0, slashTrigger.start) + replacement + current.slice(cursor)
     el.value = next
     syncDraft(next)
-    const cursor = slashTrigger.start + replacement.length
+    const nextCursor = slashTrigger.start + replacement.length
     requestAnimationFrame(() => {
       el.focus()
-      el.setSelectionRange(cursor, cursor)
-      setCursorPosition(cursor)
+      el.setSelectionRange(nextCursor, nextCursor)
+      refreshSlashTrigger(nextCursor)
     })
   }
 
@@ -347,13 +362,14 @@ export const ChatComposer = ({
     const el = textareaRef.current
     if (!el) return
     const current = el.value
-    const next = current.slice(0, slashTrigger.start) + current.slice(cursorPosition)
+    const cursor = cursorPositionRef.current
+    const next = current.slice(0, slashTrigger.start) + current.slice(cursor)
     el.value = next
     syncDraft(next)
     requestAnimationFrame(() => {
       el.focus()
       el.setSelectionRange(slashTrigger.start, slashTrigger.start)
-      setCursorPosition(slashTrigger.start)
+      refreshSlashTrigger(slashTrigger.start)
     })
   }
 
@@ -436,25 +452,14 @@ export const ChatComposer = ({
     event.target.value = ""
   }
 
-  return (
-    <div
-      className={cn(
-        "z-10",
-        centered
-          ? "absolute inset-x-0 top-15 bottom-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col items-center justify-center gap-8 px-4 max-md:justify-end max-md:gap-6"
-          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] shrink-0 pb-[calc(1rem+env(safe-area-inset-bottom))]"
-      )}
-    >
-      {centered ? (
-        <h2 className="max-md:hidden w-full max-w-(--chat-content-width) shrink-0 font-heading font-normal text-4xl text-center leading-10">
-          {welcomeTitle}
-        </h2>
-      ) : null}
+  const composerCard = (
       <div
         className={cn(
-          "@container/composer flex w-full max-w-(--chat-content-width) flex-col justify-between bg-card border border-border rounded-2xl",
-          centered ? "min-h-26 gap-0 p-0" : "gap-2 p-2",
-          "shadow-none transition-[box-shadow,border-color]",
+          "@container/composer flex w-full max-w-(--chat-content-width) flex-col justify-between rounded-2xl border border-border bg-card",
+          centered
+            ? "min-h-26 shrink-0 gap-0 p-0 shadow-[0_25px_50px_-12px_rgba(7,12,28,0.21)]"
+            : "gap-2 p-2 shadow-none",
+          "transition-[box-shadow,border-color]",
           "focus-within:border-primary/40 focus-within:shadow-[0_0_0_3px] focus-within:shadow-primary/30",
           isDragActive && "border-primary/50 shadow-[0_0_0_3px] shadow-primary/30"
         )}
@@ -463,35 +468,33 @@ export const ChatComposer = ({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
-        {!centered ? (
-          <div
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize message input"
-            aria-valuemin={composerTextareaHeightStore.min}
-            aria-valuemax={getMaxComposerTextareaHeight()}
-            aria-valuenow={textareaHeightPx}
-            title="Drag to resize · double-click to reset"
+        <div className={cn("relative", !centered && "shrink-0")}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            tabIndex={showExpandButton ? 0 : -1}
+            aria-hidden={!showExpandButton}
             className={cn(
-              "flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center justify-center",
-              "before:h-1 before:w-10 before:rounded-full before:bg-border before:transition-colors",
-              "hover:before:bg-muted-foreground/40",
-              isResizing && "before:bg-primary"
+              "top-2 right-2 z-10 absolute bg-muted hover:bg-muted rounded-lg size-9 text-muted-foreground hover:text-foreground",
+              showExpandButton
+                ? "opacity-100"
+                : "pointer-events-none opacity-0"
             )}
-            onPointerDown={handleResizePointerDown}
-            onPointerMove={handleResizePointerMove}
-            onPointerUp={handleResizePointerUp}
-            onPointerCancel={handleResizePointerUp}
-            onDoubleClick={handleResizeDoubleClick}
-          />
-        ) : null}
-        <div
-          className={cn("relative", !centered && "shrink-0")}
-        >
+            onClick={toggleExpanded}
+            aria-label={expanded ? t("composer_collapse") : t("composer_expand")}
+            aria-pressed={expanded}
+          >
+            {expanded ? (
+              <Minimize2 aria-hidden="true" className="size-4" />
+            ) : (
+              <Maximize2 aria-hidden="true" className="size-4" />
+            )}
+          </Button>
           {slashMenuOpen ? (
             <div
               ref={slashListRef}
-              className="absolute bottom-full left-0 z-50 mb-1 flex max-h-60 w-full flex-col overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+              className="bottom-full left-0 z-50 absolute flex flex-col bg-popover shadow-md mb-1 p-1 border rounded-md w-full max-h-60 overflow-y-auto"
               role="listbox"
               aria-label={t("slash_menu_label")}
             >
@@ -524,7 +527,7 @@ export const ChatComposer = ({
                         aria-selected={index === slashSelectedIndex}
                         data-selected={index === slashSelectedIndex ? "true" : undefined}
                         className={cn(
-                          "flex w-full flex-col items-start gap-0.5 rounded-sm px-3 py-2 text-left text-sm",
+                          "flex flex-col items-start gap-0.5 px-3 py-2 rounded-sm w-full text-sm text-left",
                           index === slashSelectedIndex && "bg-accent"
                         )}
                         onMouseDown={(event) => event.preventDefault()}
@@ -533,18 +536,18 @@ export const ChatComposer = ({
                       >
                         {item.kind === "command" ? (
                           <>
-                            <span className="w-full truncate font-medium">
+                            <span className="w-full font-medium truncate">
                               <span className="text-muted-foreground">/</span>
                               {item.command.name}
                             </span>
-                            <span className="w-full truncate text-muted-foreground text-xs">
+                            <span className="w-full text-muted-foreground text-xs truncate">
                               {item.command.description}
                             </span>
                           </>
                         ) : item.kind === "mcp_prompt" ? (
                           <>
-                            <span className="w-full truncate font-medium">{item.prompt.name}</span>
-                            <span className="w-full truncate text-muted-foreground text-xs">
+                            <span className="w-full font-medium truncate">{item.prompt.name}</span>
+                            <span className="w-full text-muted-foreground text-xs truncate">
                               {item.prompt.description
                                 ? `${item.prompt.server_name} · ${item.prompt.description}`
                                 : item.prompt.server_name}
@@ -552,9 +555,9 @@ export const ChatComposer = ({
                           </>
                         ) : (
                           <>
-                            <span className="w-full truncate font-medium">{item.prompt.name}</span>
+                            <span className="w-full font-medium truncate">{item.prompt.name}</span>
                             {item.prompt.description ? (
-                              <span className="w-full truncate text-muted-foreground text-xs">
+                              <span className="w-full text-muted-foreground text-xs truncate">
                                 {item.prompt.description}
                               </span>
                             ) : null}
@@ -577,13 +580,14 @@ export const ChatComposer = ({
             onSelect={(event) => updateCursorFromTextarea(event.currentTarget)}
             onPaste={onPasteAttachments}
             placeholder={placeholder}
-            rows={centered ? 1 : 2}
-            style={centered ? undefined : { height: textareaHeightPx }}
+            rows={1}
+            style={{ height: heightPxRef.current }}
             className={cn(
-              "bg-transparent shadow-none border-0 text-base resize-none overflow-y-auto",
+              "bg-transparent shadow-none border-0 overflow-y-auto text-base resize-none",
+              "field-sizing-fixed min-h-0",
               centered
-                ? "field-sizing-content min-h-13 max-h-[50vh] max-md:max-h-[50dvh] -mx-px -mt-px w-[calc(100%+2px)] px-5 py-4 leading-5"
-                : "field-sizing-fixed min-h-0 px-1.5 py-1",
+                ? "-mx-px -mt-px w-[calc(100%+2px)] py-4 pl-5 pr-12 leading-5"
+                : "py-1 pl-1.5 pr-12",
               "placeholder:text-muted-foreground",
               "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
             )}
@@ -646,7 +650,7 @@ export const ChatComposer = ({
                   )}
                   {uploading ? (
                     <div
-                      className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                      className="absolute inset-0 flex justify-center items-center pointer-events-none"
                       aria-hidden="true"
                     >
                       <svg width="36" height="36" viewBox="0 0 36 36" className="-rotate-90">
@@ -675,8 +679,8 @@ export const ChatComposer = ({
                     </div>
                   ) : null}
                   {failed ? (
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <span className="rounded bg-destructive/90 px-1 text-[10px] text-destructive-foreground">
+                    <div className="absolute inset-0 flex justify-center items-center pointer-events-none">
+                      <span className="bg-destructive/90 px-1 rounded text-[10px] text-destructive-foreground">
                         !
                       </span>
                     </div>
@@ -698,11 +702,11 @@ export const ChatComposer = ({
         ) : null}
         <div
           className={cn(
-            "flex min-w-0 justify-between gap-2",
+            "flex justify-between gap-2 min-w-0",
             centered ? "h-13 items-center p-2" : "items-end"
           )}
         >
-          <div className="flex min-w-0 items-center gap-1">
+          <div className="flex items-center gap-1 min-w-0">
             <input
               ref={fileInputRef}
               type="file"
@@ -717,7 +721,7 @@ export const ChatComposer = ({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-9 shrink-0 text-muted-foreground"
+                    className="size-9 text-muted-foreground shrink-0"
                     disabled={readOnly}
                     aria-label={t("chat_add_files")}
                   >
@@ -743,7 +747,7 @@ export const ChatComposer = ({
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-9 shrink-0 text-muted-foreground"
+                className="size-9 text-muted-foreground shrink-0"
                 onClick={handlePickFiles}
                 disabled={readOnly}
                 aria-label={t("chat_add_files")}
@@ -752,7 +756,7 @@ export const ChatComposer = ({
               </Button>
             )}
           </div>
-          <div className="flex min-w-0 shrink items-center gap-1">
+          <div className="flex items-center gap-1 min-w-0 shrink">
             {showModelSelect && modelSelect && !(loading && !canSend) ? (
               <div className="min-w-0 max-w-54 overflow-hidden">
                 {modelSelect}
@@ -766,7 +770,7 @@ export const ChatComposer = ({
                 onClick={onStop}
                 aria-label={stopLabel}
               >
-                <Square aria-hidden="true" className="size-3.5 fill-current" />
+                <Square aria-hidden="true" className="fill-current size-3.5" />
               </Button>
             ) : centered && !canSend ? (
               <Button
@@ -798,6 +802,165 @@ export const ChatComposer = ({
           </div>
         </div>
       </div>
+  )
+
+  const poweredByNote = (
+    <p className="text-muted-foreground text-xs text-center leading-4">
+      <a
+        href="https://github.com/asya-ai/asya-chat-ui"
+        target="_blank"
+        rel="noreferrer"
+        className="hover:text-foreground underline underline-offset-2"
+      >
+        {t("chat_powered_by_prefix")}
+      </a>{" "}
+      {t("chat_powered_by_mid")}{" "}
+      <a
+        href="https://www.asya.ai"
+        target="_blank"
+        rel="noreferrer"
+        className="hover:text-foreground underline underline-offset-2"
+      >
+        www.asya.ai
+      </a>
+    </p>
+  )
+
+  return (
+    <div
+      className={cn(
+        "z-10",
+        centered
+          ? cn(
+              "bottom-[calc(1rem+env(safe-area-inset-bottom))] absolute inset-x-0 flex flex-col items-center px-4 min-h-0 overflow-y-auto",
+              pinCentered ? "top-0 py-4" : "top-15"
+            )
+          : "mx-auto w-[min(var(--chat-content-width),calc(100%-2rem))] shrink-0 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+      )}
+    >
+      {centered ? (
+        <>
+          <div
+            className={cn(
+              "flex flex-col flex-1 items-center min-h-0 w-full",
+              // Desktop: center tree + composer as one stack. Mobile: tree fills leftover space.
+              "md:justify-center md:gap-24"
+            )}
+          >
+            {centeredLeading ? (
+              <div
+                className={cn(
+                  "flex justify-center items-center w-full min-h-0",
+                  "flex-1 py-4 md:flex-none md:py-0"
+                )}
+              >
+                {centeredLeading}
+              </div>
+            ) : null}
+            <div className="flex w-full max-w-(--chat-content-width) flex-col gap-8 shrink-0">
+              {projects.length > 0 && onSelectProject ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        "group flex items-center gap-2 mx-auto outline-none max-w-full text-center",
+                        "focus-visible:ring-2 focus-visible:ring-ring/40 rounded-lg",
+                        !pinCentered && "max-md:hidden"
+                      )}
+                      aria-label={t("chat_welcome_project_select")}
+                    >
+                      <span className="min-w-0 font-heading font-normal text-foreground text-4xl truncate leading-10">
+                        {welcomeTitle}
+                      </span>
+                      <ChevronDown
+                        aria-hidden="true"
+                        className="size-4 text-muted-foreground group-data-[state=open]:rotate-180 transition-transform shrink-0"
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    side="top"
+                    align="center"
+                    sideOffset={8}
+                    className="shadow-[0_0_0_3px] shadow-primary/10 p-2 border-border rounded-2xl w-[min(22.5rem,calc(100vw-2rem))]"
+                  >
+                    <DropdownMenuItem
+                      className={cn(
+                        "gap-2.5 px-3 py-3 rounded-lg font-medium text-lg cursor-pointer",
+                        !selectedProjectId && "bg-accent"
+                      )}
+                      onSelect={() => onSelectProject(null)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="size-4.5 figma-icon shrink-0"
+                        style={{ maskImage: "url('/icon-projects.svg')" }}
+                      />
+                      <span className="flex-1 min-w-0 truncate">{t("chat_welcome_default")}</span>
+                      {!selectedProjectId ? (
+                        <Check className="size-4.5 text-foreground shrink-0" aria-hidden="true" />
+                      ) : null}
+                    </DropdownMenuItem>
+                    {projects.map((project) => {
+                      const selected = project.id === selectedProjectId
+                      return (
+                        <DropdownMenuItem
+                          key={project.id}
+                          className={cn(
+                            "gap-2.5 px-3 py-3 rounded-lg font-medium text-lg cursor-pointer",
+                            selected && "bg-accent"
+                          )}
+                          onSelect={() => onSelectProject(project.id)}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="size-4.5 figma-icon shrink-0"
+                            style={{ maskImage: "url('/icon-projects.svg')" }}
+                          />
+                          <span className="flex-1 min-w-0 truncate">{project.name}</span>
+                          {selected ? (
+                            <Check
+                              className="size-4.5 text-foreground shrink-0"
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                        </DropdownMenuItem>
+                      )
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <h2
+                  className={cn(
+                    "w-full font-heading font-normal text-foreground text-4xl text-center leading-10 shrink-0",
+                    !pinCentered && "max-md:hidden"
+                  )}
+                >
+                  {welcomeTitle}
+                </h2>
+              )}
+              <div className="flex flex-col gap-3 w-full">
+                {composerCard}
+                <div className="flex items-start gap-2 w-full text-muted-foreground text-sm leading-4">
+                  <span
+                    aria-hidden="true"
+                    className="mt-0.5 size-4 figma-icon shrink-0"
+                    style={{ maskImage: "url('/icon-privacy.svg')" }}
+                  />
+                  <p className="flex-1 min-w-0">{t("chat_privacy_message")}</p>
+                </div>
+                {centeredExtras}
+              </div>
+            </div>
+          </div>
+          <div className="pt-4 w-full shrink-0">{poweredByNote}</div>
+        </>
+      ) : (
+        <>
+          {composerCard}
+        </>
+      )}
     </div>
   )
 }

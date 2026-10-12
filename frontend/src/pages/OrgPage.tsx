@@ -10,8 +10,16 @@ import {
   patchOrgInMineCache,
   removeOrgFromMineCache,
 } from "@/hooks/use-chat-query"
+import {
+  formatCostPerImage,
+  formatCostPerMillion,
+  modelCostSymbols,
+  modelCostTierClassName,
+  normalizeModelCostTier,
+} from "@/lib/modelCapabilities"
 import { orgStore } from "@/lib/storage"
 import { useI18n } from "@/lib/i18n-context"
+import { cn } from "@/lib/utils"
 import {
   SettingsEmptyState,
   SettingsListItem,
@@ -728,6 +736,30 @@ export const OrgPage = () => {
           : model
       )
     )
+  }
+
+  const updateCostTier = async (modelId: string, value: string) => {
+    const costTier = value === "auto" ? null : Number(value)
+    const updated = await modelApi.update(modelId, {
+      cost_tier: costTier,
+    })
+    patchModelInCache(queryClient, updated)
+    setModels((prev) =>
+      prev.map((model) => (model.id === modelId ? { ...model, ...updated } : model))
+    )
+  }
+
+  const costTierSelectValue = (model: ChatModel) => {
+    const override = normalizeModelCostTier(model.cost_tier_override)
+    return override ? String(override) : "auto"
+  }
+
+  const costTierOptionLabel = (tier: 1 | 2 | 3 | 4) => modelCostSymbols(tier)
+
+  const autoCostTierLabel = (model: ChatModel) => {
+    const auto = normalizeModelCostTier(model.auto_cost_tier)
+    if (!auto) return t("org_models_cost_auto")
+    return t("org_models_cost_auto_with_tier", { tier: modelCostSymbols(auto) })
   }
 
   const toggleModelAccess = async (orgId: string, modelId: string) => {
@@ -1799,53 +1831,81 @@ export const OrgPage = () => {
                           strategy={verticalListSortingStrategy}
                         >
                       <div className="space-y-2">
-                    {orderedModels.map((model) => (
+                    {orderedModels.map((model) => {
+                      const effectiveCostTier = normalizeModelCostTier(model.cost_tier)
+                      return (
                       <SortableModelRow key={model.id} id={model.id}>
                         {({ setNodeRef, style, attributes, listeners }) => (
                       <div
                         ref={setNodeRef}
                         style={style}
                         {...attributes}
-                        className="flex justify-between items-center px-3 py-2 border rounded-md bg-background"
+                        className="flex items-start gap-3 px-3 py-2 border rounded-md bg-background"
                       >
-                        <div className="flex items-center gap-2">
-                          {isSuperAdmin ? (
-                            <button
-                              type="button"
-                              className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
-                              aria-label={t("org_reorder_model")}
-                              {...listeners}
-                            >
-                              <GripVertical aria-hidden="true" className="w-4 h-4" />
-                            </button>
-                          ) : null}
-                        <div>
+                        {isSuperAdmin ? (
+                          <button
+                            type="button"
+                            className="mt-1 touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground shrink-0"
+                            aria-label={t("org_reorder_model")}
+                            {...listeners}
+                          >
+                            <GripVertical aria-hidden="true" className="w-4 h-4" />
+                          </button>
+                        ) : null}
+                        <div className="min-w-0 flex-1 space-y-1">
                           {editingModelId === model.id ? (
                             <Input
                               value={editingName}
                               onChange={(event) => setEditingName(event.target.value)}
-                              className="h-8"
+                              className="h-8 max-w-md"
                             />
                           ) : (
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium text-sm">{model.display_name}</p>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <p className="min-w-0 truncate font-medium text-sm">
+                                {model.display_name}
+                              </p>
+                              {effectiveCostTier ? (
+                                <span
+                                  className={cn(
+                                    "shrink-0 text-xs font-semibold",
+                                    modelCostTierClassName(effectiveCostTier)
+                                  )}
+                                >
+                                  {modelCostSymbols(effectiveCostTier)}
+                                </span>
+                              ) : null}
                               {isImageModel(model) ? (
-                                <Image className="w-4 h-4 text-muted-foreground" />
+                                <Image className="w-4 h-4 shrink-0 text-muted-foreground" />
                               ) : isEmbeddingModel(model) ? (
-                                <Database className="w-4 h-4 text-muted-foreground" />
+                                <Database className="w-4 h-4 shrink-0 text-muted-foreground" />
                               ) : null}
                             </div>
                           )}
-                          <p className="text-muted-foreground text-xs">
+                          <p className="truncate text-muted-foreground text-xs">
                             {model.provider} · {model.model_name}
-                            {model.provider === "openrouter" && model.openrouter_endpoint
-                              ? ` · ${model.openrouter_endpoint}`
-                              : ""}
+                          </p>
+                          <p className="text-muted-foreground text-xs">
+                            {model.cost_per_image != null || isImageModel(model) ? (
+                              <>
+                                {t("org_models_cost_image")}{" "}
+                                {formatCostPerImage(model.cost_per_image)}
+                              </>
+                            ) : (
+                              <>
+                                {t("org_models_cost_input")}{" "}
+                                {formatCostPerMillion(model.input_cost_per_million)}
+                                {" · "}
+                                {t("org_models_cost_cached")}{" "}
+                                {formatCostPerMillion(model.cached_input_cost_per_million)}
+                                {" · "}
+                                {t("org_models_cost_output")}{" "}
+                                {formatCostPerMillion(model.output_cost_per_million)}
+                              </>
+                            )}
                           </p>
                         </div>
-                        </div>
                         {isSuperAdmin ? (
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex w-full max-w-md shrink-0 flex-col items-stretch gap-2 sm:w-auto sm:max-w-none sm:items-end">
                             {model.provider === "openrouter" ? (
                               <Select
                                 value={model.openrouter_endpoint || OPENROUTER_ENDPOINT_AUTO}
@@ -1853,7 +1913,7 @@ export const OrgPage = () => {
                                   updateOpenRouterEndpoint(model.id, value)
                                 }
                               >
-                                <SelectTrigger className="w-52 h-8">
+                                <SelectTrigger className="h-8 w-full sm:w-52">
                                   <SelectValue
                                     placeholder={t("org_models_endpoint_placeholder")}
                                   />
@@ -1880,58 +1940,87 @@ export const OrgPage = () => {
                                 </SelectContent>
                               </Select>
                             ) : null}
-                            <Select
-                              value={model.reasoning_effort ?? "none"}
-                              onValueChange={(value) => updateReasoningEffort(model.id, value)}
-                            >
-                              <SelectTrigger className="w-28 h-8">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                            {reasoningOptions.map((option) => (
-                              <SelectItem key={option} value={option}>
-                                {reasoningLabel(option)}
-                              </SelectItem>
-                            ))}
-                              </SelectContent>
-                            </Select>
-                            {editingModelId === model.id ? (
-                              <>
-                                <Button
-                                  size="sm"
-                                  onClick={() => saveRename(model.id)}
-                                  disabled={!editingName.trim()}
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <Select
+                                value={costTierSelectValue(model)}
+                                onValueChange={(value) => updateCostTier(model.id, value)}
+                              >
+                                <SelectTrigger
+                                  className="h-8 w-28"
+                                  aria-label={t("org_models_cost_tier")}
                                 >
-                                  {t("common_save")}
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={cancelRename}>
-                                  {t("common_cancel")}
-                                </Button>
-                              </>
-                            ) : (
-                              <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => startRename(model)}
-                                >
-                                  {t("org_rename")}
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => removeModel(model.id)}
-                                >
-                                  {t("org_models_remove")}
-                                </Button>
-                              </>
-                            )}
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="auto">{autoCostTierLabel(model)}</SelectItem>
+                                  {([1, 2, 3, 4] as const).map((tier) => (
+                                    <SelectItem key={tier} value={String(tier)}>
+                                      <span
+                                        className={cn(
+                                          "font-semibold",
+                                          modelCostTierClassName(tier)
+                                        )}
+                                      >
+                                        {costTierOptionLabel(tier)}
+                                      </span>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Select
+                                value={model.reasoning_effort ?? "none"}
+                                onValueChange={(value) => updateReasoningEffort(model.id, value)}
+                              >
+                                <SelectTrigger className="h-8 w-28">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {reasoningOptions.map((option) => (
+                                    <SelectItem key={option} value={option}>
+                                      {reasoningLabel(option)}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {editingModelId === model.id ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => saveRename(model.id)}
+                                    disabled={!editingName.trim()}
+                                  >
+                                    {t("common_save")}
+                                  </Button>
+                                  <Button variant="outline" size="sm" onClick={cancelRename}>
+                                    {t("common_cancel")}
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => startRename(model)}
+                                  >
+                                    {t("org_rename")}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => removeModel(model.id)}
+                                  >
+                                    {t("org_models_remove")}
+                                  </Button>
+                                </>
+                              )}
+                            </div>
                           </div>
                         ) : null}
                       </div>
                         )}
                       </SortableModelRow>
-                    ))}
+                      )
+                    })}
                   </div>
                         </SortableContext>
                       </DndContext>

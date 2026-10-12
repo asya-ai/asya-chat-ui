@@ -8,16 +8,19 @@ const CODE_EXECUTION_ENABLED_KEY = "chatui_code_execution_enabled"
 const REASONING_EFFORT_BY_MODEL_KEY = "chatui_reasoning_effort_by_model"
 const ACTION_INFO_LEVEL_KEY = "chatui_toolcall_logs_visible"
 const SIDEBAR_SECTIONS_KEY = "chatui_sidebar_sections"
+const SIDEBAR_PINNED_KEY = "chatui_sidebar_pinned"
+const SHOW_PROJECT_CHAT_INDICATION_KEY = "chatui_show_project_chat_indication"
+const SIDEBAR_WIDTH_KEY = "chatui_sidebar_width_px"
 const COWORK_PANEL_WIDTH_KEY = "chatui_cowork_panel_width_pct"
-const COMPOSER_TEXTAREA_HEIGHT_KEY = "chatui_composer_textarea_height"
-
 const DEFAULT_COWORK_PANEL_WIDTH_PCT = 50
-const DEFAULT_COMPOSER_TEXTAREA_HEIGHT = 88
 const MIN_COMPOSER_TEXTAREA_HEIGHT = 52
-const COMPOSER_TEXTAREA_AUTO_GROW_MAX_HEIGHT_VH = 0.5
+const COMPOSER_TEXTAREA_AUTO_GROW_MAX_HEIGHT_VH = 0.25
 const COMPOSER_TEXTAREA_MAX_HEIGHT_VH = 0.75
 const MIN_COWORK_PANEL_WIDTH_PCT = 24
 const MAX_COWORK_PANEL_WIDTH_PCT = 76
+const DEFAULT_SIDEBAR_WIDTH_PX = 384
+const MIN_SIDEBAR_WIDTH_PX = 280
+const MAX_SIDEBAR_WIDTH_PX = 480
 
 const parseCoworkPanelWidthPct = (raw: string | null): number => {
   if (raw == null) return DEFAULT_COWORK_PANEL_WIDTH_PCT
@@ -27,6 +30,23 @@ const parseCoworkPanelWidthPct = (raw: string | null): number => {
     MAX_COWORK_PANEL_WIDTH_PCT,
     Math.max(MIN_COWORK_PANEL_WIDTH_PCT, value)
   )
+}
+
+const parseSidebarWidthPx = (raw: string | null): number => {
+  if (raw == null) return DEFAULT_SIDEBAR_WIDTH_PX
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return DEFAULT_SIDEBAR_WIDTH_PX
+  return Math.min(MAX_SIDEBAR_WIDTH_PX, Math.max(MIN_SIDEBAR_WIDTH_PX, Math.round(value)))
+}
+
+const parseSidebarPinned = (raw: string | null): boolean => {
+  if (raw == null) return true
+  return raw === "1" || raw === "true"
+}
+
+const parseShowProjectChatIndication = (raw: string | null): boolean => {
+  if (raw == null) return true
+  return raw === "1" || raw === "true"
 }
 
 export type ActionInfoLevel = "none" | "detailed"
@@ -165,6 +185,36 @@ export const sidebarSectionsStore = {
   clear: () => localStorage.removeItem(SIDEBAR_SECTIONS_KEY),
 }
 
+export const sidebarPinnedStore = {
+  get: (): boolean => parseSidebarPinned(localStorage.getItem(SIDEBAR_PINNED_KEY)),
+  set: (pinned: boolean) =>
+    localStorage.setItem(SIDEBAR_PINNED_KEY, pinned ? "1" : "0"),
+  clear: () => localStorage.removeItem(SIDEBAR_PINNED_KEY),
+}
+
+export const showProjectChatIndicationStore = {
+  get: (): boolean =>
+    parseShowProjectChatIndication(
+      localStorage.getItem(SHOW_PROJECT_CHAT_INDICATION_KEY)
+    ),
+  set: (enabled: boolean) =>
+    localStorage.setItem(
+      SHOW_PROJECT_CHAT_INDICATION_KEY,
+      enabled ? "1" : "0"
+    ),
+  clear: () => localStorage.removeItem(SHOW_PROJECT_CHAT_INDICATION_KEY),
+}
+
+export const sidebarWidthStore = {
+  default: DEFAULT_SIDEBAR_WIDTH_PX,
+  min: MIN_SIDEBAR_WIDTH_PX,
+  max: MAX_SIDEBAR_WIDTH_PX,
+  get: (): number => parseSidebarWidthPx(localStorage.getItem(SIDEBAR_WIDTH_KEY)),
+  set: (px: number) =>
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(parseSidebarWidthPx(String(px)))),
+  clear: () => localStorage.removeItem(SIDEBAR_WIDTH_KEY),
+}
+
 export const coworkPanelWidthStore = {
   default: DEFAULT_COWORK_PANEL_WIDTH_PCT,
   min: MIN_COWORK_PANEL_WIDTH_PCT,
@@ -178,26 +228,10 @@ export const coworkPanelWidthStore = {
   clear: () => localStorage.removeItem(COWORK_PANEL_WIDTH_KEY),
 }
 
-const parseComposerTextareaHeight = (raw: string | null): number => {
-  if (raw == null) return DEFAULT_COMPOSER_TEXTAREA_HEIGHT
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return DEFAULT_COMPOSER_TEXTAREA_HEIGHT
-  return Math.max(MIN_COMPOSER_TEXTAREA_HEIGHT, Math.round(value))
-}
-
 export const composerTextareaHeightStore = {
-  default: DEFAULT_COMPOSER_TEXTAREA_HEIGHT,
   min: MIN_COMPOSER_TEXTAREA_HEIGHT,
   autoGrowMaxHeightVh: COMPOSER_TEXTAREA_AUTO_GROW_MAX_HEIGHT_VH,
   maxHeightVh: COMPOSER_TEXTAREA_MAX_HEIGHT_VH,
-  get: (): number =>
-    parseComposerTextareaHeight(localStorage.getItem(COMPOSER_TEXTAREA_HEIGHT_KEY)),
-  set: (px: number) =>
-    localStorage.setItem(
-      COMPOSER_TEXTAREA_HEIGHT_KEY,
-      String(parseComposerTextareaHeight(String(px)))
-    ),
-  clear: () => localStorage.removeItem(COMPOSER_TEXTAREA_HEIGHT_KEY),
 }
 
 const USAGE_LIMIT_WARN_DISMISS_KEY = "chatui_usage_limit_warn_dismissed"

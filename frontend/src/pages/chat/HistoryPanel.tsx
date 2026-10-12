@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 
 import type { Chat } from "@/lib/types"
+import { showProjectChatIndicationStore } from "@/lib/storage"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -11,7 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { MoreHorizontal, Search } from "lucide-react"
+import { Link2, MoreHorizontal, Search } from "lucide-react"
 
 type HistoryRow = {
   chat: Chat
@@ -97,7 +98,7 @@ export const HistoryPanel = ({
               {groups.map((group) =>
                 group.rows.length === 0 ? null : (
                   <section key={group.label} className="flex flex-col gap-1">
-                    <h2 className="px-2 text-xs font-medium leading-4 text-muted-foreground">
+                    <h2 className="px-2 text-xs font-semibold leading-4 text-badge-fg">
                       {group.label}
                     </h2>
                     <div className="flex flex-col">
@@ -119,17 +120,27 @@ export const HistoryPanel = ({
                             <p className="truncate text-sm font-medium leading-4">
                               {chat.title || labels.untitled}
                             </p>
-                            {spaceLabel ? (
-                              <span className="mt-1.5 inline-flex max-w-full items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs leading-4 text-muted-foreground">
-                                <span
-                                  aria-hidden="true"
-                                  className="figma-icon size-3.5 shrink-0"
-                                  style={{ maskImage: "url('/icon-projects.svg')" }}
-                                />
-                                <span className="truncate">{spaceLabel}</span>
-                              </span>
+                            {showProjectChatIndicationStore.get() && spaceLabel ? (
+                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs leading-4 text-muted-foreground">
+                                  <span
+                                    aria-hidden="true"
+                                    className="figma-icon size-3.5 shrink-0"
+                                    style={{ maskImage: "url('/icon-projects.svg')" }}
+                                  />
+                                  <span className="truncate">{spaceLabel}</span>
+                                </span>
+                              </div>
                             ) : null}
                           </div>
+                          {chat.is_shared ? (
+                            <span
+                              aria-hidden="true"
+                              className="hidden shrink-0 text-muted-foreground sm:inline-flex group-hover:hidden group-focus-within:hidden"
+                            >
+                              <Link2 className="size-4" />
+                            </span>
+                          ) : null}
                           {modelLabel ? (
                             <span className="hidden shrink-0 items-center gap-1.5 text-xs leading-4 text-muted-foreground sm:inline-flex">
                               {modelLabel}

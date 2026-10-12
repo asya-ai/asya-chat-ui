@@ -40,6 +40,7 @@ import { Check, Pencil, Trash2, X } from "lucide-react"
 import {
   actionInfoLevelStore,
   orgStore,
+  showProjectChatIndicationStore,
   type ActionInfoLevel,
 } from "@/lib/storage"
 
@@ -74,6 +75,9 @@ export const MePage = () => {
   const [createdKey, setCreatedKey] = useState<string | null>(null)
   const [actionInfoLevel, setActionInfoLevel] = useState<ActionInfoLevel>(() =>
     actionInfoLevelStore.get()
+  )
+  const [showProjectIndication, setShowProjectIndication] = useState(() =>
+    showProjectChatIndicationStore.get()
   )
   const [memoryEnabled, setMemoryEnabled] = useState(false)
   const [memoriesOpen, setMemoriesOpen] = useState(false)
@@ -125,6 +129,11 @@ export const MePage = () => {
   const onActionInfoLevelChange = (level: ActionInfoLevel) => {
     setActionInfoLevel(level)
     actionInfoLevelStore.set(level)
+  }
+
+  const onShowProjectIndicationChange = (enabled: boolean) => {
+    setShowProjectIndication(enabled)
+    showProjectChatIndicationStore.set(enabled)
   }
 
   const onToggleMemory = async (enabled: boolean) => {
@@ -315,6 +324,12 @@ export const MePage = () => {
                 </SelectContent>
               </Select>
             </SettingsControl>
+          </SettingsRow>
+          <SettingsRow label={t("me_show_project_chat_indication")}>
+            <Switch
+              checked={showProjectIndication}
+              onCheckedChange={onShowProjectIndicationChange}
+            />
           </SettingsRow>
           <SettingsRow label={t("me_memory_enabled")}>
             <Switch checked={memoryEnabled} onCheckedChange={onToggleMemory} />

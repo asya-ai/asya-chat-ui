@@ -24,10 +24,13 @@ const indexRoute = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  beforeLoad: () => {
-    if (tokenStore.get()) {
-      throw redirect({ to: "/chat/{-$chatId}" })
-    }
+  beforeLoad: ({ location }) => {
+    const token = tokenStore.get()
+    if (!token) return
+    // Embed SSO popup: keep /login?embed=1 so the page can postMessage to the iframe.
+    const params = new URLSearchParams(location.searchStr)
+    if (params.get("embed") === "1") return
+    throw redirect({ to: "/chat/{-$chatId}" })
   },
   component: lazyRouteComponent(() =>
     import("@/pages/Login").then((mod) => ({ default: mod.LoginPage }))
@@ -113,10 +116,10 @@ const historyRoute = createRoute({
 })
 
 const sharedRoute = createRoute({
-  getParentRoute: () => authedRoute,
+  getParentRoute: () => rootRoute,
   path: "/shared/$shareToken",
   component: lazyRouteComponent(() =>
-    import("@/pages/ChatPage").then((mod) => ({ default: mod.ChatPage }))
+    import("@/pages/SharedChatPage").then((mod) => ({ default: mod.SharedChatPage }))
   ),
 })
 
@@ -202,6 +205,16 @@ const settingsProvidersRoute = createRoute({
   ),
 })
 
+const settingsWhitelabelRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/settings/whitelabel",
+  component: lazyRouteComponent(() =>
+    import("@/pages/WhitelabelPage").then((mod) => ({
+      default: mod.WhitelabelPage,
+    }))
+  ),
+})
+
 const settingsIntegrationsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/settings/integrations",
@@ -217,6 +230,16 @@ const settingsMeRoute = createRoute({
   path: "/settings/me",
   component: lazyRouteComponent(() =>
     import("@/pages/MePage").then((mod) => ({ default: mod.MePage }))
+  ),
+})
+
+const pitchPatternsEmbedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/embed/pitchpatterns",
+  component: lazyRouteComponent(() =>
+    import("@/pages/embed/PitchPatternsEmbedPage").then((mod) => ({
+      default: mod.PitchPatternsEmbedPage,
+    }))
   ),
 })
 
@@ -238,10 +261,11 @@ export const routeTree = rootRoute.addChildren([
   settingsRedirectRoute,
   agentsRedirectRoute,
   settingsAgentsRedirectRoute,
+  pitchPatternsEmbedRoute,
+  sharedRoute,
   authedRoute.addChildren([
     chatRoute,
     historyRoute,
-    sharedRoute,
     projectsRoute,
     projectRoute,
     usageRoute,
@@ -251,6 +275,7 @@ export const routeTree = rootRoute.addChildren([
     settingsTeamsRoute,
     settingsModelsRoute,
     settingsProvidersRoute,
+    settingsWhitelabelRoute,
     settingsIntegrationsRoute,
     settingsDiagnosisRoute,
     settingsMeRoute,

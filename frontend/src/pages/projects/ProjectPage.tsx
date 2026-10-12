@@ -23,6 +23,10 @@ import type {
   ChatModel,
 } from "@/lib/types"
 import { orgStore } from "@/lib/storage"
+import {
+  groupModelsByDisplayName,
+  splitModelDisplayName,
+} from "@/lib/modelCapabilities"
 import { useChats, useDeleteAgent, useUpdateAgent } from "@/hooks/use-chat-query"
 import { readFilesAsAttachments } from "@/lib/file-utils"
 import { Button } from "@/components/ui/button"
@@ -34,7 +38,9 @@ import { Badge } from "@/components/ui/badge"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -127,6 +133,7 @@ export const ProjectPage = () => {
 
   const canEdit = project?.role === "owner" || project?.role === "editor"
   const isOwner = project?.is_owner ?? false
+  const modelSections = useMemo(() => groupModelsByDisplayName(models), [models])
 
   const loadProject = async () => {
     const items = await agentApi.list()
@@ -422,9 +429,9 @@ export const ProjectPage = () => {
     return (
       <AppShell activeSection="projects">
         {(sidebarControls) => (
-          <div className="flex h-full flex-col">
-            <div className="flex h-15 shrink-0 items-center px-3">{sidebarControls}</div>
-            <div className="flex flex-1 items-center justify-center px-4">
+          <div className="flex flex-col h-full">
+            <div className="flex items-center px-3 h-15 shrink-0">{sidebarControls}</div>
+            <div className="flex flex-1 justify-center items-center px-4">
               <p className="text-muted-foreground text-sm">{t("project_loading_one")}</p>
             </div>
           </div>
@@ -437,9 +444,9 @@ export const ProjectPage = () => {
     return (
       <AppShell activeSection="projects">
         {(sidebarControls) => (
-          <div className="flex h-full flex-col">
-            <div className="flex h-15 shrink-0 items-center px-3">{sidebarControls}</div>
-            <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
+          <div className="flex flex-col h-full">
+            <div className="flex items-center px-3 h-15 shrink-0">{sidebarControls}</div>
+            <div className="flex flex-col flex-1 justify-center items-center gap-4 px-4 text-center">
               <p className="text-muted-foreground">{error ?? t("project_not_found")}</p>
               <Button onClick={() => navigate({ to: "/projects" })}>{t("project_back_to_projects")}</Button>
             </div>
@@ -458,9 +465,9 @@ export const ProjectPage = () => {
   return (
     <AppShell activeSection="projects">
       {(sidebarControls) => (
-    <div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto p-4 sm:p-6">
+    <div className="flex flex-col gap-6 mx-auto p-4 sm:p-6 w-full max-w-5xl h-full overflow-y-auto">
       <div>
-        <div className="-ml-2 mb-2 flex items-center gap-1">
+        <div className="flex items-center gap-1 mb-2 -ml-2">
           {sidebarControls}
           <Button
             variant="ghost"
@@ -468,27 +475,27 @@ export const ProjectPage = () => {
             className="text-muted-foreground"
             onClick={() => navigate({ to: "/projects" })}
           >
-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
             {t("project_title")}
           </Button>
         </div>
-        <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap justify-between items-start gap-3">
           <div className="min-w-0">
-            <h1 className="truncate font-heading text-4xl font-normal leading-10">{project.name}</h1>
+            <h1 className="font-heading font-normal text-4xl truncate leading-10">{project.name}</h1>
             {project.description ? (
-              <p className="text-muted-foreground mt-1 text-sm">{project.description}</p>
+              <p className="mt-1 text-muted-foreground text-sm">{project.description}</p>
             ) : null}
           </div>
           <div className="flex items-center gap-2">
             <Button onClick={startChat}>
-              <MessageSquarePlus className="h-4 w-4" aria-hidden="true" />
+              <MessageSquarePlus className="w-4 h-4" aria-hidden="true" />
               {t("chat_new_title")}
             </Button>
             {canEdit ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="icon" aria-label={t("project_actions_aria")}>
-                    <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                    <MoreHorizontal className="w-4 h-4" aria-hidden="true" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
@@ -553,8 +560,8 @@ export const ProjectPage = () => {
 
       {tab === "chats" ? (
         sortedChats.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed bg-card py-16 text-center">
-            <MessageSquarePlus className="text-muted-foreground h-6 w-6" aria-hidden="true" />
+          <div className="flex flex-col justify-center items-center gap-3 bg-card py-16 border border-dashed rounded-[var(--radius-card)] text-center">
+            <MessageSquarePlus className="w-6 h-6 text-muted-foreground" aria-hidden="true" />
             <p className="text-muted-foreground text-sm">{t("project_no_chats")}</p>
             <Button onClick={startChat}>{t("project_start_chat")}</Button>
           </div>
@@ -574,12 +581,12 @@ export const ProjectPage = () => {
                     navigate({ href: `/chat/${chat.id}?agent=${encodeURIComponent(project.id)}` })
                   }
                 }}
-                className="hover:border-primary/60 hover:bg-accent/40 flex cursor-pointer flex-row items-center justify-between gap-3 px-4 py-3 transition-colors"
+                className="flex flex-row justify-between items-center gap-3 hover:bg-accent/40 px-4 py-3 hover:border-primary/60 transition-colors cursor-pointer"
               >
-                <p className="min-w-0 flex-1 truncate font-medium">
+                <p className="flex-1 min-w-0 font-medium truncate">
                   {chat.title || t("project_untitled_chat")}
                 </p>
-                <span className="text-muted-foreground shrink-0 text-xs">
+                <span className="text-muted-foreground text-xs shrink-0">
                   {formatDate(chat.last_activity_at)}
                 </span>
               </Card>
@@ -593,8 +600,8 @@ export const ProjectPage = () => {
           {canEdit ? (
             <Card className="gap-4 p-4">
               <div className="space-y-2">
-                <p className="flex items-center gap-2 text-sm font-medium">
-                  <Upload className="h-4 w-4" aria-hidden="true" />
+                <p className="flex items-center gap-2 font-medium text-sm">
+                  <Upload className="w-4 h-4" aria-hidden="true" />
                   {t("project_upload_files")}
                 </p>
                 <Input
@@ -619,9 +626,9 @@ export const ProjectPage = () => {
                   ) : null}
                 </div>
               </div>
-              <div className="space-y-2 border-t pt-4">
-                <p className="flex items-center gap-2 text-sm font-medium">
-                  <Link2 className="h-4 w-4" aria-hidden="true" />
+              <div className="space-y-2 pt-4 border-t">
+                <p className="flex items-center gap-2 font-medium text-sm">
+                  <Link2 className="w-4 h-4" aria-hidden="true" />
                   {t("project_add_url")}
                 </p>
                 <Input
@@ -647,19 +654,19 @@ export const ProjectPage = () => {
             ) : (
               sources.map((source) => (
                 <Card key={source.id} className="gap-2 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-start gap-2">
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="flex items-start gap-2 min-w-0">
                       <FileText
-                        className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0"
+                        className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0"
                         aria-hidden="true"
                       />
                       <div className="min-w-0">
-                        <p className="truncate font-medium">{source.title}</p>
+                        <p className="font-medium truncate">{source.title}</p>
                         {source.url ? (
-                          <p className="text-muted-foreground truncate text-xs">{source.url}</p>
+                          <p className="text-muted-foreground text-xs truncate">{source.url}</p>
                         ) : null}
                         {source.summary ? (
-                          <p className="text-muted-foreground line-clamp-2 text-xs">
+                          <p className="text-muted-foreground text-xs line-clamp-2">
                             {source.summary}
                           </p>
                         ) : null}
@@ -668,7 +675,7 @@ export const ProjectPage = () => {
                         ) : null}
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <Badge variant={source.status === "ready" ? "secondary" : "outline"}>
                         {t(SOURCE_STATUS_KEYS[source.status])}
                       </Badge>
@@ -677,22 +684,22 @@ export const ProjectPage = () => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8"
+                            className="w-8 h-8"
                             aria-label={t("project_reindex_aria")}
                             disabled={busy}
                             onClick={() => handleReindex(source.id)}
                           >
-                            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                            <RefreshCw className="w-4 h-4" aria-hidden="true" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="text-destructive h-8 w-8"
+                            className="w-8 h-8 text-destructive"
                             aria-label={t("project_delete_file_aria")}
                             disabled={deletingSourceId === source.id}
                             onClick={() => void handleDeleteSource(source.id)}
                           >
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
                           </Button>
                         </>
                       ) : null}
@@ -707,7 +714,7 @@ export const ProjectPage = () => {
 
       <div className={tab === "instructions" ? "max-w-2xl space-y-4" : "hidden"}>
           <div className="space-y-2">
-            <label className="text-sm font-medium">{t("project_name_label")}</label>
+            <label className="font-medium text-sm">{t("project_name_label")}</label>
             <Input
               ref={instrNameRef}
               defaultValue={project.name}
@@ -715,7 +722,7 @@ export const ProjectPage = () => {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium">{t("project_description_label")}</label>
+            <label className="font-medium text-sm">{t("project_description_label")}</label>
             <Input
               ref={instrDescriptionRef}
               defaultValue={project.description ?? ""}
@@ -724,8 +731,8 @@ export const ProjectPage = () => {
             />
           </div>
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <Settings2 className="h-4 w-4" aria-hidden="true" />
+            <label className="flex items-center gap-2 font-medium text-sm">
+              <Settings2 className="w-4 h-4" aria-hidden="true" />
               {t("project_custom_instructions")}
             </label>
             <p className="text-muted-foreground text-xs">{t("project_custom_instructions_help")}</p>
@@ -738,7 +745,7 @@ export const ProjectPage = () => {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium">{t("project_preferred_model")}</label>
+            <label className="font-medium text-sm">{t("project_preferred_model")}</label>
             <Select
               value={instrModelId || "__none__"}
               onValueChange={(value) => setInstrModelId(value === "__none__" ? "" : value)}
@@ -749,10 +756,20 @@ export const ProjectPage = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">{t("project_no_preferred_model")}</SelectItem>
-                {models.map((model) => (
-                  <SelectItem key={model.id} value={model.id}>
-                    {model.display_name} ({model.provider})
-                  </SelectItem>
+                {modelSections.map((section) => (
+                  <SelectGroup
+                    key={
+                      section.group ??
+                      section.models.map((model) => model.id).join("-")
+                    }
+                  >
+                    {section.group ? <SelectLabel>{section.group}</SelectLabel> : null}
+                    {section.models.map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        {splitModelDisplayName(model.display_name).label} ({model.provider})
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>
@@ -834,7 +851,7 @@ export const ProjectPage = () => {
                   onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 150)}
                 />
                 {suggestionsOpen && shareSuggestions.length > 0 ? (
-                  <div className="bg-popover absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-md border p-1 shadow-md">
+                  <div className="z-50 absolute bg-popover shadow-md mt-1 p-1 border rounded-md w-full max-h-56 overflow-y-auto">
                     {shareSuggestions.map((suggestion) => {
                       const key =
                         suggestion.kind === "org"
@@ -860,7 +877,7 @@ export const ProjectPage = () => {
                       <button
                         key={key}
                         type="button"
-                        className="hover:bg-accent flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm"
+                        className="flex flex-col items-start hover:bg-accent px-2 py-1.5 rounded-sm w-full text-sm text-left"
                         onMouseDown={(event) => {
                           event.preventDefault()
                           setShareSelected(suggestion)
@@ -870,7 +887,7 @@ export const ProjectPage = () => {
                       >
                         <span className="truncate">{title}</span>
                         {subtitle ? (
-                          <span className="text-muted-foreground truncate text-xs">
+                          <span className="text-muted-foreground text-xs truncate">
                             {subtitle}
                           </span>
                         ) : null}
@@ -926,10 +943,10 @@ export const ProjectPage = () => {
                   return (
                   <div
                     key={key}
-                    className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
+                    className="flex justify-between items-center gap-2 px-3 py-2 border rounded-md"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm">{title}</p>
+                      <p className="text-sm truncate">{title}</p>
                       <p className="text-muted-foreground text-xs">
                         {subtitle ? `${subtitle} · ` : ""}
                         {t(ROLE_KEYS[share.role])}
@@ -938,12 +955,12 @@ export const ProjectPage = () => {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="text-destructive h-8 w-8"
+                      className="w-8 h-8 text-destructive"
                       aria-label={t("project_remove_access_aria")}
                       disabled={busy}
                       onClick={() => handleRemoveShare(share)}
                     >
-                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      <Trash2 className="w-4 h-4" aria-hidden="true" />
                     </Button>
                   </div>
                   )

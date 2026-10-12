@@ -100,7 +100,7 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
             <Menu aria-hidden="true" />
           </Button>
         </SheetTrigger>
-        <SheetContent side="left" className="w-57.25 bg-sidebar p-2" showCloseButton={false}>
+        <SheetContent side="left" className="w-96 bg-sidebar p-0" showCloseButton={false}>
           {sidebar(() => setMobileOpen(false))}
         </SheetContent>
       </Sheet>
@@ -127,7 +127,7 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
   return (
     <div className="flex h-svh overflow-hidden bg-background">
       <aside
-        className={`hidden min-h-0 w-57.25 shrink-0 flex-col bg-sidebar p-2 text-sidebar-foreground ${
+        className={`my-2 hidden min-h-0 w-96 shrink-0 flex-col overflow-hidden rounded-card border border-sidebar-border bg-sidebar text-sidebar-foreground ${
           desktopOpen ? "md:flex" : ""
         }`}
       >
@@ -135,9 +135,7 @@ export const AppShell = ({ activeSection, children }: AppShellProps) => {
       </aside>
       <main
         id="main-content"
-        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border ${
-          desktopOpen ? "md:ml-0" : "md:ml-2"
-        }`}
+        className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:m-2 md:rounded-card md:border md:border-border"
       >
         {children(controls)}
       </main>

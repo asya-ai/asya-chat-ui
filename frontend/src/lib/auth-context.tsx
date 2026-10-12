@@ -1,7 +1,11 @@
-import { createContext, useContext, useMemo, useState } from "react"
+import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import type { ReactNode } from "react"
 
 import { tokenStore } from "@/lib/storage"
+import {
+  scheduleTokenRefresh,
+  stopTokenRefreshScheduler,
+} from "@/lib/token-refresh"
 
 type AuthContextValue = {
   token: string | null
@@ -20,9 +24,36 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const clearToken = () => {
+    stopTokenRefreshScheduler()
     tokenStore.clear()
     setTokenState(null)
   }
+
+  useEffect(() => {
+    if (!token) {
+      stopTokenRefreshScheduler()
+      return
+    }
+    scheduleTokenRefresh(token, (next) => {
+      setTokenState(next)
+    })
+    return () => stopTokenRefreshScheduler()
+  }, [token])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== "chatui_token") return
+      const next = event.newValue
+      if (!next) {
+        stopTokenRefreshScheduler()
+        setTokenState(null)
+        return
+      }
+      setTokenState(next)
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [])
 
   const value = useMemo(() => ({ token, setToken, clearToken }), [token])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

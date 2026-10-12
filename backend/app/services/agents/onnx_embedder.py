@@ -13,11 +13,17 @@ from tokenizers import Tokenizer
 _ONNX_REPOS = {
     "BAAI/bge-m3": "onnx-community/bge-m3-ONNX",
 }
-_ONNX_ALLOW_PATTERNS = [
+# Prefer int8 quantized (~0.6GB) over fp32 (~2.3GB + external data). Full
+# weights remain a fallback when quantized export is missing.
+_ONNX_ALLOW_PATTERNS_QUANTIZED = [
     "tokenizer.json",
+    "onnx/model_quantized.onnx",
+]
+_ONNX_ALLOW_PATTERNS_FULL = [
+    "tokenizer.json",
+    "onnx/model_quantized.onnx",
     "onnx/model.onnx",
     "onnx/model.onnx_data",
-    "onnx/model_quantized.onnx",
 ]
 _MAX_LENGTH = 1024
 
@@ -34,22 +40,38 @@ def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
 
 
 def _resolve_onnx_path(root: Path) -> Path:
-    for name in ("model.onnx", "model_quantized.onnx"):
+    # Quantized first — fp32 bge-m3 alone is ~2.3GB resident in each worker.
+    for name in ("model_quantized.onnx", "model.onnx"):
         for candidate in (root / "onnx" / name, root / name):
             if candidate.exists():
                 return candidate
     raise FileNotFoundError(f"No ONNX weights found under {root}")
 
 
-class OnnxTextEmbedder:
-    def __init__(self, model_name: str, *, local_files_only: bool = True):
-        repo_id = _ONNX_REPOS.get(model_name, model_name)
+def _download_onnx_repo(repo_id: str, *, local_files_only: bool) -> Path:
+    try:
         cache_dir = snapshot_download(
             repo_id=repo_id,
-            allow_patterns=_ONNX_ALLOW_PATTERNS,
+            allow_patterns=_ONNX_ALLOW_PATTERNS_QUANTIZED,
             local_files_only=local_files_only,
         )
         root = Path(cache_dir)
+        _resolve_onnx_path(root)
+        return root
+    except Exception:
+        # Offline / older images may only have the fp32 export cached.
+        cache_dir = snapshot_download(
+            repo_id=repo_id,
+            allow_patterns=_ONNX_ALLOW_PATTERNS_FULL,
+            local_files_only=local_files_only,
+        )
+        return Path(cache_dir)
+
+
+class OnnxTextEmbedder:
+    def __init__(self, model_name: str, *, local_files_only: bool = True):
+        repo_id = _ONNX_REPOS.get(model_name, model_name)
+        root = _download_onnx_repo(repo_id, local_files_only=local_files_only)
         tokenizer_path = root / "tokenizer.json"
         if not tokenizer_path.exists():
             raise FileNotFoundError(f"tokenizer.json missing in {root}")
@@ -59,8 +81,14 @@ class OnnxTextEmbedder:
             pad_id = 1
         self.tokenizer.enable_padding(direction="right", pad_id=pad_id, pad_token="<pad>")
         self.tokenizer.enable_truncation(max_length=_MAX_LENGTH)
+        # Disable ORT arenas so peak activation memory is returned to the OS
+        # between batches instead of sticking in the worker RSS forever.
+        session_options = ort.SessionOptions()
+        session_options.enable_cpu_mem_arena = False
+        session_options.enable_mem_pattern = False
         self.session = ort.InferenceSession(
             str(_resolve_onnx_path(root)),
+            sess_options=session_options,
             providers=["CPUExecutionProvider"],
         )
         self.input_names = {item.name for item in self.session.get_inputs()}

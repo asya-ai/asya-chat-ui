@@ -156,6 +156,23 @@ class PasswordReset(SQLModel, table=True):
     user: User = Relationship()
 
 
+class OidcSession(SQLModel, table=True):
+    __tablename__ = "oidc_sessions"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    access_token: Optional[str] = Field(default=None)
+    refresh_token: Optional[str] = Field(default=None)
+    access_expires_at: datetime
+    refresh_expires_at: Optional[datetime] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    user: User = Relationship()
+    org: Org = Relationship()
+
+
 class ChatModel(SQLModel, table=True):
     __tablename__ = "chat_models"
 
@@ -174,6 +191,8 @@ class ChatModel(SQLModel, table=True):
     reasoning_effort: Optional[str] = Field(default=None)
     # OpenRouter provider routing tag, e.g. "google-vertex/eu".
     openrouter_endpoint: Optional[str] = Field(default=None)
+    # Admin override for €–€€€€ UI tier; None = derive from live pricing.
+    cost_tier_override: Optional[int] = Field(default=None)
 
     chats: List["Chat"] = Relationship(back_populates="model")
     usage_events: List["UsageEvent"] = Relationship(back_populates="model")
@@ -293,6 +312,16 @@ class McpSettings(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class WhitelabelSettings(SQLModel, table=True):
+    __tablename__ = "whitelabel_settings"
+
+    id: int = Field(default=1, primary_key=True)
+    app_title: Optional[str] = Field(default=None)
+    logo_path: Optional[str] = Field(default=None)
+    logo_content_type: Optional[str] = Field(default=None)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class McpServer(SQLModel, table=True):
     __tablename__ = "mcp_servers"
     __table_args__ = (UniqueConstraint("slug", name="uq_mcp_servers_slug"),)
@@ -316,7 +345,76 @@ class McpServer(SQLModel, table=True):
     tool_blocklist: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
     auth_type: str = Field(default="none")
     auth_config: Optional[str] = Field(default=None)
+    origin: str = Field(default="custom", index=True)
+    catalog_id: Optional[str] = Field(default=None, index=True)
     is_enabled: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class IntegrationAdminConfig(SQLModel, table=True):
+    """Instance or org admin settings for a catalog app or OAuth provider."""
+
+    __tablename__ = "integration_admin_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_kind",
+            "target_id",
+            "scope",
+            "org_id",
+            name="uq_integration_admin_configs_target_scope_org",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    target_kind: str = Field(index=True)  # catalog | oauth_provider
+    target_id: str = Field(index=True)
+    scope: str = Field(index=True)  # instance | org
+    org_id: Optional[UUID] = Field(default=None, foreign_key="orgs.id", index=True)
+    is_enabled: bool = Field(default=True)
+    config: Optional[str] = Field(default=None)  # encrypted JSON
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class IntegrationCatalogEnablement(SQLModel, table=True):
+    __tablename__ = "integration_catalog_enablements"
+    __table_args__ = (
+        UniqueConstraint(
+            "catalog_id",
+            "scope",
+            "org_id",
+            name="uq_integration_catalog_enablements_scope_org",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    catalog_id: str = Field(index=True)
+    scope: str = Field(index=True)  # instance | org
+    org_id: Optional[UUID] = Field(default=None, foreign_key="orgs.id", index=True)
+    is_enabled: bool = Field(default=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class IntegrationUserInstall(SQLModel, table=True):
+    __tablename__ = "integration_user_installs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "org_id",
+            "catalog_id",
+            name="uq_integration_user_installs_user_org_catalog",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    catalog_id: str = Field(index=True)
+    credentials: str  # encrypted JSON
+    credential_fingerprint: Optional[str] = Field(default=None, index=True)
+    status: str = Field(default="connected", index=True)
+    expires_at: Optional[datetime] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
@@ -403,6 +501,9 @@ class ChatMessage(SQLModel, table=True):
     role: str = Field(index=True)
     content: str
     sources: Optional[List[dict]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    page_context: Optional[Any] = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
     status: str = Field(default="done", index=True)
@@ -617,6 +718,22 @@ class AgentAccess(SQLModel, table=True):
     role: AgentAccessRole = Field(sa_column=Column(String(32), nullable=False))
     granted_by_user_id: Optional[UUID] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class AgentUserOrder(SQLModel, table=True):
+    __tablename__ = "agent_user_orders"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "org_id", "agent_id", name="uq_agent_user_orders_user_org_agent"
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    agent_id: UUID = Field(foreign_key="agents.id", index=True)
+    display_order: int = Field(default=0, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 

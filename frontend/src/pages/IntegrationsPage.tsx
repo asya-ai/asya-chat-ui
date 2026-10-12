@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from "react"
+import { Settings2 } from "lucide-react"
 
 import { SettingsShell } from "@/components/SettingsShell"
 import { SettingsPage, SettingsPageHeader } from "@/components/settings/SettingsPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -22,10 +29,12 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { authApi, mcpApi, orgApi } from "@/lib/api"
+import { authApi, integrationsApi, mcpApi, orgApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
 import { orgStore } from "@/lib/storage"
+import { cn } from "@/lib/utils"
 import type {
+  CatalogIntegrationStatus,
   McpAuthType,
   McpBinding,
   McpBindingMode,
@@ -34,6 +43,7 @@ import type {
   McpSettings,
   McpTransport,
   McpUserAuthMethod,
+  OAuthProviderConfig,
   Org,
 } from "@/lib/types"
 
@@ -82,8 +92,29 @@ export const IntegrationsPage = () => {
   const [editingServer, setEditingServer] = useState<McpServer | null>(null)
   const [form, setForm] = useState<McpServerWrite>(emptyServerForm())
   const [connectionTokens, setConnectionTokens] = useState<Record<string, string>>({})
+  const [catalogApps, setCatalogApps] = useState<CatalogIntegrationStatus[]>([])
+  const [catalogKeys, setCatalogKeys] = useState<Record<string, string>>({})
+  const [catalogUrlDrafts, setCatalogUrlDrafts] = useState<Record<string, string>>({})
+  const [catalogOriginsDrafts, setCatalogOriginsDrafts] = useState<Record<string, string>>({})
+  const [embedCopied, setEmbedCopied] = useState<string | null>(null)
+  const [configuringAppId, setConfiguringAppId] = useState<string | null>(null)
+  const [connectingAppId, setConnectingAppId] = useState<string | null>(null)
+  const [oauthProviders, setOauthProviders] = useState<OAuthProviderConfig[]>([])
+  const [oauthProviderDrafts, setOauthProviderDrafts] = useState<
+    Record<string, Record<string, string>>
+  >({})
 
   const canManageOrg = isSuperAdmin || isAdmin
+  // Instance catalog setup (MCP URL, embed origins, offer) — not for org managers/members.
+  const canConfigureCatalogApps = isSuperAdmin
+  const configuringApp =
+    catalogApps.find((app) => app.catalog_id === configuringAppId) ?? null
+  const connectingApp =
+    catalogApps.find((app) => app.catalog_id === connectingAppId) ?? null
+  const oauthCallbackUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/api/integrations/oauth/callback`
+      : "/api/integrations/oauth/callback"
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -101,7 +132,9 @@ export const IntegrationsPage = () => {
 
       const tasks: Promise<void>[] = [
         mcpApi.overview(orgId ?? undefined).then((overview) => {
-          setOverviewServers(overview.user_provided_servers)
+          setOverviewServers(
+            overview.user_provided_servers.filter((s) => s.origin !== "catalog")
+          )
           setPersonalServers(overview.personal_servers)
           setPolicy({
             allow_org_servers: overview.policy.allow_org_servers,
@@ -109,19 +142,66 @@ export const IntegrationsPage = () => {
             org_allow_user_servers: overview.policy.org_allow_user_servers ?? null,
           })
         }),
+        integrationsApi.listCatalog(orgId ?? undefined).then((apps) => {
+          setCatalogApps(apps)
+          setCatalogUrlDrafts((prev) => {
+            const next = { ...prev }
+            for (const app of apps) {
+              if (next[app.catalog_id] == null) {
+                next[app.catalog_id] =
+                  app.effective_mcp_url ??
+                  app.admin_config_fields.find((f) => f.key === "mcp_url")?.default ??
+                  ""
+              }
+            }
+            return next
+          })
+          setCatalogOriginsDrafts((prev) => {
+            const next = { ...prev }
+            for (const app of apps) {
+              if (next[app.catalog_id] == null) {
+                next[app.catalog_id] = app.allowed_embed_origins ?? ""
+              }
+            }
+            return next
+          })
+        }),
       ]
 
       if (isSuperAdmin) {
         tasks.push(
           mcpApi.instanceSettings().then(setInstanceSettings),
-          mcpApi.listInstanceServers().then(setInstanceServers)
+          mcpApi.listInstanceServers().then((servers) =>
+            setInstanceServers(servers.filter((s) => s.origin !== "catalog"))
+          ),
+          integrationsApi.listInstanceProviders().then((providers) => {
+            setOauthProviders(providers)
+            setOauthProviderDrafts((prev) => {
+              const next = { ...prev }
+              for (const provider of providers) {
+                if (next[provider.provider_id]) continue
+                const draft: Record<string, string> = {}
+                for (const field of provider.fields) {
+                  const existing = provider.values?.[field.key]
+                  draft[field.key] =
+                    typeof existing === "string" ? existing : field.key === "redirect_uri"
+                      ? oauthCallbackUrl
+                      : ""
+                }
+                next[provider.provider_id] = draft
+              }
+              return next
+            })
+          })
         )
       }
       if (canManageOrg && orgId) {
         tasks.push(
           mcpApi.orgSettings(orgId).then((s) => setOrgAllowUserServers(s.allow_user_servers)),
           mcpApi.listOrgServers(orgId).then(setOrgServers),
-          mcpApi.listBindings(orgId).then(setBindings)
+          mcpApi.listBindings(orgId).then((rows) =>
+            setBindings(rows.filter((b) => !b.instance_server_slug.startsWith("catalog-")))
+          )
         )
       }
       await Promise.all(tasks)
@@ -130,7 +210,7 @@ export const IntegrationsPage = () => {
     } finally {
       setLoading(false)
     }
-  }, [canManageOrg, isSuperAdmin, selectedOrgId, t])
+  }, [canManageOrg, isSuperAdmin, oauthCallbackUrl, selectedOrgId, t])
 
   useEffect(() => {
     authApi
@@ -147,6 +227,23 @@ export const IntegrationsPage = () => {
     if (!authChecked) return
     void loadAll()
   }, [authChecked, loadAll])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oauth = params.get("oauth")
+    if (!oauth) return
+    if (oauth === "connected") {
+      setError(null)
+    } else if (oauth === "error") {
+      setError(params.get("detail") || t("common_error"))
+    }
+    params.delete("oauth")
+    params.delete("catalog_id")
+    params.delete("detail")
+    const next = params.toString()
+    const url = `${window.location.pathname}${next ? `?${next}` : ""}`
+    window.history.replaceState({}, "", url)
+  }, [t])
 
   const openCreateDialog = (scope: ServerScope) => {
     setDialogScope(scope)
@@ -293,6 +390,131 @@ export const IntegrationsPage = () => {
     await loadAll()
   }
 
+  const saveCatalogUrl = async (app: CatalogIntegrationStatus, scope: "instance" | "org") => {
+    const url = (catalogUrlDrafts[app.catalog_id] ?? "").trim()
+    if (!url) return
+    setError(null)
+    try {
+      const origins = (catalogOriginsDrafts[app.catalog_id] ?? "").trim()
+      const values: Record<string, string> = { mcp_url: url }
+      if (app.catalog_id === "pitchpatterns") {
+        values.allowed_embed_origins = origins
+      }
+      if (scope === "instance") {
+        await integrationsApi.upsertInstanceCatalogConfig(app.catalog_id, {
+          is_enabled: true,
+          values,
+        })
+        await integrationsApi.setInstanceEnablement(app.catalog_id, true)
+      } else if (selectedOrgId) {
+        await integrationsApi.upsertOrgCatalogConfig(selectedOrgId, app.catalog_id, {
+          is_enabled: true,
+          values,
+        })
+        await integrationsApi.setOrgEnablement(selectedOrgId, app.catalog_id, true)
+      }
+      await loadAll()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const copyEmbedUrl = async (catalogId: string) => {
+    const url = `${window.location.origin}/embed/${catalogId}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setEmbedCopied(catalogId)
+      window.setTimeout(() => setEmbedCopied(null), 1500)
+    } catch {
+      setError(t("common_error"))
+    }
+  }
+
+  const toggleCatalogEnabled = async (app: CatalogIntegrationStatus, enabled: boolean) => {
+    setError(null)
+    try {
+      if (isSuperAdmin && !selectedOrgId) {
+        await integrationsApi.setInstanceEnablement(app.catalog_id, enabled)
+      } else if (selectedOrgId && canManageOrg) {
+        await integrationsApi.setOrgEnablement(selectedOrgId, app.catalog_id, enabled)
+      } else if (isSuperAdmin) {
+        await integrationsApi.setInstanceEnablement(app.catalog_id, enabled)
+      }
+      await loadAll()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const connectCatalogApp = async (app: CatalogIntegrationStatus) => {
+    if (!selectedOrgId) return
+    const key = (catalogKeys[app.catalog_id] ?? "").trim()
+    if (!key) return
+    setError(null)
+    try {
+      await integrationsApi.connect(app.catalog_id, selectedOrgId, key)
+      setCatalogKeys((prev) => ({ ...prev, [app.catalog_id]: "" }))
+      setConnectingAppId(null)
+      await loadAll()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const connectCatalogOAuth = async (app: CatalogIntegrationStatus) => {
+    if (!selectedOrgId) return
+    setError(null)
+    try {
+      const { authorize_url } = await integrationsApi.oauthStart(
+        app.catalog_id,
+        selectedOrgId
+      )
+      window.location.assign(authorize_url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const saveOauthProvider = async (provider: OAuthProviderConfig) => {
+    const draft = oauthProviderDrafts[provider.provider_id] ?? {}
+    setError(null)
+    try {
+      await integrationsApi.upsertInstanceProvider(provider.provider_id, {
+        is_enabled: true,
+        values: draft,
+      })
+      await loadAll()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const disconnectCatalogApp = async (app: CatalogIntegrationStatus) => {
+    if (!selectedOrgId) return
+    setError(null)
+    try {
+      await integrationsApi.disconnect(app.catalog_id, selectedOrgId)
+      await loadAll()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
+  const testCatalogApp = async (app: CatalogIntegrationStatus) => {
+    if (!selectedOrgId) return
+    setError(null)
+    try {
+      const result = await integrationsApi.test(app.catalog_id, selectedOrgId)
+      alert(
+        result.status === "ok"
+          ? t("mcp_test_ok", { tools: String(result.tools ?? 0) })
+          : result.detail ?? result.status
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
   const renderAuthFields = () => (
     <div className="space-y-3">
       <div className="space-y-1">
@@ -411,6 +633,10 @@ export const IntegrationsPage = () => {
   )
 
   const orgSectionVisible = canManageOrg && selectedOrgId
+  const visibleCatalogApps = canConfigureCatalogApps
+    ? catalogApps
+    : catalogApps.filter((app) => app.installable || app.connected)
+  const showCatalogSection = canConfigureCatalogApps || visibleCatalogApps.length > 0
 
   return (
     <SettingsShell title={t("integrations_title")}>
@@ -421,6 +647,211 @@ export const IntegrationsPage = () => {
         />
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         {loading ? <p className="text-sm text-muted-foreground">{t("common_loading")}</p> : null}
+
+        {showCatalogSection ? (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-medium">{t("integrations_apps")}</h2>
+              {(orgs.length > 1 || isSuperAdmin) && selectedOrgId ? (
+                <Select
+                  value={selectedOrgId}
+                  onValueChange={(value) => {
+                    setSelectedOrgId(value)
+                    orgStore.set(value)
+                  }}
+                >
+                  <SelectTrigger className="w-56">
+                    <SelectValue placeholder={t("org_select_placeholder")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {orgs.map((org) => (
+                      <SelectItem key={org.id} value={org.id}>
+                        {org.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+            </div>
+            {visibleCatalogApps.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("integrations_apps_empty")}</p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {visibleCatalogApps.map((app) => {
+                  const canConnect =
+                    selectedOrgId &&
+                    (app.installable || app.connected) &&
+                    (app.connect_kind === "bearer_api_key" ||
+                      app.connect_kind === "oauth")
+                  const statusLabel = app.connected
+                    ? t("mcp_connected")
+                    : !app.configured && canConfigureCatalogApps
+                      ? t("integrations_setup_needed")
+                      : !app.enabled && canConfigureCatalogApps
+                        ? t("integrations_disabled")
+                        : canConnect
+                          ? t("mcp_not_connected")
+                          : null
+                  return (
+                    <Card key={app.catalog_id} className="gap-4 py-5">
+                      <CardHeader className="flex flex-row items-start gap-3 space-y-0">
+                        <div
+                          className={cn(
+                            "flex size-11 shrink-0 items-center justify-center rounded-xl",
+                            "bg-muted text-base font-semibold tracking-tight text-foreground"
+                          )}
+                          aria-hidden
+                        >
+                          {app.name.slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <CardTitle className="font-sans text-base font-medium leading-5">
+                              {app.name}
+                            </CardTitle>
+                            <div className="flex shrink-0 items-center gap-1">
+                              {statusLabel ? (
+                                <Badge
+                                  variant={app.connected ? "secondary" : "outline"}
+                                  className="whitespace-nowrap"
+                                >
+                                  {statusLabel}
+                                </Badge>
+                              ) : null}
+                              {canConfigureCatalogApps ? (
+                                <Button
+                                  type="button"
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  aria-label={t("common_settings")}
+                                  onClick={() => setConfiguringAppId(app.catalog_id)}
+                                >
+                                  <Settings2 />
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                          {app.description ? (
+                            <CardDescription className="text-sm leading-5">
+                              {app.description}
+                            </CardDescription>
+                          ) : null}
+                        </div>
+                      </CardHeader>
+                      {canConnect ? (
+                        <CardContent className="flex flex-wrap gap-2">
+                          {app.connected ? (
+                            <>
+                              {app.connect_kind === "bearer_api_key" ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setConnectingAppId(app.catalog_id)}
+                                >
+                                  {t("integrations_update_key")}
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => void connectCatalogOAuth(app)}
+                                >
+                                  {t("integrations_reconnect")}
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void disconnectCatalogApp(app)}
+                              >
+                                {t("mcp_disconnect")}
+                              </Button>
+                            </>
+                          ) : app.connect_kind === "oauth" ? (
+                            <Button
+                              size="sm"
+                              onClick={() => void connectCatalogOAuth(app)}
+                            >
+                              {t("integrations_connect")}
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              onClick={() => setConnectingAppId(app.catalog_id)}
+                            >
+                              {t("integrations_connect")}
+                            </Button>
+                          )}
+                        </CardContent>
+                      ) : null}
+                    </Card>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {isSuperAdmin && oauthProviders.length > 0 ? (
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-lg font-medium">{t("integrations_oauth_providers")}</h2>
+              <p className="text-sm text-muted-foreground">
+                {t("integrations_oauth_providers_hint")}
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {oauthProviders.map((provider) => {
+                const draft = oauthProviderDrafts[provider.provider_id] ?? {}
+                return (
+                  <Card key={provider.provider_id} className="gap-4 py-5">
+                    <CardHeader className="pb-0">
+                      <CardTitle className="font-sans text-base font-medium leading-5">
+                        {provider.name}
+                      </CardTitle>
+                      <CardDescription className="text-sm">
+                        {provider.description}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {provider.fields.map((field) => (
+                        <div key={field.key} className="space-y-1.5">
+                          <p className="text-sm font-medium">{field.label}</p>
+                          <Input
+                            type={field.secret ? "password" : "text"}
+                            placeholder={
+                              field.secret &&
+                              Boolean(
+                                (provider as Record<string, unknown>)[`${field.key}_set`]
+                              )
+                                ? t("org_provider_override_set")
+                                : field.key === "redirect_uri"
+                                  ? oauthCallbackUrl
+                                  : field.placeholder ?? ""
+                            }
+                            value={draft[field.key] ?? ""}
+                            onChange={(e) =>
+                              setOauthProviderDrafts((prev) => ({
+                                ...prev,
+                                [provider.provider_id]: {
+                                  ...(prev[provider.provider_id] ?? {}),
+                                  [field.key]: e.target.value,
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+                      ))}
+                      <Button size="sm" onClick={() => void saveOauthProvider(provider)}>
+                        {t("integrations_save_provider")}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          </section>
+        ) : null}
 
         {isSuperAdmin ? (
           <section className="space-y-4">
@@ -679,6 +1110,159 @@ export const IntegrationsPage = () => {
                 {t("common_cancel")}
               </Button>
               <Button onClick={() => void saveServer()}>{t("common_save")}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={configuringApp != null}
+          onOpenChange={(open) => {
+            if (!open) setConfiguringAppId(null)
+          }}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {configuringApp
+                  ? t("integrations_configure_app", { name: configuringApp.name })
+                  : t("common_settings")}
+              </DialogTitle>
+            </DialogHeader>
+            {configuringApp ? (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <p className="text-sm font-medium">{t("integrations_mcp_url")}</p>
+                  <Input
+                    value={catalogUrlDrafts[configuringApp.catalog_id] ?? ""}
+                    placeholder={
+                      configuringApp.admin_config_fields.find((f) => f.key === "mcp_url")
+                        ?.placeholder ?? ""
+                    }
+                    onChange={(e) =>
+                      setCatalogUrlDrafts((prev) => ({
+                        ...prev,
+                        [configuringApp.catalog_id]: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                {configuringApp.catalog_id === "pitchpatterns" ? (
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium">{t("integrations_embed_origins")}</p>
+                    <Input
+                      value={catalogOriginsDrafts[configuringApp.catalog_id] ?? ""}
+                      placeholder="*.pitchpatterns.com"
+                      onChange={(e) =>
+                        setCatalogOriginsDrafts((prev) => ({
+                          ...prev,
+                          [configuringApp.catalog_id]: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ) : null}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm">{t("integrations_offer_app")}</span>
+                  <Switch
+                    checked={configuringApp.enabled}
+                    onCheckedChange={(checked) =>
+                      void toggleCatalogEnabled(configuringApp, checked)
+                    }
+                  />
+                </div>
+                {configuringApp.catalog_id === "pitchpatterns" &&
+                configuringApp.enabled &&
+                configuringApp.configured ? (
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium">{t("integrations_embed_url")}</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        readOnly
+                        className="min-w-0 flex-1 font-mono text-xs"
+                        value={`${window.location.origin}/embed/pitchpatterns`}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void copyEmbedUrl("pitchpatterns")}
+                      >
+                        {embedCopied === "pitchpatterns"
+                          ? t("integrations_embed_copied")
+                          : t("integrations_embed_copy")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <DialogFooter className="gap-2 sm:gap-2">
+              {configuringApp?.connected ? (
+                <Button
+                  variant="outline"
+                  onClick={() => void testCatalogApp(configuringApp)}
+                >
+                  {t("mcp_test")}
+                </Button>
+              ) : null}
+              <Button variant="outline" onClick={() => setConfiguringAppId(null)}>
+                {t("common_close")}
+              </Button>
+              {configuringApp ? (
+                <Button
+                  onClick={() => void saveCatalogUrl(configuringApp, "instance")}
+                >
+                  {t("common_save")}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={connectingApp != null}
+          onOpenChange={(open) => {
+            if (!open) setConnectingAppId(null)
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {connectingApp?.connected
+                  ? t("integrations_update_key")
+                  : t("integrations_connect")}
+              </DialogTitle>
+            </DialogHeader>
+            {connectingApp ? (
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">{t("integrations_api_key")}</p>
+                <Input
+                  type="password"
+                  autoFocus
+                  placeholder={t("integrations_api_key")}
+                  value={catalogKeys[connectingApp.catalog_id] ?? ""}
+                  onChange={(e) =>
+                    setCatalogKeys((prev) => ({
+                      ...prev,
+                      [connectingApp.catalog_id]: e.target.value,
+                    }))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void connectCatalogApp(connectingApp)
+                  }}
+                />
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConnectingAppId(null)}>
+                {t("common_cancel")}
+              </Button>
+              {connectingApp ? (
+                <Button onClick={() => void connectCatalogApp(connectingApp)}>
+                  {connectingApp.connected
+                    ? t("integrations_update_key")
+                    : t("integrations_connect")}
+                </Button>
+              ) : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>

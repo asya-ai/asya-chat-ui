@@ -20,14 +20,24 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import get_super_admin_emails, settings
-from app.core.secret_crypto import decrypt_secret
+from app.core.secret_crypto import decrypt_secret, encrypt_secret
 from app.core.security import (
     create_access_token,
+    decode_access_token_claims,
     get_password_hash,
     validate_password,
     verify_password,
 )
-from app.models import Invite, Org, OrgMembership, PasswordReset, Role, User, UserMemory
+from app.models import (
+    Invite,
+    OidcSession,
+    Org,
+    OrgMembership,
+    PasswordReset,
+    Role,
+    User,
+    UserMemory,
+)
 from app.services.email_service import send_invite_email, send_password_reset_email
 from app.services.org_service import (
     ensure_default_roles,
@@ -445,6 +455,234 @@ def _decode_oidc_state(state: str) -> dict[str, Any]:
     return jwt.decode(state, settings.secret_key, algorithms=[settings.jwt_algorithm])
 
 
+def _ensure_offline_access_scope(scopes: str | None) -> str:
+    parts = [part for part in (scopes or "").split() if part]
+    if "offline_access" not in parts:
+        parts.append("offline_access")
+    if "openid" not in parts:
+        parts.insert(0, "openid")
+    return " ".join(parts)
+
+
+def _oidc_access_expires_at(
+    token_payload: dict[str, Any], id_claims: dict[str, Any] | None = None
+) -> datetime:
+    """Return when the IdP access token expires.
+
+    Prefer ``expires_in`` from the token response (access token TTL). Fall back
+    to id_token ``exp`` only when ``expires_in`` is absent. ChatUI JWTs track
+    this access lifetime; ``refresh_token`` renews them via ``/auth/refresh``.
+    """
+    now = datetime.now(timezone.utc)
+
+    expires_in = token_payload.get("expires_in")
+    try:
+        seconds = int(expires_in) if expires_in is not None else None
+    except (TypeError, ValueError):
+        seconds = None
+    if seconds is not None and seconds > 0:
+        return now + timedelta(seconds=seconds)
+
+    claims = id_claims
+    if not claims:
+        raw_id = token_payload.get("id_token")
+        if isinstance(raw_id, str) and raw_id.count(".") >= 2:
+            try:
+                claims = jwt.decode(
+                    raw_id,
+                    options={
+                        "verify_signature": False,
+                        "verify_aud": False,
+                        "verify_exp": False,
+                    },
+                )
+            except Exception:
+                claims = None
+    if claims:
+        exp = claims.get("exp")
+        if exp is not None:
+            try:
+                exp_dt = datetime.fromtimestamp(int(exp), tz=timezone.utc)
+                if exp_dt > now:
+                    return exp_dt
+            except (TypeError, ValueError, OSError):
+                pass
+
+    return now + timedelta(minutes=settings.access_token_expire_minutes)
+
+
+def _oidc_token_error_code(exc: BaseException | None) -> str | None:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    try:
+        body = exc.response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error")
+    return str(err) if err else None
+
+
+def _oidc_refresh_expires_at(token_payload: dict[str, Any]) -> datetime | None:
+    expires_in = token_payload.get("refresh_expires_in")
+    try:
+        seconds = int(expires_in) if expires_in is not None else None
+    except (TypeError, ValueError):
+        seconds = None
+    if seconds is None or seconds <= 0:
+        return None
+    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+
+def _oidc_client_auth_methods(
+    *,
+    oidc_client_id: str,
+    oidc_client_secret: str,
+    supported_methods: list[str],
+) -> list[tuple[str, dict[str, Any]]]:
+    auth_methods: list[tuple[str, dict[str, Any]]] = []
+    if not supported_methods or "client_secret_basic" in supported_methods:
+        if oidc_client_secret:
+            auth_methods.append(
+                (
+                    "basic",
+                    {
+                        "auth": (oidc_client_id, oidc_client_secret),
+                        "data": {
+                            "client_id": oidc_client_id,
+                            "client_secret": oidc_client_secret,
+                        },
+                    },
+                )
+            )
+    if not supported_methods or "client_secret_post" in supported_methods:
+        auth_methods.append(
+            (
+                "post",
+                {
+                    "data": {
+                        "client_id": oidc_client_id,
+                        "client_secret": oidc_client_secret,
+                    }
+                },
+            )
+        )
+    if not supported_methods or "none" in supported_methods:
+        auth_methods.append(
+            (
+                "none",
+                {
+                    "data": {
+                        "client_id": oidc_client_id,
+                    }
+                },
+            )
+        )
+    return auth_methods
+
+
+async def _post_oidc_token(
+    *,
+    token_endpoint: str,
+    form_data: dict[str, str],
+    oidc_client_id: str,
+    oidc_client_secret: str,
+    supported_methods: list[str],
+) -> dict[str, Any]:
+    auth_methods = _oidc_client_auth_methods(
+        oidc_client_id=oidc_client_id,
+        oidc_client_secret=oidc_client_secret,
+        supported_methods=supported_methods,
+    )
+    token_payload: dict[str, Any] | None = None
+    last_exc: httpx.HTTPStatusError | None = None
+    async with httpx.AsyncClient(timeout=10) as client:
+        for label, extra in auth_methods:
+            try:
+                response = await client.post(
+                    token_endpoint,
+                    data={
+                        **form_data,
+                        **(extra.get("data") or {}),
+                    },
+                    **{k: v for k, v in extra.items() if k != "data"},
+                )
+                response.raise_for_status()
+                token_payload = response.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                logger.error(
+                    "OIDC token request failed (%s): %s",
+                    label,
+                    exc.response.text,
+                    exc_info=True,
+                )
+    if token_payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SSO token exchange failed",
+        ) from last_exc
+    return token_payload
+
+
+def _persist_oidc_session(
+    session: Session,
+    *,
+    user_id: UUID,
+    org_id: UUID,
+    token_payload: dict[str, Any],
+    id_claims: dict[str, Any] | None = None,
+    existing: OidcSession | None = None,
+) -> OidcSession:
+    access_expires_at = _oidc_access_expires_at(token_payload, id_claims)
+    refresh_expires_at = _oidc_refresh_expires_at(token_payload)
+    access_token = token_payload.get("access_token")
+    refresh_token = token_payload.get("refresh_token")
+    now = datetime.utcnow()
+    if existing is None:
+        existing = OidcSession(
+            user_id=user_id,
+            org_id=org_id,
+            access_expires_at=access_expires_at.replace(tzinfo=None),
+        )
+    existing.access_token = encrypt_secret(
+        access_token if isinstance(access_token, str) else None
+    )
+    if isinstance(refresh_token, str) and refresh_token.strip():
+        existing.refresh_token = encrypt_secret(refresh_token)
+    elif existing.refresh_token is None:
+        existing.refresh_token = None
+        logger.warning(
+            "OIDC token response missing refresh_token for user_id=%s org_id=%s; "
+            "SSO session cannot be renewed after access expiry",
+            user_id,
+            org_id,
+        )
+    existing.access_expires_at = access_expires_at.replace(tzinfo=None)
+    existing.refresh_expires_at = (
+        refresh_expires_at.replace(tzinfo=None) if refresh_expires_at else None
+    )
+    existing.updated_at = now
+    session.add(existing)
+    session.commit()
+    session.refresh(existing)
+    return existing
+
+
+def _mint_oidc_app_token(user: User, oidc_session: OidcSession) -> str:
+    expires_at = oidc_session.access_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return create_access_token(
+        str(user.id),
+        token_version=user.token_version,
+        expires_at=expires_at,
+        extra_claims={"sid": str(oidc_session.id)},
+    )
+
+
 async def _build_oidc_authorize_url(request: Request, org: Org) -> str:
     oidc_issuer = (org.oidc_issuer or "").strip()
     oidc_client_id = (org.oidc_client_id or "").strip()
@@ -462,7 +700,7 @@ async def _build_oidc_authorize_url(request: Request, org: Org) -> str:
         "response_type": "code",
         "client_id": oidc_client_id,
         "redirect_uri": callback_url,
-        "scope": org.oidc_scopes,
+        "scope": _ensure_offline_access_scope(org.oidc_scopes),
         "state": state,
         "nonce": nonce,
     }
@@ -731,75 +969,17 @@ async def oidc_callback(
         callback_url,
         supported_methods,
     )
-    async with httpx.AsyncClient(timeout=10) as client:
-        token_payload = None
-        last_exc: httpx.HTTPStatusError | None = None
-        auth_methods = []
-        if not supported_methods or "client_secret_basic" in supported_methods:
-            if oidc_client_secret:
-                auth_methods.append(
-                    (
-                        "basic",
-                        {
-                            "auth": (oidc_client_id, oidc_client_secret),
-                            "data": {
-                                "client_id": oidc_client_id,
-                                "client_secret": oidc_client_secret,
-                            },
-                        },
-                    )
-                )
-        if not supported_methods or "client_secret_post" in supported_methods:
-            auth_methods.append(
-                (
-                    "post",
-                    {
-                        "data": {
-                            "client_id": oidc_client_id,
-                            "client_secret": oidc_client_secret,
-                        }
-                    },
-                )
-            )
-        if not supported_methods or "none" in supported_methods:
-            auth_methods.append(
-                (
-                    "none",
-                    {
-                        "data": {
-                            "client_id": oidc_client_id,
-                        }
-                    },
-                )
-            )
-        for label, extra in auth_methods:
-            try:
-                response = await client.post(
-                    token_endpoint,
-                    data={
-                        "grant_type": "authorization_code",
-                        "code": code,
-                        "redirect_uri": callback_url,
-                        **(extra.get("data") or {}),
-                    },
-                    **{k: v for k, v in extra.items() if k != "data"},
-                )
-                response.raise_for_status()
-                token_payload = response.json()
-                break
-            except httpx.HTTPStatusError as exc:
-                last_exc = exc
-                logger.error(
-                    "OIDC token exchange failed (%s): %s",
-                    label,
-                    exc.response.text,
-                    exc_info=True,
-                )
-        if token_payload is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SSO token exchange failed",
-            ) from last_exc
+    token_payload = await _post_oidc_token(
+        token_endpoint=token_endpoint,
+        form_data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": callback_url,
+        },
+        oidc_client_id=oidc_client_id,
+        oidc_client_secret=oidc_client_secret,
+        supported_methods=supported_methods,
+    )
 
     id_token = token_payload.get("id_token")
     if not id_token:
@@ -909,7 +1089,14 @@ async def oidc_callback(
         sync_oidc_team_memberships(session, org.id, user.id, groups)
         session.commit()
 
-    token = create_access_token(str(user.id), token_version=user.token_version)
+    oidc_session = _persist_oidc_session(
+        session,
+        user_id=user.id,
+        org_id=org.id,
+        token_payload=token_payload,
+        id_claims=claims,
+    )
+    token = _mint_oidc_app_token(user, oidc_session)
     redirect_url = f"{redirect_base}/sso-callback?token={token}"
     return RedirectResponse(redirect_url)
 
@@ -955,12 +1142,186 @@ def change_password(
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
+    request: Request,
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header.lower().startswith("bearer "):
+        raw = auth_header.split(" ", 1)[1].strip()
+        if raw:
+            try:
+                claims = decode_access_token_claims(raw, verify_exp=False)
+                sid = claims.get("sid")
+                if sid:
+                    try:
+                        sid_uuid = UUID(str(sid))
+                    except ValueError:
+                        sid_uuid = None
+                    if sid_uuid:
+                        oidc_session = session.get(OidcSession, sid_uuid)
+                        if oidc_session and oidc_session.user_id == current_user.id:
+                            session.delete(oidc_session)
+            except HTTPException:
+                pass
     current_user.token_version += 1
     session.add(current_user)
     session.commit()
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    request: Request,
+    session: Session = Depends(get_db),
+) -> TokenResponse:
+    auth_header = request.headers.get("authorization") or ""
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    raw = auth_header.split(" ", 1)[1].strip()
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    # Allow recently expired JWTs so the client can refresh after exp.
+    claims = decode_access_token_claims(raw, verify_exp=False)
+    sid = claims.get("sid")
+    if not sid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    try:
+        sid_uuid = UUID(str(sid))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        ) from exc
+
+    user = _resolve_refresh_user(session, claims)
+    oidc_session = session.get(OidcSession, sid_uuid)
+    if not oidc_session or oidc_session.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+
+    refresh = decrypt_secret(oidc_session.refresh_token)
+    if not refresh:
+        session.delete(oidc_session)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+
+    org = session.get(Org, oidc_session.org_id)
+    if not org or not org.oidc_enabled:
+        session.delete(oidc_session)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+
+    oidc_issuer = (org.oidc_issuer or "").strip()
+    oidc_client_id = (org.oidc_client_id or "").strip()
+    oidc_client_secret = (decrypt_secret(org.oidc_client_secret) or "").strip()
+    config = await _get_oidc_config(oidc_issuer)
+    token_endpoint = config.get("token_endpoint")
+    if not token_endpoint:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    supported_methods = config.get("token_endpoint_auth_methods_supported") or []
+    if isinstance(supported_methods, list):
+        supported_methods = [str(method) for method in supported_methods]
+    else:
+        supported_methods = []
+
+    used_refresh_enc = oidc_session.refresh_token
+    try:
+        token_payload = await _post_oidc_token(
+            token_endpoint=token_endpoint,
+            form_data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+            },
+            oidc_client_id=oidc_client_id,
+            oidc_client_secret=oidc_client_secret,
+            supported_methods=supported_methods,
+        )
+    except HTTPException as exc:
+        # Another tab/request may have already rotated the refresh token.
+        session.expire(oidc_session)
+        latest = session.get(OidcSession, sid_uuid)
+        if (
+            latest
+            and latest.user_id == user.id
+            and latest.refresh_token
+            and latest.refresh_token != used_refresh_enc
+        ):
+            return TokenResponse(access_token=_mint_oidc_app_token(user, latest))
+        err = _oidc_token_error_code(exc.__cause__)
+        # Only destroy the session when the IdP confirms the grant is dead.
+        # Transient / auth-method failures must not force re-login.
+        if latest and err in {"invalid_grant", "invalid_token"}:
+            session.delete(latest)
+            session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        ) from exc
+
+    oidc_session = _persist_oidc_session(
+        session,
+        user_id=user.id,
+        org_id=org.id,
+        token_payload=token_payload,
+        existing=oidc_session,
+    )
+    return TokenResponse(access_token=_mint_oidc_app_token(user, oidc_session))
+
+
+def _resolve_refresh_user(session: Session, claims: dict[str, Any]) -> User:
+    subject = claims.get("sub")
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    try:
+        user_id = UUID(str(subject))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        ) from exc
+    user = session.exec(select(User).where(User.id == user_id)).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    token_version = claims.get("ver", 0)
+    try:
+        token_ver_int = int(token_version)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        ) from exc
+    if token_ver_int != int(user.token_version):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    return user
 
 
 class MemoryToggleRequest(BaseModel):

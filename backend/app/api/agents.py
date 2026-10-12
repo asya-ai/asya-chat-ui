@@ -26,14 +26,20 @@ from app.models import (
     AgentSourceKind,
     AgentSourceStatus,
     AgentTeamAccess,
+    AgentUserOrder,
     AgentVisibility,
     Chat,
     OrgMembership,
+    Prompt,
+    PromptTeamShare,
+    PromptUserShare,
+    PromptVisibility,
     Team,
     User,
 )
 from app.services.agent_access import (
     ROLE_ORDER,
+    accessible_agent_ids,
     get_agent_role,
     list_accessible_agents,
 )
@@ -118,8 +124,14 @@ class AgentRead(BaseModel):
     visibility: AgentVisibility
     is_owner: bool
     role: AgentAccessRole
+    display_order: int | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AgentOrderUpdateRequest(BaseModel):
+    agent_id: str
+    display_order: int
 
 
 class AgentSourceCreateRequest(BaseModel):
@@ -190,7 +202,12 @@ class AgentShareSuggestion(BaseModel):
     team_name: str | None = None
 
 
-def _to_agent_read(agent: Agent, user_id: UUID, role: AgentAccessRole) -> AgentRead:
+def _to_agent_read(
+    agent: Agent,
+    user_id: UUID,
+    role: AgentAccessRole,
+    display_order: int | None = None,
+) -> AgentRead:
     return AgentRead(
         id=str(agent.id),
         name=agent.name,
@@ -200,6 +217,7 @@ def _to_agent_read(agent: Agent, user_id: UUID, role: AgentAccessRole) -> AgentR
         visibility=agent.visibility,
         is_owner=agent.owner_user_id == user_id,
         role=role,
+        display_order=display_order,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -397,7 +415,73 @@ def list_agents(
     auth: AuthContext = Depends(get_auth_context),
 ) -> list[AgentRead]:
     rows = list_accessible_agents(session, auth.org_id, auth.user.id)
-    return [_to_agent_read(agent, auth.user.id, role) for agent, role in rows]
+    return [
+        _to_agent_read(agent, auth.user.id, role, display_order)
+        for agent, role, display_order in rows
+    ]
+
+
+@router.put("/order", response_model=list[AgentRead])
+def update_agent_order(
+    payload: list[AgentOrderUpdateRequest],
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> list[AgentRead]:
+    if not payload:
+        rows = list_accessible_agents(session, auth.org_id, auth.user.id)
+        return [
+            _to_agent_read(agent, auth.user.id, role, display_order)
+            for agent, role, display_order in rows
+        ]
+
+    updates: dict[UUID, int] = {}
+    for item in payload:
+        agent_uuid = _parse_uuid(item.agent_id, "Invalid agent id")
+        if item.display_order < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid display order"
+            )
+        updates[agent_uuid] = item.display_order
+
+    allowed = accessible_agent_ids(session, auth.org_id, auth.user.id)
+    unknown = set(updates.keys()) - allowed
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Agent access required"
+        )
+
+    now = datetime.utcnow()
+    existing = session.exec(
+        select(AgentUserOrder).where(
+            AgentUserOrder.org_id == auth.org_id,
+            AgentUserOrder.user_id == auth.user.id,
+            AgentUserOrder.agent_id.in_(updates.keys()),
+        )
+    ).all()
+    by_agent = {row.agent_id: row for row in existing}
+    for agent_id, display_order in updates.items():
+        row = by_agent.get(agent_id)
+        if row is None:
+            session.add(
+                AgentUserOrder(
+                    user_id=auth.user.id,
+                    org_id=auth.org_id,
+                    agent_id=agent_id,
+                    display_order=display_order,
+                    updated_at=now,
+                )
+            )
+        else:
+            row.display_order = display_order
+            row.updated_at = now
+            session.add(row)
+    session.commit()
+
+    rows = list_accessible_agents(session, auth.org_id, auth.user.id)
+    return [
+        _to_agent_read(agent, auth.user.id, role, display_order)
+        for agent, role, display_order in rows
+    ]
 
 
 @router.post("", response_model=AgentRead)
@@ -481,6 +565,23 @@ def delete_agent(
     for chat in chats:
         chat.agent_id = None
         session.add(chat)
+
+    prompts = session.exec(select(Prompt).where(Prompt.agent_id == agent.id)).all()
+    for prompt in prompts:
+        # Project-only prompts die with the project; others just lose the link.
+        if prompt.visibility == PromptVisibility.project:
+            for share in session.exec(
+                select(PromptTeamShare).where(PromptTeamShare.prompt_id == prompt.id)
+            ).all():
+                session.delete(share)
+            for share in session.exec(
+                select(PromptUserShare).where(PromptUserShare.prompt_id == prompt.id)
+            ).all():
+                session.delete(share)
+            session.delete(prompt)
+        else:
+            prompt.agent_id = None
+            session.add(prompt)
     session.flush()
 
     access_rows = session.exec(
@@ -507,6 +608,21 @@ def delete_agent(
                 session.delete(embedding)
             session.flush()
         for chunk in chunks:
+            session.delete(chunk)
+        session.flush()
+    # Detach any leftover chunks keyed only by agent_id.
+    orphan_chunks = session.exec(
+        select(AgentChunk).where(AgentChunk.agent_id == agent.id)
+    ).all()
+    if orphan_chunks:
+        orphan_ids = [chunk.id for chunk in orphan_chunks]
+        embeddings = session.exec(
+            select(AgentEmbedding).where(AgentEmbedding.chunk_id.in_(orphan_ids))
+        ).all()
+        for embedding in embeddings:
+            session.delete(embedding)
+        session.flush()
+        for chunk in orphan_chunks:
             session.delete(chunk)
         session.flush()
     for source in sources:

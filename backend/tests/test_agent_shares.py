@@ -20,6 +20,7 @@ from app.models import (
     AgentAccess,
     AgentAccessRole,
     AgentTeamAccess,
+    AgentUserOrder,
     AgentVisibility,
     Org,
     OrgMembership,
@@ -49,6 +50,7 @@ def _session() -> Session:
             Agent.__table__,
             AgentAccess.__table__,
             AgentTeamAccess.__table__,
+            AgentUserOrder.__table__,
         ],
     )
     return Session(engine)

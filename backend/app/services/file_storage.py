@@ -138,6 +138,11 @@ def delete_file(file_path: str | None) -> None:
         return
 
 
+def write_relative_file(relative_path: str, data: bytes) -> str:
+    path, _size = _write_bytes(relative_path, data)
+    return path
+
+
 def store_chat_attachment_bytes(
     *,
     chat_id: UUID,

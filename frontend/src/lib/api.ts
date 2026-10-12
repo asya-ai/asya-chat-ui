@@ -1,4 +1,7 @@
 import { tokenStore } from "@/lib/storage"
+import { isEmbedClientSurface } from "@/lib/embed-auth"
+import { refreshAccessToken, tokenHasOidcSession } from "@/lib/token-refresh"
+
 import type {
   Chat,
   ChatMessage,
@@ -22,6 +25,8 @@ import type {
   InstanceProvider,
   InstanceProviderCreate,
   InstanceProviderUpdate,
+  Branding,
+  WhitelabelSettings,
   OrgAuthSettings,
   OrgAuthSettingsUpdate,
   UsageSlice,
@@ -52,6 +57,10 @@ import type {
   McpPrompt,
   McpPromptResolveRequest,
   McpPromptResolveResult,
+  CatalogIntegrationStatus,
+  IntegrationAdminConfig,
+  OAuthProviderConfig,
+  IntegrationTestResult,
   Team,
   TeamMember,
   TeamModel,
@@ -59,7 +68,7 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api"
 
-type RequestOptions = RequestInit & { skipAuth?: boolean }
+type RequestOptions = RequestInit & { skipAuth?: boolean; _retriedAuth?: boolean }
 
 export class ApiError extends Error {
   status: number
@@ -71,6 +80,25 @@ export class ApiError extends Error {
     this.status = status
     this.detail = detail
   }
+}
+
+/** Never navigate an embed iframe to /login — that path sends X-Frame-Options: DENY. */
+const redirectToLogin = () => {
+  tokenStore.clear()
+  if (isEmbedClientSurface()) return
+  window.location.href = "/login"
+}
+
+const tryRefreshAfterUnauthorized = async (
+  path: string,
+  options: RequestOptions
+): Promise<boolean> => {
+  if (options.skipAuth || options._retriedAuth) return false
+  if (path === "/auth/refresh" || path.startsWith("/auth/refresh?")) return false
+  const current = tokenStore.get()
+  if (!tokenHasOidcSession(current)) return false
+  const next = await refreshAccessToken(current)
+  return Boolean(next)
 }
 
 type StreamEvent =
@@ -148,8 +176,7 @@ const apiWebSocket = (
     }
     socket.onclose = (event) => {
       if (event.code === 4401 || event.code === 4403) {
-        tokenStore.clear()
-        window.location.href = "/login"
+        redirectToLogin()
         return
       }
       if (!settled) {
@@ -194,8 +221,10 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
   }
   if (!response.ok) {
     if (response.status === 401 && !options.skipAuth) {
-      tokenStore.clear()
-      window.location.href = "/login"
+      if (await tryRefreshAfterUnauthorized(path, options)) {
+        return apiFetch<T>(path, { ...options, _retriedAuth: true })
+      }
+      redirectToLogin()
     }
     const contentType = response.headers.get("content-type") || ""
     let message = "Request failed"
@@ -269,6 +298,33 @@ const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<
 
 export const configApi = {
   attachmentLimits: () => apiFetch<AttachmentLimits>("/config/attachment-limits"),
+  branding: () =>
+    apiFetch<Branding>("/config/branding", { skipAuth: true }),
+}
+
+export const brandingLogoUrl = (logoUpdatedAt?: string | null) => {
+  const base = `${API_BASE}/config/branding/logo`
+  if (!logoUpdatedAt) return base
+  return `${base}?v=${encodeURIComponent(logoUpdatedAt)}`
+}
+
+export const whitelabelApi = {
+  get: () => apiFetch<WhitelabelSettings>("/admin/whitelabel"),
+  update: (payload: { app_title?: string | null }) =>
+    apiFetch<WhitelabelSettings>("/admin/whitelabel", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  uploadLogo: (file: File) => {
+    const form = new FormData()
+    form.append("file", file, file.name || "logo")
+    return apiFetch<WhitelabelSettings>("/admin/whitelabel/logo", {
+      method: "POST",
+      body: form,
+    })
+  },
+  clearLogo: () =>
+    apiFetch<WhitelabelSettings>("/admin/whitelabel/logo", { method: "DELETE" }),
 }
 
 export const authApi = {
@@ -283,6 +339,10 @@ export const authApi = {
       method: "POST",
       skipAuth: true,
       body: JSON.stringify({ identifier, password, org, host }),
+    }),
+  refresh: () =>
+    apiFetch<{ access_token: string }>("/auth/refresh", {
+      method: "POST",
     }),
   loginResolve: (identifier: string, org?: string | null, host?: string | null) =>
     apiFetch<{
@@ -564,6 +624,105 @@ export const instanceProviderApi = {
     }),
 }
 
+export const integrationsApi = {
+  listCatalog: (orgId?: string) => {
+    const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
+    return apiFetch<CatalogIntegrationStatus[]>(`/integrations/catalog${params}`)
+  },
+  getInstanceCatalogConfig: (catalogId: string) =>
+    apiFetch<IntegrationAdminConfig>(
+      `/admin/integrations/catalog/${encodeURIComponent(catalogId)}/config`
+    ),
+  upsertInstanceCatalogConfig: (
+    catalogId: string,
+    payload: { is_enabled?: boolean; values?: Record<string, string> }
+  ) =>
+    apiFetch<IntegrationAdminConfig>(
+      `/admin/integrations/catalog/${encodeURIComponent(catalogId)}/config`,
+      { method: "PUT", body: JSON.stringify(payload) }
+    ),
+  getOrgCatalogConfig: (orgId: string, catalogId: string) =>
+    apiFetch<IntegrationAdminConfig>(
+      `/orgs/${orgId}/integrations/catalog/${encodeURIComponent(catalogId)}/config`
+    ),
+  upsertOrgCatalogConfig: (
+    orgId: string,
+    catalogId: string,
+    payload: { is_enabled?: boolean; values?: Record<string, string> }
+  ) =>
+    apiFetch<IntegrationAdminConfig>(
+      `/orgs/${orgId}/integrations/catalog/${encodeURIComponent(catalogId)}/config`,
+      { method: "PUT", body: JSON.stringify(payload) }
+    ),
+  setInstanceEnablement: (catalogId: string, isEnabled: boolean) =>
+    apiFetch<{ catalog_id: string; scope: string; is_enabled: boolean }>(
+      `/admin/integrations/catalog/${encodeURIComponent(catalogId)}/enablement`,
+      { method: "PUT", body: JSON.stringify({ is_enabled: isEnabled, scope: "instance" }) }
+    ),
+  setOrgEnablement: (orgId: string, catalogId: string, isEnabled: boolean) =>
+    apiFetch<{ catalog_id: string; scope: string; is_enabled: boolean }>(
+      `/orgs/${orgId}/integrations/catalog/${encodeURIComponent(catalogId)}/enablement`,
+      { method: "PUT", body: JSON.stringify({ is_enabled: isEnabled, scope: "org" }) }
+    ),
+  connect: (catalogId: string, orgId: string, apiKey: string) =>
+    apiFetch<{ catalog_id: string; status: string; server_id: string; server_slug: string }>(
+      `/integrations/catalog/${encodeURIComponent(catalogId)}/connect`,
+      {
+        method: "POST",
+        body: JSON.stringify({ org_id: orgId, api_key: apiKey }),
+      }
+    ),
+  oauthStart: (catalogId: string, orgId: string) =>
+    apiFetch<{ authorize_url: string }>(
+      `/integrations/catalog/${encodeURIComponent(catalogId)}/oauth/start?org_id=${encodeURIComponent(orgId)}`
+    ),
+  disconnect: (catalogId: string, orgId: string) =>
+    apiFetch<void>(
+      `/integrations/catalog/${encodeURIComponent(catalogId)}/install?org_id=${encodeURIComponent(orgId)}`,
+      { method: "DELETE" }
+    ),
+  test: (catalogId: string, orgId: string) =>
+    apiFetch<IntegrationTestResult>(
+      `/integrations/catalog/${encodeURIComponent(catalogId)}/test?org_id=${encodeURIComponent(orgId)}`,
+      { method: "POST" }
+    ),
+  embedSession: (
+    catalogId: string,
+    payload: { api_key: string; org_id?: string }
+  ) =>
+    apiFetch<{
+      access_token: string
+      org_id: string
+      user_id: string
+      allowed_embed_origins: string[]
+    }>(`/integrations/catalog/${encodeURIComponent(catalogId)}/embed/session`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      skipAuth: true,
+    }),
+  listInstanceProviders: () =>
+    apiFetch<OAuthProviderConfig[]>("/admin/integrations/providers"),
+  upsertInstanceProvider: (
+    providerId: string,
+    payload: { is_enabled?: boolean; values?: Record<string, string> }
+  ) =>
+    apiFetch<OAuthProviderConfig>(
+      `/admin/integrations/providers/${encodeURIComponent(providerId)}`,
+      { method: "PUT", body: JSON.stringify(payload) }
+    ),
+  listOrgProviders: (orgId: string) =>
+    apiFetch<OAuthProviderConfig[]>(`/orgs/${orgId}/integrations/providers`),
+  upsertOrgProvider: (
+    orgId: string,
+    providerId: string,
+    payload: { is_enabled?: boolean; values?: Record<string, string> }
+  ) =>
+    apiFetch<OAuthProviderConfig>(
+      `/orgs/${orgId}/integrations/providers/${encodeURIComponent(providerId)}`,
+      { method: "PUT", body: JSON.stringify(payload) }
+    ),
+}
+
 export const mcpApi = {
   instanceSettings: () => apiFetch<McpSettings>("/admin/mcp/settings"),
   updateInstanceSettings: (payload: Partial<McpSettings>) =>
@@ -696,7 +855,11 @@ export const modelApi = {
     }),
   update: (
     modelId: string,
-    payload: { reasoning_effort?: string | null; openrouter_endpoint?: string | null }
+    payload: {
+      reasoning_effort?: string | null
+      openrouter_endpoint?: string | null
+      cost_tier?: number | null
+    }
   ) =>
     apiFetch<ChatModel>(`/models/${modelId}`, {
       method: "PATCH",
@@ -721,17 +884,29 @@ export const modelApi = {
 
 export const chatApi = {
   resolveShared: (shareToken: string) =>
-    apiFetch<{ chat_id: string }>(`/chats/shared/${encodeURIComponent(shareToken)}`),
+    apiFetch<{ chat_id: string; title?: string | null }>(
+      `/chats/shared/${encodeURIComponent(shareToken)}`,
+      { skipAuth: true }
+    ),
+  sharedMessages: (shareToken: string) =>
+    apiFetch<ChatMessage[]>(
+      `/chats/shared/${encodeURIComponent(shareToken)}/messages`,
+      { skipAuth: true }
+    ),
   share: (chatId: string) =>
-    apiFetch<{ chat_id: string; is_shared: boolean; share_url?: string | null }>(
-      `/chats/${chatId}/share`,
-      { method: "POST" }
-    ),
+    apiFetch<{
+      chat_id: string
+      is_shared: boolean
+      share_token?: string | null
+      share_url?: string | null
+    }>(`/chats/${chatId}/share`, { method: "POST" }),
   unshare: (chatId: string) =>
-    apiFetch<{ chat_id: string; is_shared: boolean; share_url?: string | null }>(
-      `/chats/${chatId}/share`,
-      { method: "DELETE" }
-    ),
+    apiFetch<{
+      chat_id: string
+      is_shared: boolean
+      share_token?: string | null
+      share_url?: string | null
+    }>(`/chats/${chatId}/share`, { method: "DELETE" }),
   list: (orgId: string) => apiFetch<Chat[]>(`/chats?org_id=${orgId}`),
   get: (chatId: string) => apiFetch<Chat>(`/chats/${chatId}`),
   listSubagents: (chatId: string) =>
@@ -758,77 +933,90 @@ export const chatApi = {
       onProgress?: (progress: number) => void
       signal?: AbortSignal
     }
-  ) =>
-    new Promise<{
-      id: string
-      file_name: string
-      content_type: string
-      size_bytes: number
-      created_at: string
-    }>((resolve, reject) => {
-      const form = new FormData()
-      form.append("file", file, file.name || "attachment")
-      const xhr = new XMLHttpRequest()
-      xhr.open("POST", `${API_BASE}/chats/${chatId}/uploads`)
-      const token = tokenStore.get()
-      if (token) {
-        xhr.setRequestHeader("Authorization", `Bearer ${token}`)
-      }
-      xhr.upload.onprogress = (event) => {
-        if (!event.lengthComputable || !options?.onProgress) return
-        options.onProgress(Math.min(1, event.loaded / Math.max(event.total, 1)))
-      }
-      const onAbort = () => {
-        xhr.abort()
-      }
-      options?.signal?.addEventListener("abort", onAbort)
-      xhr.onload = () => {
-        options?.signal?.removeEventListener("abort", onAbort)
-        const refreshedToken = xhr.getResponseHeader("x-access-token")
-        if (refreshedToken) {
-          tokenStore.set(refreshedToken)
+  ) => {
+    const run = (retried: boolean) =>
+      new Promise<{
+        id: string
+        file_name: string
+        content_type: string
+        size_bytes: number
+        created_at: string
+      }>((resolve, reject) => {
+        const form = new FormData()
+        form.append("file", file, file.name || "attachment")
+        const xhr = new XMLHttpRequest()
+        xhr.open("POST", `${API_BASE}/chats/${chatId}/uploads`)
+        const token = tokenStore.get()
+        if (token) {
+          xhr.setRequestHeader("Authorization", `Bearer ${token}`)
         }
-        if (xhr.status === 401) {
-          tokenStore.clear()
-          window.location.href = "/login"
-          reject(new ApiError("Unauthorized", 401))
-          return
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable || !options?.onProgress) return
+          options.onProgress(Math.min(1, event.loaded / Math.max(event.total, 1)))
         }
-        if (xhr.status < 200 || xhr.status >= 300) {
-          let message = "Request failed"
-          try {
-            const data = JSON.parse(xhr.responseText) as { detail?: unknown }
-            if (typeof data.detail === "string") message = data.detail
-          } catch {
-            /* ignore */
+        const onAbort = () => {
+          xhr.abort()
+        }
+        options?.signal?.addEventListener("abort", onAbort)
+        xhr.onload = () => {
+          options?.signal?.removeEventListener("abort", onAbort)
+          const refreshedToken = xhr.getResponseHeader("x-access-token")
+          if (refreshedToken) {
+            tokenStore.set(refreshedToken)
           }
-          reject(new ApiError(message, xhr.status))
-          return
-        }
-        try {
-          resolve(
-            JSON.parse(xhr.responseText) as {
-              id: string
-              file_name: string
-              content_type: string
-              size_bytes: number
-              created_at: string
+          if (xhr.status === 401) {
+            if (!retried && tokenHasOidcSession(tokenStore.get())) {
+              void refreshAccessToken().then((next) => {
+                if (next) {
+                  run(true).then(resolve, reject)
+                  return
+                }
+                redirectToLogin()
+                reject(new ApiError("Unauthorized", 401))
+              })
+              return
             }
-          )
-        } catch (error) {
-          reject(error)
+            redirectToLogin()
+            reject(new ApiError("Unauthorized", 401))
+            return
+          }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            let message = "Request failed"
+            try {
+              const data = JSON.parse(xhr.responseText) as { detail?: unknown }
+              if (typeof data.detail === "string") message = data.detail
+            } catch {
+              /* ignore */
+            }
+            reject(new ApiError(message, xhr.status))
+            return
+          }
+          try {
+            resolve(
+              JSON.parse(xhr.responseText) as {
+                id: string
+                file_name: string
+                content_type: string
+                size_bytes: number
+                created_at: string
+              }
+            )
+          } catch (error) {
+            reject(error)
+          }
         }
-      }
-      xhr.onerror = () => {
-        options?.signal?.removeEventListener("abort", onAbort)
-        reject(new ApiError("Network error", 0))
-      }
-      xhr.onabort = () => {
-        options?.signal?.removeEventListener("abort", onAbort)
-        reject(new ApiError("Upload aborted", 0))
-      }
-      xhr.send(form)
-    }),
+        xhr.onerror = () => {
+          options?.signal?.removeEventListener("abort", onAbort)
+          reject(new ApiError("Network error", 0))
+        }
+        xhr.onabort = () => {
+          options?.signal?.removeEventListener("abort", onAbort)
+          reject(new ApiError("Upload aborted", 0))
+        }
+        xhr.send(form)
+      })
+    return run(false)
+  },
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),
   update: (chatId: string, payload: { title?: string; is_pinned?: boolean }) =>
@@ -936,7 +1124,8 @@ export const chatApi = {
     code_execution_enabled: boolean | undefined,
     reasoning_effort: string | undefined,
     locale: string | undefined,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    page_context?: unknown
   ) =>
     apiWebSocket(
       `/chats/${chatId}/ws`,
@@ -949,6 +1138,7 @@ export const chatApi = {
         reasoning_effort,
         locale,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(page_context !== undefined ? { page_context } : {}),
       },
       onEvent
     ),
@@ -1051,6 +1241,8 @@ export const agentApi = {
       visibility: "private" | "shared"
     }>
   ) => apiFetch<Agent>(`/agents/${agentId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  updateOrder: (payload: { agent_id: string; display_order: number }[]) =>
+    apiFetch<Agent[]>("/agents/order", { method: "PUT", body: JSON.stringify(payload) }),
   remove: (agentId: string) => apiFetch(`/agents/${agentId}`, { method: "DELETE" }),
   listSources: (agentId: string) => apiFetch<AgentSource[]>(`/agents/${agentId}/sources`),
   createSource: (

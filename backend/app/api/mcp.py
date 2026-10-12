@@ -125,6 +125,8 @@ class McpServerRead(BaseModel):
     user_instructions: str | None = None
     api_token_header_name: str | None = None
     api_token_header_format: str | None = None
+    origin: str = "custom"
+    catalog_id: str | None = None
     is_enabled: bool
     connection_status: str | None = None
     created_at: str

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import type { ComponentProps, CSSProperties } from "react"
+import type { ComponentProps, CSSProperties, HTMLAttributes, ReactNode } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -30,19 +30,25 @@ import {
   Plus,
   X,
 } from "lucide-react"
-import html2canvas from "html2canvas"
-import { jsPDF } from "jspdf"
-
-import { exportCoworkMarkdown } from "@/pages/chat/exportCoworkMarkdown"
+import {
+  canvasToA4PdfBlob,
+  exportCoworkMarkdown,
+  markdownExportBodyCss,
+  markdownToExportHtml,
+  materializeExportMarkdownImages,
+  rasterizePdfExportHtml,
+} from "@/pages/chat/exportCoworkMarkdown"
+import { collectChatImageUrlMap } from "@/pages/chat/resolveCoworkPresentationImages"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
+import { ThinkingFruitRive } from "@/components/ThinkingFruitRive"
+import { useBranding } from "@/lib/branding"
 import { normalizeMathContent } from "@/lib/normalizeMathContent"
 import {
   isIncompleteMermaidPrefix,
   MERMAID_DIAGRAM_START,
-  sanitizeMermaidChart,
-  splitMermaidCharts,
 } from "@/lib/sanitizeMermaid"
+import { MermaidDiagram } from "@/pages/chat/MermaidDiagram"
 import type { ActionInfoLevel } from "@/lib/storage"
 import type {
   ChatMessage,
@@ -53,6 +59,7 @@ import type {
 } from "@/lib/types"
 import { dedupeSources } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -134,6 +141,18 @@ const formatDurationMs = (ms: number): string => {
   return `${minutes}m ${seconds}s`
 }
 
+const pad2 = (value: number) => String(Math.max(0, value)).padStart(2, "0")
+
+/** Thinking / thought-for clock: MM:SS, or H:MM:SS when ≥ 1 hour. */
+const formatThinkingClock = (ms: number): string => {
+  const totalSec = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(totalSec / 3600)
+  const minutes = Math.floor((totalSec % 3600) / 60)
+  const seconds = totalSec % 60
+  if (hours > 0) return `${hours}:${pad2(minutes)}:${pad2(seconds)}`
+  return `${pad2(minutes)}:${pad2(seconds)}`
+}
+
 const resolveTotalTimeMs = (
   usage: Pick<MessageUsage, "queue_wait_ms" | "generation_time_ms"> | null | undefined
 ): number | null => {
@@ -144,31 +163,31 @@ const resolveTotalTimeMs = (
   return (generation ?? 0) + (wait ?? 0)
 }
 
+const parseTimestampMs = (value?: string | null): number | null => {
+  if (!value) return null
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/** Wall-clock start for the thinking timer (survives refresh via API timestamps). */
+const resolveThoughtStartMs = (msg: ChatMessage): number =>
+  parseTimestampMs(msg.started_at) ?? parseTimestampMs(msg.created_at) ?? Date.now()
+
+/** Persisted thought duration after reload — generation time, else completed − started. */
+const resolvePersistedThoughtMs = (msg: ChatMessage): number | null => {
+  const generation = msg.usage?.generation_time_ms
+  if (typeof generation === "number" && generation > 0) return generation
+  const start = parseTimestampMs(msg.started_at) ?? parseTimestampMs(msg.created_at)
+  const end = parseTimestampMs(msg.completed_at)
+  if (start != null && end != null && end >= start) return end - start
+  return null
+}
+
 const formatTokensPerSecond = (value: number): string => {
   if (!Number.isFinite(value) || value <= 0) return "—"
   if (value >= 100) return value.toFixed(0)
   if (value >= 10) return value.toFixed(1)
   return value.toFixed(2)
-}
-
-let mermaidInitialized = false
-let mermaidRenderId = 0
-
-const nextMermaidRenderId = () => {
-  mermaidRenderId += 1
-  return `chatui-mermaid-${mermaidRenderId}`
-}
-
-const loadMermaid = async () => {
-  const mermaid = (await import("mermaid")).default
-  if (!mermaidInitialized) {
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-    })
-    mermaidInitialized = true
-  }
-  return mermaid
 }
 
 const OPEN_FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/
@@ -278,13 +297,13 @@ const completeStreamingMarkdownTables = (markdown: string): string => {
 }
 
 const toMermaidChart = (content: string, language?: string | null): string | null => {
-  const normalize = (chart: string) => sanitizeMermaidChart(chart.trim())
   const readyChart = (chart: string): string | null => {
     const trimmed = chart.trim()
     if (!trimmed) return null
     // Defer while the model is still streaming the diagram keyword ("flow" → "flowchart").
     if (isIncompleteMermaidPrefix(trimmed)) return null
-    return normalize(trimmed)
+    // Autofix runs async in MermaidDiagram via prepareMermaidChart.
+    return trimmed
   }
 
   if (language?.toLowerCase() === "mermaid") {
@@ -316,6 +335,28 @@ const codeCopyStickyClassName =
 
 const codeCopyButtonClassName =
   "pointer-events-auto m-2 bg-code/90 hover:bg-muted border border-border text-[10px] text-code-foreground/80 hover:text-code-foreground uppercase tracking-wide"
+
+const tableCopyButtonClassName =
+  "h-7 px-2 bg-background/90 hover:bg-muted border border-border text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+
+/** Serialize a rendered HTML table to TSV so spreadsheet apps keep columns. */
+const tableToTsv = (table: HTMLTableElement | null): string => {
+  if (!table) return ""
+  return Array.from(table.querySelectorAll("tr"))
+    .map((row) =>
+      Array.from(row.querySelectorAll("th, td"))
+        .map((cell) =>
+          (cell.textContent ?? "")
+            .replace(/\u00a0/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .replace(/\t/g, " ")
+        )
+        .join("\t")
+    )
+    .filter((row) => row.length > 0)
+    .join("\n")
+}
 
 const scheduleIdle = (callback: () => void, timeout = 120) => {
   if (typeof window.requestIdleCallback === "function") {
@@ -440,21 +481,51 @@ const collectDownloadableAttachments = (msg: ChatMessage): DownloadableAttachmen
   return [...byFileName.values()]
 }
 
-/** Final answer only — drops preamble / thoughts before the first tool call. */
+type AssistantStreamPart = NonNullable<ChatMessage["stream_parts"]>[number]
+type AssistantStreamTextPart = Extract<AssistantStreamPart, { type: "text" }>
+
+/**
+ * Everything before the final answer is "thoughts": tools, reasoning labels,
+ * and any intermediate speech between them. While still generating, nothing is
+ * final yet — trailing speech can still be followed by more tools.
+ */
+export const splitAssistantStreamParts = (
+  parts: AssistantStreamPart[],
+  isThinking = false
+): { thoughtParts: AssistantStreamPart[]; finalTextParts: AssistantStreamTextPart[] } => {
+  if (parts.length === 0) return { thoughtParts: [], finalTextParts: [] }
+  if (isThinking) return { thoughtParts: parts, finalTextParts: [] }
+
+  let lastActionIndex = -1
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i]?.type === "action") lastActionIndex = i
+  }
+  if (lastActionIndex < 0) {
+    return {
+      thoughtParts: [],
+      finalTextParts: parts.filter(
+        (part): part is AssistantStreamTextPart => part.type === "text"
+      ),
+    }
+  }
+  return {
+    thoughtParts: parts.slice(0, lastActionIndex + 1),
+    finalTextParts: parts
+      .slice(lastActionIndex + 1)
+      .filter((part): part is AssistantStreamTextPart => part.type === "text"),
+  }
+}
+
+/** Final answer only — text after the last tool/action; intermediate speech stays in thoughts. */
 export const getFinalAnswerText = (msg: ChatMessage): string => {
   const parts = msg.stream_parts ?? []
-  const firstActionIndex = parts.findIndex((part) => part.type === "action")
-  if (firstActionIndex >= 0) {
-    const afterTools = parts
-      .slice(firstActionIndex + 1)
-      .filter(
-        (part): part is Extract<NonNullable<ChatMessage["stream_parts"]>[number], { type: "text" }> =>
-          part.type === "text"
-      )
+  if (parts.length > 0) {
+    const { finalTextParts } = splitAssistantStreamParts(parts, false)
+    const fromParts = finalTextParts
       .map((part) => part.text)
       .join("")
       .trim()
-    if (afterTools) return afterTools
+    if (fromParts) return fromParts
   }
   return msg.content.trim()
 }
@@ -467,83 +538,6 @@ const escapeHtml = (value: string) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;")
 
-const formatInlineMarkdown = (value: string) => {
-  let html = escapeHtml(value)
-  html = html.replace(/\[(\d+)\]/g, "<sup>[$1]</sup>")
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>")
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-  html = html.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>")
-  return html
-}
-
-const markdownToExportHtml = (markdown: string) => {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n")
-  const blocks: string[] = []
-  let paragraph: string[] = []
-  let listItems: string[] = []
-  let listType: "ul" | "ol" | null = null
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return
-    blocks.push(`<p>${formatInlineMarkdown(paragraph.join(" "))}</p>`)
-    paragraph = []
-  }
-
-  const flushList = () => {
-    if (!listType || listItems.length === 0) {
-      listItems = []
-      listType = null
-      return
-    }
-    const tag = listType
-    blocks.push(
-      `<${tag}>${listItems.map((item) => `<li>${formatInlineMarkdown(item)}</li>`).join("")}</${tag}>`
-    )
-    listItems = []
-    listType = null
-  }
-
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd()
-    const trimmed = line.trim()
-    if (!trimmed) {
-      flushParagraph()
-      flushList()
-      continue
-    }
-    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed)
-    if (heading) {
-      flushParagraph()
-      flushList()
-      const level = heading[1].length
-      blocks.push(`<h${level}>${formatInlineMarkdown(heading[2])}</h${level}>`)
-      continue
-    }
-    const unordered = /^[-*•]\s+(.+)$/.exec(trimmed)
-    if (unordered) {
-      flushParagraph()
-      if (listType && listType !== "ul") flushList()
-      listType = "ul"
-      listItems.push(unordered[1])
-      continue
-    }
-    const ordered = /^\d+[.)]\s+(.+)$/.exec(trimmed)
-    if (ordered) {
-      flushParagraph()
-      if (listType && listType !== "ol") flushList()
-      listType = "ol"
-      listItems.push(ordered[1])
-      continue
-    }
-    flushList()
-    paragraph.push(trimmed)
-  }
-  flushParagraph()
-  flushList()
-  return blocks.join("")
-}
-
 const downloadAnswerMarkdown = (msg: ChatMessage) => {
   const text = getFinalAnswerText(msg)
   const blob = new Blob([text], { type: "text/markdown;charset=utf-8" })
@@ -552,13 +546,22 @@ const downloadAnswerMarkdown = (msg: ChatMessage) => {
 
 const downloadAnswerPdf = async (
   msg: ChatMessage,
-  options: { question?: string | null; brandLabel: string }
+  options: { question?: string | null; brandLabel: string; logoUrl?: string | null }
 ) => {
   const text = getFinalAnswerText(msg)
   const sources = msg.sources?.length ? dedupeSources(msg.sources) : []
   const question = (options.question ?? "").trim()
-  const logoUrl = `${window.location.origin}/logo_chat.svg`
-  const bodyHtml = markdownToExportHtml(text)
+  const logoUrl =
+    options.logoUrl?.trim() || `${window.location.origin}/logo_mark.svg`
+  const absoluteLogoUrl = logoUrl.startsWith("http")
+    ? logoUrl
+    : `${window.location.origin}${logoUrl}`
+  const imageUrls = collectChatImageUrlMap([msg])
+  const { markdown: resolved } = await materializeExportMarkdownImages(
+    text,
+    imageUrls
+  )
+  const bodyHtml = markdownToExportHtml(resolved)
   const sourcesHtml =
     sources.length > 0
       ? `<div class="divider" aria-hidden="true">✦</div>
@@ -575,20 +578,17 @@ const downloadAnswerPdf = async (
          </ol>`
       : ""
 
-  // A4 at 96dpi CSS reference width. Keep the offscreen node fully opaque —
-  // opacity:0 makes some browsers skip font rasterization / soft-blur glyphs.
+  // A4 at 96dpi CSS reference width. Rasterize in an isolated light iframe —
+  // off-screen hosts + dark-mode body text made html2canvas emit blank PDFs.
   const pageCssWidth = 794
-  const root = document.createElement("div")
-  root.setAttribute("data-pdf-export", "true")
-  root.style.cssText = `position:fixed;left:-10000px;top:0;width:${pageCssWidth}px;pointer-events:none;z-index:-1;`
-  root.innerHTML = `
+  const pageHtml = `
     <style>
       .pdf-page {
         box-sizing: border-box;
         width: ${pageCssWidth}px;
         padding: 64px 72px 72px;
         background: #ffffff;
-        color: #1a1210;
+        color: #070c1c;
         -webkit-font-smoothing: antialiased;
         text-rendering: geometricPrecision;
       }
@@ -617,9 +617,7 @@ const downloadAnswerPdf = async (
       .pdf-body {
         font: 400 16px/1.55 "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
       }
-      .pdf-body p {
-        margin: 0 0 16px;
-      }
+      ${markdownExportBodyCss}
       .pdf-body h1,
       .pdf-body h2,
       .pdf-body h3 {
@@ -631,30 +629,11 @@ const downloadAnswerPdf = async (
       .pdf-body h1 { font-size: 28px; }
       .pdf-body h2 { font-size: 24px; }
       .pdf-body h3 { font-size: 20px; }
-      .pdf-body ul,
-      .pdf-body ol {
-        margin: 0 0 16px;
-        padding-left: 22px;
-      }
-      .pdf-body li {
-        margin: 0 0 8px;
-      }
+      .pdf-body p { margin: 0 0 16px; }
+      .pdf-body li { margin: 0 0 8px; }
       .pdf-body strong {
         font-family: "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
         font-weight: 700;
-      }
-      .pdf-body em { font-style: italic; }
-      .pdf-body code {
-        font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-        background: rgba(25, 9, 6, 0.06);
-        padding: 0 4px;
-        border-radius: 4px;
-      }
-      .pdf-body a { color: inherit; }
-      .pdf-body sup {
-        font-size: 10px;
-        line-height: 0;
-        vertical-align: super;
       }
       .divider {
         margin: 36px 0 28px;
@@ -667,7 +646,7 @@ const downloadAnswerPdf = async (
         margin: 0;
         padding-left: 18px;
         font: 400 12px/1.55 "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
-        color: rgba(25, 9, 6, 0.78);
+        color: rgba(7, 12, 28, 0.78);
       }
       .sources li { margin: 0 0 6px; }
       .sources a {
@@ -678,7 +657,7 @@ const downloadAnswerPdf = async (
     </style>
     <div class="pdf-page">
       <div class="pdf-brand">
-        <img src="${logoUrl}" alt="" />
+        <img src="${absoluteLogoUrl}" alt="" />
         <span>${escapeHtml(options.brandLabel)}</span>
       </div>
       ${question ? `<h1 class="pdf-title">${escapeHtml(question)}</h1>` : ""}
@@ -686,73 +665,8 @@ const downloadAnswerPdf = async (
       ${sourcesHtml}
     </div>
   `
-  document.body.appendChild(root)
-
-  try {
-    const page = root.querySelector(".pdf-page")
-    if (!(page instanceof HTMLElement)) return
-    await Promise.all([
-      document.fonts?.ready ?? Promise.resolve(),
-      ...Array.from(page.querySelectorAll("img")).map(
-        (img) =>
-          new Promise<void>((resolve) => {
-            if (img.complete) {
-              resolve()
-              return
-            }
-            img.onload = () => resolve()
-            img.onerror = () => resolve()
-          })
-      ),
-    ])
-    // ~300dpi: 794px @ 96dpi → scale ≈ 3.125. Cap at 4 to limit memory on long answers.
-    const scale = Math.min(4, Math.max(3, Math.ceil((window.devicePixelRatio || 1) * 2)))
-    const canvas = await html2canvas(page, {
-      scale,
-      backgroundColor: "#ffffff",
-      useCORS: true,
-      logging: false,
-      windowWidth: pageCssWidth,
-    })
-    const doc = new jsPDF({ unit: "pt", format: "a4", compress: true })
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const pageHeight = doc.internal.pageSize.getHeight()
-    // Slice the high-res canvas into page-sized bitmaps instead of offsetting one
-    // giant image — cleaner in viewers and avoids soft downscale artifacts.
-    const pageCanvasHeight = Math.max(1, Math.floor((pageHeight * canvas.width) / pageWidth))
-    let sourceY = 0
-    let pageIndex = 0
-    while (sourceY < canvas.height) {
-      const sliceHeight = Math.min(pageCanvasHeight, canvas.height - sourceY)
-      const pageCanvas = document.createElement("canvas")
-      pageCanvas.width = canvas.width
-      pageCanvas.height = sliceHeight
-      const ctx = pageCanvas.getContext("2d")
-      if (!ctx) break
-      ctx.fillStyle = "#ffffff"
-      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
-      ctx.drawImage(
-        canvas,
-        0,
-        sourceY,
-        canvas.width,
-        sliceHeight,
-        0,
-        0,
-        canvas.width,
-        sliceHeight
-      )
-      const imgData = pageCanvas.toDataURL("image/png")
-      const sliceImgHeight = (sliceHeight * pageWidth) / canvas.width
-      if (pageIndex > 0) doc.addPage()
-      doc.addImage(imgData, "PNG", 0, 0, pageWidth, sliceImgHeight)
-      sourceY += pageCanvasHeight
-      pageIndex += 1
-    }
-    doc.save(`${answerFileStem(msg)}.pdf`)
-  } finally {
-    root.remove()
-  }
+  const canvas = await rasterizePdfExportHtml(pageHtml, pageCssWidth)
+  downloadBlob(canvasToA4PdfBlob(canvas), `${answerFileStem(msg)}.pdf`)
 }
 
 const downloadAnswerDocx = async (msg: ChatMessage) => {
@@ -760,6 +674,7 @@ const downloadAnswerDocx = async (msg: ChatMessage) => {
   const { blob, fileName } = await exportCoworkMarkdown(text, {
     format: "docx",
     fileName: answerFileStem(msg),
+    imageUrls: collectChatImageUrlMap([msg]),
   })
   downloadBlob(blob, fileName)
 }
@@ -915,7 +830,7 @@ const ToolEventDetails = ({
   }
   if (toolEvent.type === "reasoning") {
     return (
-      <div className="max-w-none text-muted-foreground text-xs [&_p]:my-1.5 [&_p]:leading-5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:text-foreground/80 [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:font-medium [&_h1]:text-sm [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:font-medium [&_h2]:text-sm [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:font-medium [&_h3]:text-xs">
+      <div className="chat-markdown max-w-none text-muted-foreground text-xs [&_p]:my-1.5 [&_p]:leading-5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:text-foreground/80 [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:font-medium [&_h1]:text-sm [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:font-medium [&_h2]:text-sm [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:font-medium [&_h3]:text-xs">
         <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
           {toolEvent.content}
         </ReactMarkdown>
@@ -963,12 +878,14 @@ const ToolEventDetails = ({
 
 const CopyTextButton = ({
   text,
+  getText,
   label,
   copiedLabel,
   className = "",
   iconOnly = false,
 }: {
-  text: string
+  text?: string
+  getText?: () => string
   label: string
   copiedLabel: string
   className?: string
@@ -987,7 +904,7 @@ const CopyTextButton = ({
 
   const handleCopy = async () => {
     try {
-      await copyToClipboard(text)
+      await copyToClipboard(getText?.() ?? text ?? "")
       setCopied(true)
       if (resetTimeoutRef.current != null) {
         window.clearTimeout(resetTimeoutRef.current)
@@ -1028,6 +945,41 @@ const CopyTextButton = ({
         </span>
       )}
     </Button>
+  )
+}
+
+const MarkdownTable = ({
+  children,
+  copyLabel,
+  copiedLabel,
+  ...rest
+}: {
+  children?: ReactNode
+  copyLabel: string
+  copiedLabel: string
+} & HTMLAttributes<HTMLTableElement>) => {
+  const tableRef = useRef<HTMLTableElement>(null)
+
+  return (
+    <div className="my-3">
+      <div className="mb-1 flex justify-end">
+        <CopyTextButton
+          getText={() => tableToTsv(tableRef.current)}
+          label={copyLabel}
+          copiedLabel={copiedLabel}
+          className={tableCopyButtonClassName}
+        />
+      </div>
+      <div className="overflow-x-auto">
+        <table
+          ref={tableRef}
+          className="w-full text-sm border-collapse"
+          {...rest}
+        >
+          {children}
+        </table>
+      </div>
+    </div>
   )
 }
 
@@ -1131,103 +1083,68 @@ const DeferredMarkdown = ({
   }
 
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-      components={components}
-    >
-      {normalized}
-    </ReactMarkdown>
-  )
-}
-
-const MermaidDiagram = ({
-  chart,
-  copyLabel,
-  copiedLabel,
-  renderFailedLabel,
-}: {
-  chart: string
-  copyLabel: string
-  copiedLabel: string
-  renderFailedLabel: string
-}) => {
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const [renderError, setRenderError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    const renderDiagram = async () => {
-      const container = containerRef.current
-      if (!container) return
-      container.innerHTML = ""
-      setRenderError(null)
-      if (isIncompleteMermaidPrefix(chart)) return
-      const charts = splitMermaidCharts(chart)
-      if (charts.length === 0) return
-      try {
-        const mermaid = await loadMermaid()
-        for (const part of charts) {
-          if (cancelled) return
-          const chartToRender = sanitizeMermaidChart(part)
-          const wrap = document.createElement("div")
-          wrap.className = "max-w-full [&_svg]:max-w-none [&_svg]:h-auto overflow-x-auto"
-          const { svg, bindFunctions } = await mermaid.render(
-            nextMermaidRenderId(),
-            chartToRender
-          )
-          if (cancelled || !containerRef.current) return
-          wrap.innerHTML = svg
-          containerRef.current.appendChild(wrap)
-          bindFunctions?.(wrap)
-        }
-      } catch (error) {
-        if (cancelled) return
-        setRenderError(
-          error instanceof Error
-            ? error.message
-            : renderFailedLabel
-        )
-      }
-    }
-    void renderDiagram()
-    return () => {
-      cancelled = true
-    }
-  }, [chart, renderFailedLabel])
-
-  if (renderError) {
-    return (
-      <div className="relative my-3">
-        <div className={codeCopyStickyClassName}>
-          <CopyTextButton
-            text={chart}
-            label={copyLabel}
-            copiedLabel={copiedLabel}
-            className="pointer-events-auto m-2 bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
-          />
-        </div>
-        <pre className="bg-destructive/10 p-2 pt-10 rounded text-destructive text-xs whitespace-pre-wrap">
-          {renderError}
-        </pre>
-      </div>
-    )
-  }
-
-  return (
-    <div className="relative my-3">
-      <div className={codeCopyStickyClassName}>
-        <CopyTextButton
-          text={chart}
-          label={copyLabel}
-          copiedLabel={copiedLabel}
-          className="pointer-events-auto m-2 bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
-        />
-      </div>
-      <div ref={containerRef} className="flex flex-col gap-3 pt-10" />
+    <div className="chat-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={components}
+      >
+        {normalized}
+      </ReactMarkdown>
     </div>
   )
 }
+
+const ThinkingTrail = ({
+  open,
+  onOpenChange,
+  title,
+  leading,
+  expandable = true,
+  children,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  title: string
+  leading?: ReactNode
+  expandable?: boolean
+  children?: ReactNode
+}) => (
+  <details
+    className="group/thinking text-muted-foreground text-xs"
+    open={expandable ? open : false}
+    onToggle={(event) => {
+      if (!expandable) {
+        event.preventDefault()
+        event.currentTarget.open = false
+        return
+      }
+      const nextOpen = event.currentTarget.open
+      if (nextOpen !== open) onOpenChange(nextOpen)
+    }}
+  >
+    <summary
+      className={cn(
+        "[&::-webkit-details-marker]:hidden inline-flex items-center gap-1.5 py-0.5 font-medium text-muted-foreground text-xs leading-5 list-none select-none",
+        expandable ? "cursor-pointer" : "cursor-default"
+      )}
+    >
+      {expandable ? (
+        <span
+          aria-hidden="true"
+          className="inline-block opacity-50 transition-transform group-open/thinking:rotate-90 select-none"
+        >
+          ›
+        </span>
+      ) : null}
+      {leading}
+      <span className="tabular-nums">{title}</span>
+    </summary>
+    {expandable && children ? (
+      <div className="space-y-2 mt-2 ml-3">{children}</div>
+    ) : null}
+  </details>
+)
 
 const MessageBubbleComponent = ({
   msg,
@@ -1265,7 +1182,12 @@ const MessageBubbleComponent = ({
 }: MessageBubbleProps) => {
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const thinkingStartedAtRef = useRef<number | null>(null)
   const [hasEditText, setHasEditText] = useState(() => Boolean(msg.content.trim()))
+  const [thinkingOpen, setThinkingOpen] = useState(false)
+  const [thinkingElapsedMs, setThinkingElapsedMs] = useState(0)
+  const [thoughtDurationMs, setThoughtDurationMs] = useState<number | null>(null)
+  const { appTitle: brandingTitle, logoUrl } = useBranding()
 
   useEffect(() => {
     if (!isEditing) return
@@ -1305,6 +1227,74 @@ const MessageBubbleComponent = ({
     (hasActionParts ||
       content.trim().length === 0 ||
       streamTextLength >= content.trim().length)
+  const { thoughtParts, finalTextParts } = useMemo(
+    () => splitAssistantStreamParts(streamParts, isThinking),
+    [streamParts, isThinking]
+  )
+  const hasFinalAnswerText = finalTextParts.some((part) => part.text.trim().length > 0)
+  const showThinkingDetails =
+    actionInfoLevel === "detailed" &&
+    (thoughtParts.length > 0 ||
+      thinkingLabels.length > 0 ||
+      Boolean(currentStepLabel || currentToolLabel))
+  // Fruit + timer stay visible even when action details are hidden in settings.
+  const isThoughtClockRunning = !isUser && isThinking
+  const showThinkingHeader =
+    !isUser && (isThoughtClockRunning || showThinkingDetails)
+
+  // One lifecycle for the clock: msg.id remounts/resets must not leave the
+  // interval running against a nulled start ref (that froze the UI at 00:00).
+  useEffect(() => {
+    thinkingStartedAtRef.current = null
+    setThinkingElapsedMs(0)
+    setThoughtDurationMs(null)
+    setThinkingOpen(false)
+  }, [msg.id])
+
+  useEffect(() => {
+    if (!isThoughtClockRunning) {
+      if (thinkingStartedAtRef.current != null) {
+        setThoughtDurationMs(Math.max(0, Date.now() - thinkingStartedAtRef.current))
+      }
+      return
+    }
+    if (thinkingStartedAtRef.current == null) {
+      thinkingStartedAtRef.current = resolveThoughtStartMs(msg)
+    }
+    setThoughtDurationMs(null)
+    const tick = () => {
+      if (thinkingStartedAtRef.current == null) {
+        thinkingStartedAtRef.current = resolveThoughtStartMs(msg)
+      }
+      setThinkingElapsedMs(Date.now() - thinkingStartedAtRef.current)
+    }
+    tick()
+    const id = window.setInterval(tick, 250)
+    return () => window.clearInterval(id)
+  }, [isThoughtClockRunning, msg.id, msg.started_at, msg.created_at])
+
+  useEffect(() => {
+    if (isThinking) {
+      setThinkingOpen(true)
+      return
+    }
+    if (hasFinalAnswerText) setThinkingOpen(false)
+  }, [isThinking, hasFinalAnswerText])
+
+  const thinkingTrailTitle = (() => {
+    if (isThoughtClockRunning) {
+      return t("chat_thinking_timer", { time: formatThinkingClock(thinkingElapsedMs) })
+    }
+    const doneMs =
+      thoughtDurationMs ??
+      (thinkingElapsedMs > 0 ? thinkingElapsedMs : null) ??
+      resolvePersistedThoughtMs(msg)
+    if (doneMs != null && doneMs > 0) {
+      return t("chat_thought_for", { time: formatThinkingClock(doneMs) })
+    }
+    return t("chat_thinking")
+  })()
+
   const markdownComponents = useMemo(
     () => ({
       p({ children, node, ...rest }: any) {
@@ -1318,7 +1308,7 @@ const MessageBubbleComponent = ({
       ul({ children, node, ...rest }: any) {
         void node
         return (
-          <ul className="space-y-2.5 my-3 pl-6 list-disc" {...rest}>
+          <ul className="my-3 space-y-2.5" {...rest}>
             {children}
           </ul>
         )
@@ -1326,7 +1316,7 @@ const MessageBubbleComponent = ({
       ol({ children, node, ...rest }: any) {
         void node
         return (
-          <ol className="space-y-2.5 my-3 pl-6 list-decimal" {...rest}>
+          <ol className="my-3 space-y-2.5" {...rest}>
             {children}
           </ol>
         )
@@ -1427,11 +1417,13 @@ const MessageBubbleComponent = ({
       table({ children, node, ...rest }: any) {
         void node
         return (
-          <div className="my-3 overflow-x-auto">
-            <table className="w-full text-sm border-collapse" {...rest}>
-              {children}
-            </table>
-          </div>
+          <MarkdownTable
+            copyLabel={t("common_copy")}
+            copiedLabel={t("common_copied")}
+            {...rest}
+          >
+            {children}
+          </MarkdownTable>
         )
       },
       thead({ children, node, ...rest }: any) {
@@ -1482,14 +1474,7 @@ const MessageBubbleComponent = ({
           ? toMermaidChart(codeContent, match?.[1] ?? null)
           : null
         if (mermaidChart) {
-          return (
-            <MermaidDiagram
-              chart={mermaidChart}
-              copyLabel={t("chat_copy_mermaid")}
-              copiedLabel={t("common_copied")}
-              renderFailedLabel={t("chat_mermaid_render_failed")}
-            />
-          )
+          return <MermaidDiagram chart={mermaidChart} />
         }
         if (isBlockCode(codeContent, className)) {
           if (match) {
@@ -1596,9 +1581,9 @@ const MessageBubbleComponent = ({
     >
       <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
         <div
-          className={`min-w-0 overflow-clip rounded-lg wrap-break-word whitespace-normal ${
+          className={`min-w-0 rounded-lg wrap-break-word whitespace-normal ${
             isUser
-              ? "bg-secondary p-2 text-base leading-6 text-foreground"
+              ? "overflow-clip bg-secondary p-2 text-base leading-6 text-foreground"
               : hasEventHeader
                 ? "bg-transparent p-2 text-base leading-7 text-foreground"
                 : "bg-transparent p-0 text-base leading-7 text-foreground"
@@ -1779,18 +1764,150 @@ const MessageBubbleComponent = ({
             </div>
           ) : (
             <>
-              {hasStreamParts ? (
-                <div className="space-y-2">
-                  {streamParts.map((part, index) => {
-                    if (part.type === "text") {
-                      if (!part.text.trim()) return null
-                      return renderMarkdown(part.text, `text-${index}`)
+              <div className="space-y-2">
+                {showThinkingHeader ? (
+                  <ThinkingTrail
+                    open={thinkingOpen}
+                    onOpenChange={setThinkingOpen}
+                    title={thinkingTrailTitle}
+                    expandable={showThinkingDetails}
+                    leading={
+                      isThoughtClockRunning ? (
+                        <ThinkingFruitRive
+                          // Survive temp→server id remaps while the same turn is running.
+                          key={msg.task_id ?? msg.id}
+                          className="size-4"
+                        />
+                      ) : null
                     }
-                    const actionAttachments = part.attachments ?? []
-                    if (actionInfoLevel === "none") {
+                  >
+                    {showThinkingDetails ? (
+                      hasStreamParts ? (
+                        thoughtParts.map((part, index) => {
+                          if (part.type === "text") {
+                            if (!part.text.trim()) return null
+                            return (
+                              <div
+                                key={`thought-text-${index}`}
+                                className="text-muted-foreground text-xs leading-5"
+                              >
+                                {renderMarkdown(part.text, `thought-text-${index}`)}
+                              </div>
+                            )
+                          }
+                          const actionAttachments = part.attachments ?? []
+                          const toolEvent = part.tool_event
+                          const attachmentRow =
+                            actionAttachments.length > 0 ? (
+                              <div className="flex flex-wrap gap-2 pl-3">
+                                {actionAttachments.map((attachment, attachmentIndex) => {
+                                  const isImage = (attachment.content_type ?? "").startsWith(
+                                    "image/"
+                                  )
+                                  if (isImage) {
+                                    return (
+                                      <Button
+                                        key={`${attachment.file_name}-${attachmentIndex}`}
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="p-0 rounded-md w-auto h-auto overflow-hidden"
+                                        onClick={() =>
+                                          onPreviewAttachment({
+                                            file_name: attachment.file_name,
+                                            content_type: attachment.content_type,
+                                            data_base64: attachment.data_base64,
+                                            content_url: attachment.content_url,
+                                          })
+                                        }
+                                      >
+                                        <img
+                                          src={attachmentSrc(attachment)}
+                                          alt={attachment.file_name}
+                                          className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
+                                        />
+                                      </Button>
+                                    )
+                                  }
+                                  return (
+                                    <a
+                                      key={`${attachment.file_name}-${attachmentIndex}`}
+                                      className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
+                                      href={attachmentHref(attachment)}
+                                      download={attachment.file_name}
+                                    >
+                                      {attachment.file_name}
+                                    </a>
+                                  )
+                                })}
+                              </div>
+                            ) : null
+                          if (!toolEvent) {
+                            return (
+                              <div key={`action-${index}`} className="space-y-2">
+                                <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
+                                  <span aria-hidden="true" className="opacity-50 select-none">
+                                    ›
+                                  </span>
+                                  <span className="min-w-0 wrap-break-word">{part.label}</span>
+                                </div>
+                                {attachmentRow}
+                              </div>
+                            )
+                          }
+                          return (
+                            <div key={`action-${index}`} className="space-y-2">
+                              <details className="group/action text-muted-foreground text-xs">
+                                <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
+                                  <span
+                                    aria-hidden="true"
+                                    className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
+                                  >
+                                    ›
+                                  </span>
+                                  <span className="min-w-0 wrap-break-word">{part.label}</span>
+                                </summary>
+                                <div className="space-y-2 mt-2 ml-3 text-foreground">
+                                  <ToolEventDetails toolEvent={toolEvent} t={t} />
+                                </div>
+                              </details>
+                              {attachmentRow}
+                            </div>
+                          )
+                        })
+                      ) : thinkingLabels.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {thinkingLabels.map((label, index) => (
+                            <span
+                              key={`${label}-${index}`}
+                              className="px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide"
+                            >
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null
+                    ) : null}
+                  </ThinkingTrail>
+                ) : null}
+                {hasStreamParts
+                  ? // Always only the post-tool answer in the main bubble; intermediate
+                    // speech stays in the detailed trail (or is omitted when hidden).
+                    finalTextParts.map((part, index) => {
+                      if (!part.text.trim()) return null
+                      return renderMarkdown(part.text, `final-text-${index}`)
+                    })
+                  : content.trim().length > 0
+                    ? renderMarkdown(content)
+                    : null}
+                {/* Attachments from actions still surface when details are hidden. */}
+                {hasStreamParts && actionInfoLevel !== "detailed"
+                  ? streamParts.map((part, index) => {
+                      if (part.type !== "action") return null
+                      const actionAttachments = part.attachments ?? []
                       if (actionAttachments.length === 0) return null
                       return (
-                        <div key={`action-${index}`} className="space-y-2">
+                        <div key={`action-files-${index}`} className="space-y-2">
                           <div className="flex flex-wrap gap-2">
                             {actionAttachments.map((attachment, attachmentIndex) => {
                               const isImage = (attachment.content_type ?? "").startsWith(
@@ -1835,180 +1952,9 @@ const MessageBubbleComponent = ({
                           </div>
                         </div>
                       )
-                    }
-                    if (actionInfoLevel !== "detailed") return null
-                    const toolEvent = part.tool_event
-                    const attachmentRow =
-                      actionAttachments.length > 0 ? (
-                        <div className="flex flex-wrap gap-2 pl-3">
-                          {actionAttachments.map((attachment, attachmentIndex) => {
-                            const isImage = (attachment.content_type ?? "").startsWith(
-                              "image/"
-                            )
-                            if (isImage) {
-                              return (
-                                <Button
-                                  key={`${attachment.file_name}-${attachmentIndex}`}
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="p-0 rounded-md w-auto h-auto overflow-hidden"
-                                  onClick={() =>
-                                    onPreviewAttachment({
-                                      file_name: attachment.file_name,
-                                      content_type: attachment.content_type,
-                                      data_base64: attachment.data_base64,
-                                      content_url: attachment.content_url,
-                                    })
-                                  }
-                                >
-                                  <img
-                                    src={attachmentSrc(attachment)}
-                                    alt={attachment.file_name}
-                                    className="bg-muted/50 rounded-md w-auto max-w-48 h-auto max-h-48 object-contain"
-                                  />
-                                </Button>
-                              )
-                            }
-                            return (
-                              <a
-                                key={`${attachment.file_name}-${attachmentIndex}`}
-                                className="hover:bg-muted px-3 py-2 border rounded-md text-xs"
-                                href={attachmentHref(attachment)}
-                                download={attachment.file_name}
-                              >
-                                {attachment.file_name}
-                              </a>
-                            )
-                          })}
-                        </div>
-                      ) : null
-                    if (!toolEvent) {
-                      return (
-                        <div key={`action-${index}`} className="space-y-2">
-                          <div className="flex items-start gap-1.5 text-muted-foreground text-xs leading-5">
-                            <span aria-hidden="true" className="opacity-50 select-none">
-                              ›
-                            </span>
-                            <span className="min-w-0 wrap-break-word">{part.label}</span>
-                          </div>
-                          {attachmentRow}
-                        </div>
-                      )
-                    }
-                    return (
-                      <div key={`action-${index}`} className="space-y-2">
-                        <details className="group/action text-muted-foreground text-xs">
-                          <summary className="[&::-webkit-details-marker]:hidden flex items-start gap-1.5 leading-5 cursor-pointer list-none">
-                            <span
-                              aria-hidden="true"
-                              className="inline-block opacity-50 select-none transition-transform group-open/action:rotate-90"
-                            >
-                              ›
-                            </span>
-                            <span className="min-w-0 wrap-break-word">{part.label}</span>
-                          </summary>
-                          <div className="space-y-2 mt-2 ml-3 text-foreground">
-                            <ToolEventDetails toolEvent={toolEvent} t={t} />
-                          </div>
-                        </details>
-                        {attachmentRow}
-                      </div>
-                    )
-                  })}
-                  {isThinking ? (
-                    actionInfoLevel === "detailed" ? (
-                      <div className="flex items-center gap-1 py-1" role="status" aria-live="polite">
-                        <span
-                          aria-hidden="true"
-                          className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                          style={{ animationDelay: "0ms" }}
-                        />
-                        <span
-                          aria-hidden="true"
-                          className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                          style={{ animationDelay: "150ms" }}
-                        />
-                        <span
-                          aria-hidden="true"
-                          className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                          style={{ animationDelay: "300ms" }}
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4"
-                        role="status"
-                        aria-live="polite"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="opacity-[0.79] size-3.5 animate-spin figma-icon"
-                          style={{ maskImage: "url('/icon-thinking.svg')" }}
-                        />
-                        <span>{t("chat_thinking")}</span>
-                      </div>
-                    )
-                  ) : null}
-                </div>
-              ) : (
-                <>
-                  {content.trim().length > 0 ? renderMarkdown(content) : null}
-                  {isThinking || thinkingLabels.length > 0 ? (
-                    actionInfoLevel === "detailed" ? (
-                      <div className="space-y-2 py-2" role="status" aria-live="polite">
-                        {currentStepLabel || currentToolLabel ? (
-                          <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
-                            {[currentStepLabel, currentToolLabel].filter(Boolean).join(" - ")}
-                          </div>
-                        ) : null}
-                        {isThinking ? (
-                          <div className="flex items-center gap-1">
-                            <span
-                              aria-hidden="true"
-                              className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                              style={{ animationDelay: "0ms" }}
-                            />
-                            <span
-                              aria-hidden="true"
-                              className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                              style={{ animationDelay: "150ms" }}
-                            />
-                            <span
-                              aria-hidden="true"
-                              className="bg-muted-foreground/60 rounded-full w-2 h-2 animate-bounce"
-                              style={{ animationDelay: "300ms" }}
-                            />
-                          </div>
-                        ) : null}
-                        <div className="flex flex-wrap gap-2">
-                          {thinkingLabels.map((label, index) => (
-                            <span
-                              key={`${label}-${index}`}
-                              className="px-2 py-0.5 border border-muted-foreground/30 rounded-full text-[10px] text-muted-foreground uppercase tracking-wide"
-                            >
-                              {label}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ) : isThinking ? (
-                      <div
-                        className="inline-flex justify-center items-center gap-0.5 px-1.5 py-0.5 bg-border rounded-full font-medium text-foreground text-xs leading-4"
-                        role="status"
-                        aria-live="polite"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="opacity-[0.79] size-3.5 animate-spin figma-icon"
-                          style={{ maskImage: "url('/icon-thinking.svg')" }}
-                        />
-                        <span>{t("chat_thinking")}</span>
-                      </div>
-                    ) : null
-                  ) : null}
-                </>
-              )}
+                    })
+                  : null}
+              </div>
               {userAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2 mt-3">
                   {userAttachments.map((attachment, index) => {
@@ -2209,7 +2155,8 @@ const MessageBubbleComponent = ({
                           onClick={() => {
                             void downloadAnswerPdf(msg, {
                               question: exportQuestion,
-                              brandLabel: t("chat_title"),
+                              brandLabel: brandingTitle || t("chat_title"),
+                              logoUrl,
                             })
                           }}
                         >

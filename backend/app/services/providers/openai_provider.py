@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 from json_repair import loads as repair_json_loads
 
-from app.core.config import settings
+from app.core.config import settings, _normalize_azure_endpoint
 import json
 
 from app.services.providers.base import (
@@ -42,7 +42,33 @@ def _messages_to_prompt(messages: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def _is_function_tools_with_reasoning_effort_error(exc: Exception) -> bool:
+    """chat.completions rejects tools + reasoning_effort together on some models (e.g. gpt-*-sol)."""
+    message = str(exc).lower()
+    if "reasoning_effort" not in message:
+        return False
+    return (
+        "function tools with reasoning_effort" in message
+        or ("function tools" in message and "reasoning_effort" in message)
+        or ("tools with reasoning" in message)
+    )
+
+
+def _is_responses_unavailable_error(exc: Exception) -> bool:
+    """Azure/compat may 404 when /responses (or /openai/v1/responses) is not enabled."""
+    status_code = getattr(exc, "status_code", None)
+    message = str(exc).lower()
+    if status_code == 404:
+        return True
+    return (
+        "resource not found" in message
+        or "404" in message and "not found" in message
+    )
+
+
 def _is_non_chat_model_error(exc: Exception) -> bool:
+    # Tools + reasoning_effort on chat.completions must use /v1/responses
+    # (gpt-*-sol). Treat as responses-only so callers keep reasoning + tools.
     message = str(exc).lower()
     status_code = getattr(exc, "status_code", None)
     if "not a chat model" in message:
@@ -56,6 +82,8 @@ def _is_non_chat_model_error(exc: Exception) -> bool:
     if "not in v1/chat/completions" in message:
         return True
     if "chat/completions" in message and "v1/responses" in message:
+        return True
+    if _is_function_tools_with_reasoning_effort_error(exc):
         return True
     if status_code == 404 and (
         "chat/completions" in message or "only supported in v1/responses" in message
@@ -491,6 +519,11 @@ class OpenAIProvider:
         self._discovered_responses_api = False
         self.extra_body = extra_body or None
 
+    @property
+    def _responses_client(self):
+        """Client used for /responses. Azure overrides this with the v1 base URL."""
+        return self.client
+
     def _apply_extra_body(self, payload: dict) -> None:
         if not self.extra_body:
             return
@@ -595,7 +628,7 @@ class OpenAIProvider:
     async def _create_response(self, payload: dict) -> object:
         self._apply_extra_body(payload)
         try:
-            return await self.client.with_options(
+            return await self._responses_client.with_options(
                 timeout=self.responses_timeout_seconds,
                 max_retries=0,
             ).responses.create(**payload)
@@ -629,7 +662,7 @@ class OpenAIProvider:
                     )
                     retry = True
             if retry:
-                return await self.client.with_options(
+                return await self._responses_client.with_options(
                     timeout=self.responses_timeout_seconds,
                     max_retries=0,
                 ).responses.create(**payload)
@@ -639,7 +672,7 @@ class OpenAIProvider:
         self._apply_extra_body(payload)
         stream_payload = {**payload, "stream": True}
         try:
-            return await self.client.with_options(
+            return await self._responses_client.with_options(
                 timeout=self.responses_timeout_seconds,
                 max_retries=0,
             ).responses.create(**stream_payload)
@@ -660,7 +693,7 @@ class OpenAIProvider:
                     )
                     retry = True
             if retry:
-                return await self.client.with_options(
+                return await self._responses_client.with_options(
                     timeout=self.responses_timeout_seconds,
                     max_retries=0,
                 ).responses.create(**stream_payload)
@@ -890,42 +923,59 @@ class OpenAIProvider:
             result = await self._create_chat_completion(payload)
             usage = result.usage
         except NonChatModelError:
-            self._mark_responses_only_model(model)
             self.logger.warning(
-                "Model %s does not support chat tools; falling back to responses.",
+                "Model %s does not support chat tools with reasoning; trying responses.",
                 model,
             )
-            response = await self._chat_with_tools_via_responses(
-                model=model,
-                messages=normalized_messages,
-                tools=tools,
-                tool_choice=tool_choice,
-            )
-            content = _extract_response_text(response)
-            usage = getattr(response, "usage", None)
-            tool_calls = _extract_response_tool_calls(response)
-            finish_reason = _finish_reason_from_response(response, tool_calls)
-            cached_tokens, thinking_tokens = _extract_usage_details(usage)
-            prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-                _coalesce_usage_tokens(usage)
-            )
-            if input_tokens == 0:
-                input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
-            return ChatResponse(
-                content=content or "",
-                reasoning_content=_extract_response_reasoning(response),
-                usage=ChatUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens or completion_tokens,
-                    cached_tokens=cached_tokens or 0,
-                    thinking_tokens=thinking_tokens or 0,
-                ),
-                tool_calls=tool_calls or None,
-                finish_reason=finish_reason,
-            )
+            try:
+                response = await self._chat_with_tools_via_responses(
+                    model=model,
+                    messages=normalized_messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+            except Exception as responses_exc:
+                if not _is_responses_unavailable_error(responses_exc):
+                    raise
+                self.logger.warning(
+                    "responses unavailable for model=%s after tools+reasoning conflict; "
+                    "retrying chat.completions with reasoning_effort=none: %s",
+                    model,
+                    responses_exc,
+                )
+                payload["reasoning_effort"] = "none"
+                result = await self.client.with_options(
+                    timeout=self.chat_timeout_seconds,
+                    max_retries=0,
+                ).chat.completions.create(**payload)
+                usage = result.usage
+            else:
+                self._mark_responses_only_model(model)
+                content = _extract_response_text(response)
+                usage = getattr(response, "usage", None)
+                tool_calls = _extract_response_tool_calls(response)
+                finish_reason = _finish_reason_from_response(response, tool_calls)
+                cached_tokens, thinking_tokens = _extract_usage_details(usage)
+                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
+                    _coalesce_usage_tokens(usage)
+                )
+                if input_tokens == 0:
+                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
+                return ChatResponse(
+                    content=content or "",
+                    reasoning_content=_extract_response_reasoning(response),
+                    usage=ChatUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens or completion_tokens,
+                        cached_tokens=cached_tokens or 0,
+                        thinking_tokens=thinking_tokens or 0,
+                    ),
+                    tool_calls=tool_calls or None,
+                    finish_reason=finish_reason,
+                )
         cached_tokens, thinking_tokens = _extract_usage_details(usage)
         tool_calls: list[ChatToolCall] = []
         finish_reason = None
@@ -1113,12 +1163,31 @@ class OpenAIProvider:
         try:
             stream = await self._create_chat_completion(payload)
         except NonChatModelError:
-            self._mark_responses_only_model(model)
-            async for chunk in self._stream_with_tools_via_responses(
-                model, messages, tools, tool_choice=tool_choice
-            ):
-                yield chunk
-            return
+            self.logger.warning(
+                "Model %s does not support chat tools with reasoning; trying responses stream.",
+                model,
+            )
+            try:
+                async for chunk in self._stream_with_tools_via_responses(
+                    model, messages, tools, tool_choice=tool_choice
+                ):
+                    yield chunk
+                self._mark_responses_only_model(model)
+                return
+            except Exception as responses_exc:
+                if not _is_responses_unavailable_error(responses_exc):
+                    raise
+                self.logger.warning(
+                    "responses stream unavailable for model=%s; "
+                    "retrying chat.completions with reasoning_effort=none: %s",
+                    model,
+                    responses_exc,
+                )
+                payload["reasoning_effort"] = "none"
+                stream = await self.client.with_options(
+                    timeout=self.chat_timeout_seconds,
+                    max_retries=0,
+                ).chat.completions.create(**payload)
 
         pending_tool_calls: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
@@ -1195,7 +1264,9 @@ class OpenAIProvider:
         )
 
 
-class AzureOpenAIProvider:
+class AzureOpenAIProvider(OpenAIProvider):
+    """Azure OpenAI via chat.completions + /openai/v1/responses fallback."""
+
     def __init__(
         self,
         *,
@@ -1204,358 +1275,46 @@ class AzureOpenAIProvider:
         reasoning_effort: str | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
+        prompt_cache_enabled: bool = True,
+        prefer_responses_api: bool = False,
     ) -> None:
+        resolved_key = api_key or settings.azure_openai_api_key
+        resolved_endpoint = _normalize_azure_endpoint(
+            endpoint or settings.azure_openai_endpoint or ""
+        )
         self.chat_timeout_seconds = 180.0
+        self.responses_timeout_seconds = 600.0
+        # Chat Completions keep the classic Azure client + api-version.
         self.client = AsyncAzureOpenAI(
-            api_key=api_key or settings.azure_openai_api_key,
+            api_key=resolved_key,
             api_version=settings.azure_openai_api_version,
-            azure_endpoint=endpoint or settings.azure_openai_endpoint,
+            azure_endpoint=resolved_endpoint or settings.azure_openai_endpoint,
             timeout=self.chat_timeout_seconds,
+            max_retries=0,
+        )
+        # Responses requires Azure's v1 route: {endpoint}/openai/v1/responses
+        # (dated api-version paths commonly 404 with "Resource not found").
+        self._azure_responses_client = AsyncOpenAI(
+            api_key=resolved_key,
+            base_url=f"{resolved_endpoint}/openai/v1/",
+            timeout=self.responses_timeout_seconds,
             max_retries=0,
         )
         self.reasoning_effort = reasoning_effort
         self.prompt_cache_key = prompt_cache_key
-        self.prompt_cache_retention = prompt_cache_retention
+        self.prompt_cache_retention = (
+            prompt_cache_retention or settings.openai_prompt_cache_retention
+            if prompt_cache_enabled
+            else None
+        )
         self.logger = logging.getLogger(__name__)
+        self._prefer_responses_api = prefer_responses_api
+        self._discovered_responses_api = False
+        self.extra_body = None
 
-    def _apply_prompt_cache(self, payload: dict) -> None:
-        if self.prompt_cache_key:
-            payload["prompt_cache_key"] = self.prompt_cache_key
-        if self.prompt_cache_retention:
-            payload["prompt_cache_retention"] = self.prompt_cache_retention
-
-    def _strip_prompt_cache(self, payload: dict) -> bool:
-        removed = False
-        if payload.pop("prompt_cache_key", None) is not None:
-            removed = True
-        if payload.pop("prompt_cache_retention", None) is not None:
-            removed = True
-        return removed
-
-    async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
-        deployment = model
-        payload = {"model": deployment, "messages": messages}
-        self._apply_prompt_cache(payload)
-        try:
-            result = await self.client.chat.completions.create(**payload)
-        except Exception as exc:
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                result = await self.client.chat.completions.create(**payload)
-            else:
-                raise
-        message = result.choices[0].message.content or ""
-        usage = result.usage
-        cached_tokens, thinking_tokens = _extract_usage_details(usage)
-        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-            _coalesce_usage_tokens(usage)
-        )
-        if input_tokens == 0:
-            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
-        return ChatResponse(
-            content=message,
-            usage=ChatUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens or completion_tokens,
-                cached_tokens=cached_tokens or 0,
-                thinking_tokens=thinking_tokens or 0,
-            ),
-        )
-
-    async def chat_with_tools(
-        self,
-        model: str,
-        messages: list[dict],
-        tools: list[ChatToolSpec],
-        tool_choice: object | None = None,
-    ) -> ChatResponse:
-        deployment = model
-        normalized_messages = []
-        for message in messages:
-            tool_calls = message.get("tool_calls")
-            if tool_calls:
-                normalized_messages.append(
-                    {
-                        **{k: v for k, v in message.items() if k != "tool_calls"},
-                        "tool_calls": [
-                            {
-                                "id": call.get("id"),
-                                "type": "function",
-                                "function": {
-                                    "name": call.get("name"),
-                                    "arguments": json.dumps(call.get("arguments", {})),
-                                },
-                            }
-                            for call in tool_calls
-                        ],
-                    }
-                )
-            else:
-                normalized_messages.append(message)
-        payload = {
-            "model": deployment,
-            "messages": normalized_messages,
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters,
-                    },
-                }
-                for tool in tools
-            ],
-            "tool_choice": tool_choice or "auto",
-        }
-        self._apply_prompt_cache(payload)
-        try:
-            result = await self.client.chat.completions.create(**payload)
-        except Exception as exc:
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                result = await self.client.chat.completions.create(**payload)
-            else:
-                raise
-        usage = result.usage
-        cached_tokens, thinking_tokens = _extract_usage_details(usage)
-        tool_calls: list[ChatToolCall] = []
-        finish_reason = None
-        if result.choices:
-            choice = result.choices[0]
-            finish_reason = getattr(choice, "finish_reason", None)
-            for call in choice.message.tool_calls or []:
-                arguments = {}
-                if call.function.arguments:
-                    try:
-                        parsed_arguments = repair_json_loads(call.function.arguments)
-                        arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-                    except Exception:
-                        arguments = {}
-                tool_calls.append(
-                    ChatToolCall(
-                        id=call.id,
-                        name=call.function.name,
-                        arguments=arguments,
-                    )
-                )
-        prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-            _coalesce_usage_tokens(usage)
-        )
-        if input_tokens == 0:
-            input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
-        return ChatResponse(
-            content=result.choices[0].message.content or "" if result.choices else "",
-            usage=ChatUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens or completion_tokens,
-                cached_tokens=cached_tokens or 0,
-                thinking_tokens=thinking_tokens or 0,
-            ),
-            tool_calls=tool_calls or None,
-            finish_reason=finish_reason,
-        )
-
-    async def chat_stream(self, model: str, messages: list[dict]):
-        deployment = model
-        payload = {
-            "model": deployment,
-            "messages": messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        self._apply_prompt_cache(payload)
-        try:
-            stream = await self.client.chat.completions.create(**payload)
-        except Exception as exc:
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                stream = await self.client.chat.completions.create(**payload)
-            else:
-                raise
-        usage_sent = False
-        async for event in stream:
-            if event.choices:
-                delta = event.choices[0].delta
-                content = getattr(delta, "content", None)
-                reasoning_content = getattr(delta, "reasoning_content", None)
-                if content or reasoning_content:
-                    yield ChatStreamChunk(content=content, reasoning_content=reasoning_content)
-            if event.usage:
-                usage_sent = True
-                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
-                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-                    _coalesce_usage_tokens(event.usage)
-                )
-                if input_tokens == 0:
-                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
-                yield ChatStreamChunk(
-                    usage=ChatUsage(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=total_tokens,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens or completion_tokens,
-                        cached_tokens=cached_tokens or 0,
-                        thinking_tokens=thinking_tokens or 0,
-                    )
-                )
-        if not usage_sent:
-            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
-
-    async def chat_stream_with_tools(
-        self,
-        model: str,
-        messages: list[dict],
-        tools: list[ChatToolSpec],
-        tool_choice: object | None = None,
-    ):
-        deployment = model
-        normalized_messages = []
-        for message in messages:
-            tool_calls = message.get("tool_calls")
-            if tool_calls:
-                normalized_messages.append(
-                    {
-                        **{k: v for k, v in message.items() if k != "tool_calls"},
-                        "tool_calls": [
-                            {
-                                "id": call.get("id"),
-                                "type": "function",
-                                "function": {
-                                    "name": call.get("name"),
-                                    "arguments": json.dumps(call.get("arguments", {})),
-                                },
-                            }
-                            for call in tool_calls
-                        ],
-                    }
-                )
-            else:
-                normalized_messages.append(message)
-        payload = {
-            "model": deployment,
-            "messages": normalized_messages,
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters,
-                    },
-                }
-                for tool in tools
-            ],
-            "tool_choice": tool_choice or "auto",
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        self._apply_prompt_cache(payload)
-        try:
-            stream = await self.client.chat.completions.create(**payload)
-        except Exception as exc:
-            if self._strip_prompt_cache(payload):
-                self.logger.error(
-                    "azure chat.completions rejected prompt_cache params, retrying without them: %s",
-                    exc,
-                    exc_info=True,
-                )
-                stream = await self.client.chat.completions.create(**payload)
-            else:
-                raise
-
-        pending_tool_calls: dict[int, dict[str, str]] = {}
-        finish_reason: str | None = None
-        usage_sent = False
-        signaled_tool_calls = False
-        async for event in stream:
-            if event.choices:
-                choice = event.choices[0]
-                finish_reason = getattr(choice, "finish_reason", None) or finish_reason
-                delta = choice.delta
-                tool_deltas = getattr(delta, "tool_calls", None) or []
-                if tool_deltas and not signaled_tool_calls:
-                    signaled_tool_calls = True
-                    yield ChatStreamChunk(finish_reason="tool_calls")
-                content = getattr(delta, "content", None) if delta else None
-                reasoning_content = getattr(delta, "reasoning_content", None) if delta else None
-                if content or reasoning_content:
-                    yield ChatStreamChunk(content=content, reasoning_content=reasoning_content)
-                for call in tool_deltas:
-                    index = getattr(call, "index", 0) or 0
-                    entry = pending_tool_calls.setdefault(
-                        index, {"id": "", "name": "", "arguments": ""}
-                    )
-                    if call.id:
-                        entry["id"] = call.id
-                    function = getattr(call, "function", None)
-                    if function is not None:
-                        if function.name:
-                            entry["name"] = function.name
-                        if function.arguments:
-                            entry["arguments"] += function.arguments
-            if event.usage:
-                usage_sent = True
-                cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
-                prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens = (
-                    _coalesce_usage_tokens(event.usage)
-                )
-                if input_tokens == 0:
-                    input_tokens = max(prompt_tokens - (cached_tokens or 0), 0)
-                yield ChatStreamChunk(
-                    usage=ChatUsage(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=total_tokens,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens or completion_tokens,
-                        cached_tokens=cached_tokens or 0,
-                        thinking_tokens=thinking_tokens or 0,
-                    )
-                )
-
-        tool_calls: list[ChatToolCall] = []
-        for index in sorted(pending_tool_calls):
-            entry = pending_tool_calls[index]
-            arguments: dict = {}
-            if entry["arguments"]:
-                try:
-                    parsed_arguments = repair_json_loads(entry["arguments"])
-                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-                except Exception:
-                    arguments = {}
-            tool_calls.append(
-                ChatToolCall(
-                    id=entry["id"] or f"call_{index}",
-                    name=entry["name"],
-                    arguments=arguments,
-                )
-            )
-        if not usage_sent:
-            yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
-        yield ChatStreamChunk(
-            tool_calls=tool_calls or None,
-            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
-        )
+    @property
+    def _responses_client(self):
+        return self._azure_responses_client
 
 
 def _to_responses_input(messages: list[dict]) -> list[dict]:

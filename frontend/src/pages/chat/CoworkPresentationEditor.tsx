@@ -8,7 +8,7 @@ import { oneDark } from "@codemirror/theme-one-dark"
 
 import { Button } from "@/components/ui/button"
 import { getTheme, type ThemeMode } from "@/lib/theme"
-import { sanitizeMermaidChart } from "@/lib/sanitizeMermaid"
+import { prepareMermaidChart } from "@/lib/sanitizeMermaid"
 import { cn } from "@/lib/utils"
 import {
   resolveCoworkPresentationMarkdown,
@@ -281,7 +281,9 @@ const loadCoworkMermaid = async () => {
   return mermaid
 }
 
-const mermaidSourceFromCodeEl = (codeEl: HTMLElement): string | null => {
+const mermaidSourceFromCodeEl = async (
+  codeEl: HTMLElement
+): Promise<string | null> => {
   const langClass = [...codeEl.classList].find((name) => name.startsWith("language-"))
   const lang = (langClass?.slice("language-".length) || "").toLowerCase()
   if (!lang || !MERMAID_FENCE_LANGS.has(lang)) return null
@@ -299,7 +301,7 @@ const mermaidSourceFromCodeEl = (codeEl: HTMLElement): string | null => {
   if (!/%%\{\s*init\s*:/i.test(source)) {
     source = `%%{init: {'theme':'dark'}}%%\n${source}`
   }
-  return sanitizeMermaidChart(source)
+  return prepareMermaidChart(source)
 }
 
 const renderMermaidInRoot = async (root: ParentNode) => {
@@ -310,7 +312,7 @@ const renderMermaidInRoot = async (root: ParentNode) => {
 
   const mermaid = await loadCoworkMermaid()
   for (const codeEl of codeNodes) {
-    const source = mermaidSourceFromCodeEl(codeEl)
+    const source = await mermaidSourceFromCodeEl(codeEl)
     if (!source) continue
     const pre = codeEl.closest("pre")
     if (!pre) continue

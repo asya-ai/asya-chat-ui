@@ -112,10 +112,13 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
         content_text = source.content_text or ""
         agent_id = source.agent_id
         prior_metadata = dict(source.metadata_json or {})
+        summary = summarize_source_text(content_text)
         session.commit()
 
         pieces = chunk_text(content_text)
-        dense_vectors = _encode_documents(pieces) if pieces else None
+        # Drop the full-source string before embedding so peak RSS is chunks+batch,
+        # not source text + all vectors at once.
+        del content_text
 
         source = session.get(AgentSource, source_id)
         if not source:
@@ -134,8 +137,14 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
             created_chunks.append(chunk)
         session.flush()
 
-        if dense_vectors is not None:
-            for chunk, vector in zip(created_chunks, dense_vectors):
+        batch_size = max(1, int(settings.agent_embedding_batch_size or 16))
+        for start in range(0, len(created_chunks), batch_size):
+            batch_chunks = created_chunks[start : start + batch_size]
+            batch_texts = [chunk.content for chunk in batch_chunks]
+            dense_vectors = _encode_documents(batch_texts)
+            if dense_vectors is None:
+                continue
+            for chunk, vector in zip(batch_chunks, dense_vectors):
                 session.add(
                     AgentEmbedding(
                         chunk_id=chunk.id,
@@ -143,8 +152,10 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
                         embedding=vector.astype(np.float32).tolist(),
                     )
                 )
+            session.flush()
+            del dense_vectors
         metadata = prior_metadata
-        metadata["summary"] = summarize_source_text(content_text)
+        metadata["summary"] = summary
         source.metadata_json = metadata
         source.status = AgentSourceStatus.ready
         source.updated_at = datetime.utcnow()

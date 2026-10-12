@@ -31,7 +31,7 @@ from pydantic import BaseModel, ValidationError, field_validator, model_validato
 from sqlmodel import Session, select
 from PIL import ExifTags, Image
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import _resolve_user_from_token_claims, get_current_user, get_db
 from app.core.config import settings
 from app.core.security import decode_access_token_claims
 from app.db.session import engine
@@ -245,7 +245,26 @@ def _attachment_read(attachment: ChatMessageAttachment) -> "ChatMessageAttachmen
 def _chat_share_url(chat: Chat) -> str | None:
     if not chat.share_token:
         return None
-    return f"/chat/{chat.id}"
+    return f"/shared/{chat.share_token}"
+
+
+def _shared_chat_or_404(session: Session, share_token: str) -> Chat:
+    token = (share_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token"
+        )
+    chat = session.exec(
+        select(Chat)
+        .where(Chat.share_token == token)
+        .where(Chat.is_deleted.is_(False))
+        .where(Chat.is_incognito.is_(False))
+    ).first()
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=CHAT_NOT_SHARED_DETAIL
+        )
+    return chat
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
@@ -1875,29 +1894,7 @@ def _extract_ws_token(websocket: WebSocket) -> str | None:
 
 def _get_user_from_token(session: Session, token: str) -> User:
     claims = decode_access_token_claims(token)
-    subject = claims.get("sub")
-    if not subject:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    user_id = UUID(str(subject))
-    user = session.exec(select(User).where(User.id == user_id)).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
-        )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
-        )
-    token_version = claims.get("ver", 0)
-    if int(token_version) != int(user.token_version):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    return user
+    return _resolve_user_from_token_claims(session, claims)
 
 
 async def _ws_send_event(websocket: WebSocket, payload: dict) -> None:
@@ -2974,6 +2971,7 @@ class ChatRead(BaseModel):
     agent_id: str | None
     parent_chat_id: str | None = None
     is_shared: bool = False
+    share_token: str | None = None
     is_incognito: bool = False
     is_subagent: bool = False
     is_pinned: bool = False
@@ -2989,6 +2987,7 @@ def _chat_read(chat: Chat) -> ChatRead:
         agent_id=str(chat.agent_id) if chat.agent_id else None,
         parent_chat_id=str(chat.parent_chat_id) if chat.parent_chat_id else None,
         is_shared=bool(chat.share_token),
+        share_token=chat.share_token,
         is_incognito=bool(chat.is_incognito),
         is_subagent=bool(chat.is_subagent),
         is_pinned=bool(chat.is_pinned),
@@ -3006,6 +3005,7 @@ class ChatShareRead(BaseModel):
 
 class SharedChatResolveRead(BaseModel):
     chat_id: str
+    title: str | None = None
 
 
 class ChatMessageAttachmentCreate(BaseModel):
@@ -3091,6 +3091,7 @@ class ChatMessageCreateRequest(BaseModel):
     code_execution_enabled: bool | None = None
     locale: str | None = None
     timezone: str | None = None
+    page_context: dict | list | str | None = None
 
     @model_validator(mode="after")
     def _validate_attachments(self) -> "ChatMessageCreateRequest":
@@ -3102,7 +3103,33 @@ class ChatMessageCreateRequest(BaseModel):
             total_bytes += _base64_size_bytes(item.data_base64)
         if total_bytes > settings.attachments_max_total_bytes:
             raise ValueError("Total attachments size exceeded.")
+        if self.page_context is not None:
+            self.page_context = _normalize_page_context(self.page_context)
         return self
+
+
+PAGE_CONTEXT_MAX_BYTES = 16 * 1024
+
+
+def _normalize_page_context(value: dict | list | str) -> dict | list | str:
+    import json
+
+    if isinstance(value, str):
+        encoded = value.encode("utf-8")
+        if len(encoded) > PAGE_CONTEXT_MAX_BYTES:
+            raise ValueError(
+                f"page_context exceeds {PAGE_CONTEXT_MAX_BYTES} bytes"
+            )
+        return value
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("page_context must be JSON-serializable") from exc
+    if len(encoded) > PAGE_CONTEXT_MAX_BYTES:
+        raise ValueError(f"page_context exceeds {PAGE_CONTEXT_MAX_BYTES} bytes")
+    return value
 
 
 class MessageUsageRead(BaseModel):
@@ -3304,6 +3331,8 @@ class ChatMessageRead(BaseModel):
     role: str
     content: str
     created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     model_id: str | None = None
     model_name: str | None = None
     attachments: list[ChatMessageAttachmentRead] | None = None
@@ -3516,6 +3545,7 @@ async def _stream_message_ws(
         chat_id=chat.id,
         role="user",
         content=payload.content,
+        page_context=payload.page_context,
         status="done",
     )
     session.add(user_message)
@@ -4002,52 +4032,10 @@ def get_chat(
     return _chat_read(chat)
 
 
-@router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
-def list_messages(
-    chat_id: str,
-    session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> list[ChatMessageRead]:
-    try:
-        chat_uuid = UUID(chat_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
-        ) from exc
-
-    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
-    if not chat or chat.is_deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    is_owner = chat.user_id == current_user.id
-    if not is_owner:
-        # Shared chats are reachable via the normal /chat/{id} link while share_token is set.
-        if not (chat.share_token or "").strip():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=CHAT_NOT_SHARED_DETAIL,
-            )
-        viewer_label = _viewer_label(current_user)
-        session.add(
-            ChatViewEvent(
-                chat_id=chat.id,
-                viewer_user_id=current_user.id,
-                viewer_label=viewer_label,
-            )
-        )
-        session.commit()
-    else:
-        org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
-        if not org:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
-            )
-        require_org_member(
-            session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
-        )
-
+def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRead"]:
     messages = session.exec(
         select(ChatMessage)
-        .where(ChatMessage.chat_id == chat_uuid)
+        .where(ChatMessage.chat_id == chat.id)
         .where(ChatMessage.is_current.is_(True))
         .order_by(ChatMessage.created_at)
     ).all()
@@ -4123,6 +4111,19 @@ def list_messages(
         usage_by_message = build_message_usage_map(
             session, [message.id for message in messages]
         )
+        # Timing for assistant messages with no token rows yet (still show Thought for).
+        timing_only: dict[UUID, MessageUsageRead] = {}
+        for message in messages:
+            if message.role != "assistant":
+                continue
+            if message.id in usage_by_message:
+                continue
+            if message.id not in task_map:
+                continue
+            timing_only[message.id] = MessageUsageRead()
+        if timing_only:
+            _attach_generation_timing(session, timing_only)
+            usage_by_message.update(timing_only)
 
     results: list[ChatMessageRead] = []
     for message in messages:
@@ -4137,22 +4138,25 @@ def list_messages(
                     message_content=message.content or "",
                     message_attachments=message_attachments,
                 )
+        task = task_map.get(message.id)
         results.append(
             ChatMessageRead(
                 id=str(message.id),
                 role=message.role,
                 content=message.content,
                 created_at=message.created_at,
+                started_at=message.started_at
+                or (task.started_at if task is not None else None),
+                completed_at=message.completed_at
+                or (task.completed_at if task is not None else None),
                 model_id=str(message.model_id) if message.model_id else None,
                 model_name=model_map.get(message.model_id),
                 attachments=message_attachments,
                 sources=message.sources,
                 thinking_steps=thinking_steps or None,
                 stream_parts=stream_parts,
-                task_id=str(task_map[message.id].id) if message.id in task_map else None,
-                generation_status=task_map[message.id].status.value
-                if message.id in task_map
-                else None,
+                task_id=str(task.id) if task is not None else None,
+                generation_status=task.status.value if task is not None else None,
                 usage=usage_by_message.get(message.id),
             )
         )
@@ -4166,7 +4170,11 @@ def list_messages(
             for event in raw_events:
                 payload = event.payload_json if isinstance(event.payload_json, dict) else None
                 tool_event_id = payload.get("id") if isinstance(payload, dict) else None
-                key = str(tool_event_id) if isinstance(tool_event_id, str) and tool_event_id else str(event.id)
+                key = (
+                    str(tool_event_id)
+                    if isinstance(tool_event_id, str) and tool_event_id
+                    else str(event.id)
+                )
                 deduped[key] = event
             for event in sorted(deduped.values(), key=lambda item: item.sequence):
                 payload = event.payload_json if isinstance(event.payload_json, dict) else None
@@ -4179,7 +4187,9 @@ def list_messages(
                         content="",
                         created_at=event.created_at,
                         tool_event=payload,
-                        task_id=str(task_map[message.id].id) if message.id in task_map else None,
+                        task_id=str(task_map[message.id].id)
+                        if message.id in task_map
+                        else None,
                     )
                 )
     for event in view_events:
@@ -4202,6 +4212,52 @@ def list_messages(
             )
         )
     return sorted(results, key=lambda item: item.created_at)
+
+
+@router.get("/{chat_id}/messages", response_model=list[ChatMessageRead])
+def list_messages(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ChatMessageRead]:
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    is_owner = chat.user_id == current_user.id
+    if not is_owner:
+        # Shared chats are reachable via the normal /chat/{id} link while share_token is set.
+        if not (chat.share_token or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=CHAT_NOT_SHARED_DETAIL,
+            )
+        viewer_label = _viewer_label(current_user)
+        session.add(
+            ChatViewEvent(
+                chat_id=chat.id,
+                viewer_user_id=current_user.id,
+                viewer_label=viewer_label,
+            )
+        )
+        session.commit()
+    else:
+        org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
+        if not org:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+            )
+        require_org_member(
+            session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+        )
+
+    return _message_reads_for_chat(session, chat)
 
 
 @router.get("/attachments/{attachment_id}/content")
@@ -4834,22 +4890,25 @@ def resolve_shared_chat(
     share_token: str,
     session: Session = Depends(get_db),
 ) -> SharedChatResolveRead:
-    token = (share_token or "").strip()
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token"
+    chat = _shared_chat_or_404(session, share_token)
+    return SharedChatResolveRead(chat_id=str(chat.id), title=chat.title)
+
+
+@router.get("/shared/{share_token}/messages", response_model=list[ChatMessageRead])
+def list_shared_messages(
+    share_token: str,
+    session: Session = Depends(get_db),
+) -> list[ChatMessageRead]:
+    chat = _shared_chat_or_404(session, share_token)
+    session.add(
+        ChatViewEvent(
+            chat_id=chat.id,
+            viewer_user_id=None,
+            viewer_label=_viewer_label(None),
         )
-    chat = session.exec(
-        select(Chat)
-        .where(Chat.share_token == token)
-        .where(Chat.is_deleted.is_(False))
-        .where(Chat.is_incognito.is_(False))
-    ).first()
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=CHAT_NOT_SHARED_DETAIL
-        )
-    return SharedChatResolveRead(chat_id=str(chat.id))
+    )
+    session.commit()
+    return _message_reads_for_chat(session, chat)
 
 
 @router.post("/{chat_id}/share", response_model=ChatShareRead)
@@ -4890,6 +4949,7 @@ def share_chat(
     return ChatShareRead(
         chat_id=str(chat.id),
         is_shared=True,
+        share_token=chat.share_token,
         share_url=_chat_share_url(chat),
     )
 
@@ -4980,6 +5040,7 @@ async def create_message(
         chat_id=chat.id,
         role="user",
         content=payload.content,
+        page_context=payload.page_context,
         status="done",
     )
     session.add(user_message)
@@ -5061,6 +5122,8 @@ async def create_message(
             role=assistant_message.role,
             content=assistant_message.content,
             created_at=assistant_message.created_at,
+            started_at=assistant_message.started_at or task.started_at,
+            completed_at=assistant_message.completed_at or task.completed_at,
             model_id=str(model.id),
             model_name=model.display_name,
             task_id=str(task.id),
@@ -5109,7 +5172,8 @@ async def create_message(
             if not msg_attachments:
                 items.append(
                     provider_chat_message(
-                        msg.role, msg.content, created_at=msg.created_at
+                        msg.role, msg.content, created_at=msg.created_at,
+                        page_context=msg.page_context,
                     )
                 )
                 continue
@@ -5136,7 +5200,7 @@ async def create_message(
                         + "\n".join(attachment_lines)
                     )
                 items.append(
-                    provider_chat_message(msg.role, text, created_at=msg.created_at)
+                    provider_chat_message(msg.role, text, created_at=msg.created_at, page_context=msg.page_context)
                 )
                 continue
             content_parts: list[dict] = []
@@ -5161,7 +5225,8 @@ async def create_message(
                 )
             items.append(
                 provider_chat_message(
-                    msg.role, content_parts, created_at=msg.created_at
+                    msg.role, content_parts, created_at=msg.created_at,
+                    page_context=msg.page_context,
                 )
             )
         return items
@@ -5962,7 +6027,8 @@ async def edit_message(
             if not msg_attachments:
                 items.append(
                     provider_chat_message(
-                        msg.role, msg.content, created_at=msg.created_at
+                        msg.role, msg.content, created_at=msg.created_at,
+                        page_context=msg.page_context,
                     )
                 )
                 continue
@@ -5989,7 +6055,7 @@ async def edit_message(
                         + "\n".join(attachment_lines)
                     )
                 items.append(
-                    provider_chat_message(msg.role, text, created_at=msg.created_at)
+                    provider_chat_message(msg.role, text, created_at=msg.created_at, page_context=msg.page_context)
                 )
                 continue
             content_parts: list[dict] = []
@@ -6014,7 +6080,8 @@ async def edit_message(
                 )
             items.append(
                 provider_chat_message(
-                    msg.role, content_parts, created_at=msg.created_at
+                    msg.role, content_parts, created_at=msg.created_at,
+                    page_context=msg.page_context,
                 )
             )
         return items

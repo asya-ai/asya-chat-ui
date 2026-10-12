@@ -198,3 +198,48 @@ export const sanitizeMermaidChart = (body: string): string => {
     })
     .join(eol)
 }
+
+type MaidModule = typeof import("@probelabs/maid")
+
+let maidModulePromise: Promise<MaidModule> | null = null
+
+const loadMaid = (): Promise<MaidModule> => {
+  if (!maidModulePromise) {
+    maidModulePromise = import("@probelabs/maid")
+  }
+  return maidModulePromise
+}
+
+/** Maid autofix for LLM syntax, then our Mermaid-specific sanitize. Falls back to sanitize-only. */
+export const prepareMermaidChart = async (body: string): Promise<string> => {
+  let fixed = body
+  try {
+    const { fixText } = await loadMaid()
+    const result = fixText(body, { level: "all" })
+    if (typeof result.fixed === "string" && result.fixed.length > 0) {
+      fixed = result.fixed
+    }
+  } catch {
+    // Keep going with sanitize-only.
+  }
+  return sanitizeMermaidChart(fixed)
+}
+
+/** Human-readable Maid validation errors for a chart body, or null if none / Maid unavailable. */
+export const diagnoseMermaidChart = async (body: string): Promise<string | null> => {
+  try {
+    const { validate } = await loadMaid()
+    const { errors } = validate(body)
+    const msgs = errors.filter((e) => e.severity === "error")
+    if (msgs.length === 0) return null
+    return msgs
+      .map((e) => {
+        const loc = e.line != null ? `L${e.line}: ` : ""
+        const hint = e.hint ? ` (${e.hint})` : ""
+        return `${loc}${e.message}${hint}`
+      })
+      .join("\n")
+  } catch {
+    return null
+  }
+}

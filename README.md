@@ -140,6 +140,7 @@ cp .env.example .env
 - execution limits (`EXEC_*`) and attachment limits
 - `WORKER_REPLICAS` to scale Celery workers
 - `WORKER_CONCURRENCY` for per-worker Celery concurrency (default: 2)
+- `CELERY_MAX_TASKS_PER_CHILD` / `CELERY_MAX_MEMORY_PER_CHILD_KB` to recycle leaky prefork children
 
 ## Running with Docker Compose
 
