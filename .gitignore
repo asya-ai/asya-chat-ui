@@ -17,6 +17,8 @@ data
 .continue
 scraper/.cache
 
-# graft's local graph cache — regenerable, not committed (run `graft build`).
-graft/
 .cursor
+.tmp
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
