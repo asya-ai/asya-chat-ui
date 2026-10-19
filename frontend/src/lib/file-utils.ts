@@ -1,5 +1,13 @@
 import type { ChatMessageAttachmentInput } from "@/lib/types"
 
+const APPLE_IMAGE_EXT = /\.(heic|heif|heics)$/i
+
+const inferContentType = (file: File): string => {
+  if (file.type) return file.type
+  if (APPLE_IMAGE_EXT.test(file.name || "")) return "image/heic"
+  return "application/octet-stream"
+}
+
 const readFileAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -17,7 +25,7 @@ const toAttachment = async (
   if (!base64) return null
   return {
     file_name: file.name || fallbackName,
-    content_type: file.type || "application/octet-stream",
+    content_type: inferContentType(file),
     data_base64: base64,
   }
 }
@@ -28,7 +36,7 @@ export const filesToPendingAttachments = (
   fallbackName = "attachment"
 ): ChatMessageAttachmentInput[] =>
   files.map((file) => {
-    const contentType = file.type || "application/octet-stream"
+    const contentType = inferContentType(file)
     const isImage = contentType.startsWith("image/")
     return {
       local_id: crypto.randomUUID(),

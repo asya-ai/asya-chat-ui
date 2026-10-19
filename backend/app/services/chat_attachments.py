@@ -14,6 +14,7 @@ from app.services.file_storage import (
     attachment_size_bytes,
     store_chat_attachment_bytes,
 )
+from app.services.image_normalize import normalize_image_attachment
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,9 @@ def persist_attachment_bytes(
     content_type: str,
     data: bytes,
 ) -> ChatMessageAttachment:
+    file_name, content_type, data = normalize_image_attachment(
+        file_name, content_type, data
+    )
     attachment = ChatMessageAttachment(
         message_id=message_id,
         file_name=file_name,

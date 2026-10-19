@@ -23,6 +23,7 @@ dependencies = [
     "numpy>=2.5.2",
     "passlib>=1.7.4",
     "pillow>=12.3.0",
+    "pillow-heif>=1.1.0",
     "pydantic>=2.13.5",
     "pypdf>=6.16.1",
     "psycopg[binary]>=3.3.5",

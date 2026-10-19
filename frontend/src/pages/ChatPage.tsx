@@ -2439,6 +2439,8 @@ export const ChatPage = () => {
           if (localId) {
             patchPendingAttachment(localId, {
               upload_id: created.id,
+              file_name: created.file_name,
+              content_type: created.content_type,
               upload_status: "ready",
               upload_progress: 1,
               file: undefined,

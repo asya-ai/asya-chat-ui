@@ -59,6 +59,7 @@ from app.services.file_storage import (
     file_size,
     store_chat_upload_bytes,
 )
+from app.services.image_normalize import normalize_image_attachment
 from app.services.chat_attachments import (
     ResolvedAttachmentPayload,
     copy_message_attachments,
@@ -4342,6 +4343,14 @@ async def upload_chat_attachment(
     content_type = (file.content_type or "application/octet-stream").strip() or (
         "application/octet-stream"
     )
+    file_name, content_type, raw = normalize_image_attachment(
+        file_name, content_type, raw
+    )
+    if len(raw) > settings.attachments_max_file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Attachment exceeds maximum size.",
+        )
     upload = ChatUpload(
         chat_id=chat.id,
         user_id=current_user.id,
