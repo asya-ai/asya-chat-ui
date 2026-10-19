@@ -67,7 +67,13 @@ def encode_oauth_state(
     org_id: UUID,
     catalog_id: str,
     redirect_base: str,
+    catalog_ids: list[str] | None = None,
 ) -> str:
+    ids = [str(x) for x in (catalog_ids or [catalog_id]) if str(x).strip()]
+    if not ids:
+        ids = [catalog_id]
+    if catalog_id not in ids:
+        ids = [catalog_id, *ids]
     return create_access_token(
         str(user_id),
         expires_minutes=15,
@@ -75,6 +81,7 @@ def encode_oauth_state(
             "purpose": _OAUTH_STATE_PURPOSE,
             "org_id": str(org_id),
             "catalog_id": catalog_id,
+            "catalog_ids": ids,
             "redirect_base": redirect_base.rstrip("/"),
         },
     )
@@ -90,12 +97,33 @@ def decode_oauth_state(state: str) -> dict[str, Any]:
     redirect_base = claims.get("redirect_base")
     if not user_id or not org_id or not catalog_id or not redirect_base:
         raise ValueError("Invalid OAuth state")
+    raw_ids = claims.get("catalog_ids")
+    if isinstance(raw_ids, list) and raw_ids:
+        catalog_ids = [str(x) for x in raw_ids if str(x).strip()]
+    else:
+        catalog_ids = [str(catalog_id)]
+    if str(catalog_id) not in catalog_ids:
+        catalog_ids = [str(catalog_id), *catalog_ids]
     return {
         "user_id": UUID(str(user_id)),
         "org_id": UUID(str(org_id)),
         "catalog_id": str(catalog_id),
+        "catalog_ids": catalog_ids,
         "redirect_base": str(redirect_base).rstrip("/"),
     }
+
+
+def union_oauth_scopes(entries: list[CatalogIntegration]) -> list[str]:
+    """Deduped scopes across catalog cards (order preserved)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in entries:
+        for scope in entry.oauth_scopes:
+            if scope in seen:
+                continue
+            seen.add(scope)
+            out.append(scope)
+    return out
 
 
 def build_authorize_url(
@@ -104,14 +132,17 @@ def build_authorize_url(
     entry: CatalogIntegration,
     org_id: UUID,
     state: str,
+    scopes: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     if not entry.oauth_provider_id:
         raise ValueError("Integration does not use OAuth")
     provider, cfg = resolve_provider_config(
         session, provider_id=entry.oauth_provider_id, org_id=org_id
     )
-    scopes = list(entry.oauth_scopes) or list(provider.default_scopes)
-    return provider.authorize_url(cfg, state=state, scopes=scopes)
+    resolved = list(scopes) if scopes else list(entry.oauth_scopes)
+    if not resolved:
+        resolved = list(provider.default_scopes)
+    return provider.authorize_url(cfg, state=state, scopes=resolved)
 
 
 def exchange_authorization_code(
@@ -119,6 +150,7 @@ def exchange_authorization_code(
     config: dict[str, Any],
     *,
     code: str,
+    scopes: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     token_url = provider.token_url(config)
     data = {
@@ -128,6 +160,8 @@ def exchange_authorization_code(
         "redirect_uri": str(config.get("redirect_uri") or "").strip(),
         "grant_type": "authorization_code",
     }
+    if scopes:
+        data["scope"] = " ".join(scopes)
     with httpx.Client(timeout=15) as client:
         response = client.post(token_url, data=data)
         if response.status_code >= 400:
@@ -148,6 +182,7 @@ def refresh_oauth_tokens(
     config: dict[str, Any],
     *,
     refresh_token: str,
+    scopes: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     token_url = provider.token_url(config)
     data = {
@@ -156,6 +191,8 @@ def refresh_oauth_tokens(
         "refresh_token": refresh_token.strip(),
         "grant_type": "refresh_token",
     }
+    if scopes:
+        data["scope"] = " ".join(scopes)
     with httpx.Client(timeout=15) as client:
         response = client.post(token_url, data=data)
         if response.status_code >= 400:
@@ -224,8 +261,20 @@ def refresh_user_connection_tokens(
         provider, cfg = resolve_provider_config(
             session, provider_id=provider_id, org_id=org_id
         )
+        scope_raw = data.get("scope")
+        scopes: list[str] | None = None
+        if isinstance(scope_raw, str) and scope_raw.strip():
+            scopes = scope_raw.split()
+        catalog_id = str(data.get("catalog_id") or "").strip()
+        if not scopes and catalog_id:
+            entry = get_catalog(catalog_id)
+            if entry and entry.oauth_scopes:
+                scopes = list(entry.oauth_scopes)
         payload = refresh_oauth_tokens(
-            provider, cfg, refresh_token=str(data["refresh_token"])
+            provider,
+            cfg,
+            refresh_token=str(data["refresh_token"]),
+            scopes=scopes,
         )
     except ValueError:
         logger.warning("Failed to refresh OAuth token for provider %s", provider_id)

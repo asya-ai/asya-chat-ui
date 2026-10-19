@@ -5,13 +5,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.services.integrations.graph_mcp_embed import (
+    EMBEDDED_GRAPH_MCP_URL,
+    embedded_graph_mcp_url,
+)
 
 ConnectKind = Literal["bearer_api_key", "oauth"]
 
-_MS_BASE_SCOPES = ("openid", "profile", "offline_access")
 _GRAPH = "https://graph.microsoft.com"
-# In-compose Microsoft Graph MCP (ms-graph-mcp). Override per install in admin UI.
-DEFAULT_GRAPH_MCP_URL = "http://msgraph-mcp:8094/mcp"
+# User.Read is required by people_get_my_profile and most Graph /me calls.
+_MS_BASE_SCOPES = (
+    "openid",
+    "profile",
+    "offline_access",
+    f"{_GRAPH}/User.Read",
+)
+# Embedded Graph MCP (mounted on the ChatUI API). See graph_mcp_embed.py.
+# Matches settings default; resolve_catalog_mcp_url reads live GRAPH_MCP_EMBED_URL.
+DEFAULT_GRAPH_MCP_URL = EMBEDDED_GRAPH_MCP_URL
+
 # Narrow tools advertised by the shared Graph MCP per catalog card.
 _GRAPH_MCP_TOOLSETS: dict[str, str] = {
     "outlook": "mail",
@@ -63,17 +75,6 @@ class CatalogIntegration:
         return self.mcp_slug or f"catalog-{self.catalog_id}"
 
 
-def _ms_mcp_fields() -> tuple[AdminConfigField, ...]:
-    return (
-        AdminConfigField(
-            key="mcp_url",
-            label="MCP URL",
-            placeholder=DEFAULT_GRAPH_MCP_URL,
-            default=DEFAULT_GRAPH_MCP_URL,
-        ),
-    )
-
-
 def _ms_scopes(*graph_scopes: str) -> tuple[str, ...]:
     return (*_MS_BASE_SCOPES, *(f"{_GRAPH}/{scope}" for scope in graph_scopes))
 
@@ -89,6 +90,18 @@ def graph_mcp_request_headers(catalog_id: str) -> dict[str, str]:
 
 def is_microsoft_catalog(catalog_id: str | None) -> bool:
     return bool(catalog_id) and catalog_id in _GRAPH_MCP_TOOLSETS
+
+
+def resolve_catalog_mcp_url(
+    entry: CatalogIntegration, config: dict[str, Any]
+) -> str | None:
+    """Effective MCP URL for a catalog entry (embedded for Microsoft apps)."""
+    if is_microsoft_catalog(entry.catalog_id):
+        return embedded_graph_mcp_url()
+    if not entry.mcp.url_from:
+        return None
+    url = str(config.get(entry.mcp.url_from) or "").strip()
+    return url or None
 
 
 PITCHPATTERNS = CatalogIntegration(
@@ -116,6 +129,8 @@ PITCHPATTERNS = CatalogIntegration(
     icon_key="pitchpatterns",
 )
 
+_MS_MCP = CatalogMcpBinding(transport="http", url_from=None)
+
 OUTLOOK = CatalogIntegration(
     catalog_id="outlook",
     name="Outlook Mail",
@@ -123,8 +138,8 @@ OUTLOOK = CatalogIntegration(
     connect_kind="oauth",
     oauth_provider_id="microsoft",
     oauth_scopes=_ms_scopes("Mail.Read", "Mail.ReadWrite", "Mail.Send"),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
+    admin_config_fields=(),
+    mcp=_MS_MCP,
     user_instructions="Sign in with Microsoft",
     icon_key="outlook",
 )
@@ -136,8 +151,8 @@ OUTLOOK_CALENDAR = CatalogIntegration(
     connect_kind="oauth",
     oauth_provider_id="microsoft",
     oauth_scopes=_ms_scopes("Calendars.ReadWrite"),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
+    admin_config_fields=(),
+    mcp=_MS_MCP,
     user_instructions="Sign in with Microsoft",
     icon_key="outlook_calendar",
 )
@@ -148,9 +163,9 @@ OUTLOOK_CONTACTS = CatalogIntegration(
     description="People and contacts",
     connect_kind="oauth",
     oauth_provider_id="microsoft",
-    oauth_scopes=_ms_scopes("Contacts.Read"),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
+    oauth_scopes=_ms_scopes("Contacts.Read", "People.Read"),
+    admin_config_fields=(),
+    mcp=_MS_MCP,
     user_instructions="Sign in with Microsoft",
     icon_key="outlook_contacts",
 )
@@ -162,8 +177,8 @@ ONEDRIVE = CatalogIntegration(
     connect_kind="oauth",
     oauth_provider_id="microsoft",
     oauth_scopes=_ms_scopes("Files.ReadWrite"),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
+    admin_config_fields=(),
+    mcp=_MS_MCP,
     user_instructions="Sign in with Microsoft",
     icon_key="onedrive",
 )
@@ -175,8 +190,8 @@ SHAREPOINT = CatalogIntegration(
     connect_kind="oauth",
     oauth_provider_id="microsoft",
     oauth_scopes=_ms_scopes("Sites.Read.All", "Files.ReadWrite.All"),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
+    admin_config_fields=(),
+    mcp=_MS_MCP,
     user_instructions="Sign in with Microsoft",
     icon_key="sharepoint",
 )
@@ -184,17 +199,18 @@ SHAREPOINT = CatalogIntegration(
 TEAMS = CatalogIntegration(
     catalog_id="teams",
     name="Microsoft Teams",
-    description="Chats and channels",
+    description="Work/school chats and channels",
     connect_kind="oauth",
     oauth_provider_id="microsoft",
     oauth_scopes=_ms_scopes(
+        "Chat.Read",
         "Chat.ReadWrite",
         "ChannelMessage.Read.All",
         "Team.ReadBasic.All",
     ),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
-    user_instructions="Sign in with Microsoft",
+    admin_config_fields=(),
+    mcp=_MS_MCP,
+    user_instructions="Work or school Microsoft 365 account",
     icon_key="teams",
 )
 
@@ -205,8 +221,8 @@ TODO = CatalogIntegration(
     connect_kind="oauth",
     oauth_provider_id="microsoft",
     oauth_scopes=_ms_scopes("Tasks.ReadWrite"),
-    admin_config_fields=_ms_mcp_fields(),
-    mcp=CatalogMcpBinding(transport="http", url_from="mcp_url"),
+    admin_config_fields=(),
+    mcp=_MS_MCP,
     user_instructions="Sign in with Microsoft",
     icon_key="todo",
 )

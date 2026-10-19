@@ -165,7 +165,10 @@ const resolveTotalTimeMs = (
 
 const parseTimestampMs = (value?: string | null): number | null => {
   if (!value) return null
-  const ms = Date.parse(value)
+  const trimmed = value.trim()
+  // Backend stores naive UTC (`datetime.utcnow`); Date.parse treats bare ISO as local.
+  const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed)
+  const ms = Date.parse(hasTz ? trimmed : `${trimmed}Z`)
   return Number.isFinite(ms) ? ms : null
 }
 

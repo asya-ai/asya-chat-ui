@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
-import { Settings2 } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Info, Settings2 } from "lucide-react"
 
 import { SettingsShell } from "@/components/SettingsShell"
 import { SettingsPage, SettingsPageHeader } from "@/components/settings/SettingsPanel"
@@ -103,6 +103,26 @@ export const IntegrationsPage = () => {
   const [oauthProviderDrafts, setOauthProviderDrafts] = useState<
     Record<string, Record<string, string>>
   >({})
+  const [entraSetupOpen, setEntraSetupOpen] = useState(false)
+
+  const microsoftGraphPermissions = useMemo(() => {
+    const scopes = new Set<string>()
+    for (const app of catalogApps) {
+      if (app.oauth_provider_id !== "microsoft") continue
+      for (const scope of app.oauth_scopes ?? []) {
+        const name = scope.includes("/") ? scope.split("/").pop() : scope
+        if (
+          name &&
+          name !== "openid" &&
+          name !== "profile" &&
+          name !== "offline_access"
+        ) {
+          scopes.add(name)
+        }
+      }
+    }
+    return [...scopes].sort((a, b) => a.localeCompare(b))
+  }, [catalogApps])
 
   const canManageOrg = isSuperAdmin || isAdmin
   // Instance catalog setup (MCP URL, embed origins, offer) — not for org managers/members.
@@ -147,11 +167,10 @@ export const IntegrationsPage = () => {
           setCatalogUrlDrafts((prev) => {
             const next = { ...prev }
             for (const app of apps) {
+              const mcpField = app.admin_config_fields.find((f) => f.key === "mcp_url")
+              if (!mcpField) continue
               if (next[app.catalog_id] == null) {
-                next[app.catalog_id] =
-                  app.effective_mcp_url ??
-                  app.admin_config_fields.find((f) => f.key === "mcp_url")?.default ??
-                  ""
+                next[app.catalog_id] = app.effective_mcp_url ?? mcpField.default ?? ""
               }
             }
             return next
@@ -159,6 +178,7 @@ export const IntegrationsPage = () => {
           setCatalogOriginsDrafts((prev) => {
             const next = { ...prev }
             for (const app of apps) {
+              if (app.catalog_id !== "pitchpatterns") continue
               if (next[app.catalog_id] == null) {
                 next[app.catalog_id] = app.allowed_embed_origins ?? ""
               }
@@ -182,11 +202,9 @@ export const IntegrationsPage = () => {
                 if (next[provider.provider_id]) continue
                 const draft: Record<string, string> = {}
                 for (const field of provider.fields) {
+                  if (field.readonly || field.key === "redirect_uri") continue
                   const existing = provider.values?.[field.key]
-                  draft[field.key] =
-                    typeof existing === "string" ? existing : field.key === "redirect_uri"
-                      ? oauthCallbackUrl
-                      : ""
+                  draft[field.key] = typeof existing === "string" ? existing : ""
                 }
                 next[provider.provider_id] = draft
               }
@@ -475,13 +493,35 @@ export const IntegrationsPage = () => {
     }
   }
 
+  const connectAllMicrosoftOAuth = async () => {
+    if (!selectedOrgId) return
+    setError(null)
+    try {
+      const { authorize_url } = await integrationsApi.oauthStartProvider(
+        "microsoft",
+        selectedOrgId
+      )
+      window.location.assign(authorize_url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
   const saveOauthProvider = async (provider: OAuthProviderConfig) => {
     const draft = oauthProviderDrafts[provider.provider_id] ?? {}
     setError(null)
     try {
+      const values: Record<string, string> = { ...draft }
+      // Callback URL is fixed; never take a hand-edited value.
+      if (provider.fields.some((f) => f.key === "redirect_uri")) {
+        values.redirect_uri = oauthCallbackUrl
+      }
+      if (provider.provider_id === "microsoft" && !values.tenant_id?.trim()) {
+        values.tenant_id = "common"
+      }
       await integrationsApi.upsertInstanceProvider(provider.provider_id, {
         is_enabled: true,
-        values: draft,
+        values,
       })
       await loadAll()
     } catch (err) {
@@ -637,6 +677,14 @@ export const IntegrationsPage = () => {
     ? catalogApps
     : catalogApps.filter((app) => app.installable || app.connected)
   const showCatalogSection = canConfigureCatalogApps || visibleCatalogApps.length > 0
+  const microsoftConnectable = visibleCatalogApps.filter(
+    (app) =>
+      app.oauth_provider_id === "microsoft" &&
+      app.connect_kind === "oauth" &&
+      app.installable
+  )
+  const showMicrosoftConnectAll =
+    Boolean(selectedOrgId) && microsoftConnectable.length > 1
 
   return (
     <SettingsShell title={t("integrations_title")}>
@@ -652,26 +700,36 @@ export const IntegrationsPage = () => {
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-lg font-medium">{t("integrations_apps")}</h2>
-              {(orgs.length > 1 || isSuperAdmin) && selectedOrgId ? (
-                <Select
-                  value={selectedOrgId}
-                  onValueChange={(value) => {
-                    setSelectedOrgId(value)
-                    orgStore.set(value)
-                  }}
-                >
-                  <SelectTrigger className="w-56">
-                    <SelectValue placeholder={t("org_select_placeholder")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {orgs.map((org) => (
-                      <SelectItem key={org.id} value={org.id}>
-                        {org.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                {showMicrosoftConnectAll ? (
+                  <Button
+                    size="sm"
+                    onClick={() => void connectAllMicrosoftOAuth()}
+                  >
+                    {t("integrations_connect_all_microsoft")}
+                  </Button>
+                ) : null}
+                {(orgs.length > 1 || isSuperAdmin) && selectedOrgId ? (
+                  <Select
+                    value={selectedOrgId}
+                    onValueChange={(value) => {
+                      setSelectedOrgId(value)
+                      orgStore.set(value)
+                    }}
+                  >
+                    <SelectTrigger className="w-56">
+                      <SelectValue placeholder={t("org_select_placeholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {orgs.map((org) => (
+                        <SelectItem key={org.id} value={org.id}>
+                          {org.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
+              </div>
             </div>
             {visibleCatalogApps.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("integrations_apps_empty")}</p>
@@ -796,9 +854,6 @@ export const IntegrationsPage = () => {
           <section className="space-y-4">
             <div>
               <h2 className="text-lg font-medium">{t("integrations_oauth_providers")}</h2>
-              <p className="text-sm text-muted-foreground">
-                {t("integrations_oauth_providers_hint")}
-              </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               {oauthProviders.map((provider) => {
@@ -806,42 +861,78 @@ export const IntegrationsPage = () => {
                 return (
                   <Card key={provider.provider_id} className="gap-4 py-5">
                     <CardHeader className="pb-0">
-                      <CardTitle className="font-sans text-base font-medium leading-5">
-                        {provider.name}
-                      </CardTitle>
+                      <div className="flex items-start justify-between gap-2">
+                        <CardTitle className="font-sans text-base font-medium leading-5">
+                          {provider.name}
+                        </CardTitle>
+                        {provider.provider_id === "microsoft" ? (
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={t("integrations_entra_setup")}
+                            onClick={() => setEntraSetupOpen(true)}
+                          >
+                            <Info />
+                          </Button>
+                        ) : null}
+                      </div>
                       <CardDescription className="text-sm">
                         {provider.description}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                      {provider.fields.map((field) => (
-                        <div key={field.key} className="space-y-1.5">
-                          <p className="text-sm font-medium">{field.label}</p>
-                          <Input
-                            type={field.secret ? "password" : "text"}
-                            placeholder={
-                              field.secret &&
-                              Boolean(
-                                (provider as Record<string, unknown>)[`${field.key}_set`]
-                              )
-                                ? t("org_provider_override_set")
-                                : field.key === "redirect_uri"
-                                  ? oauthCallbackUrl
+                      {provider.fields.map((field) => {
+                        if (field.readonly || field.key === "redirect_uri") {
+                          return (
+                            <div key={field.key} className="space-y-1.5">
+                              <p className="text-sm font-medium">{field.label}</p>
+                              <div className="flex flex-wrap gap-2">
+                                <Input
+                                  readOnly
+                                  className="min-w-0 flex-1 font-mono text-xs"
+                                  value={oauthCallbackUrl}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    void navigator.clipboard.writeText(oauthCallbackUrl)
+                                  }}
+                                >
+                                  {t("integrations_embed_copy")}
+                                </Button>
+                              </div>
+                            </div>
+                          )
+                        }
+                        return (
+                          <div key={field.key} className="space-y-1.5">
+                            <p className="text-sm font-medium">{field.label}</p>
+                            <Input
+                              type={field.secret ? "password" : "text"}
+                              placeholder={
+                                field.secret &&
+                                Boolean(
+                                  (provider as Record<string, unknown>)[`${field.key}_set`]
+                                )
+                                  ? t("org_provider_override_set")
                                   : field.placeholder ?? ""
-                            }
-                            value={draft[field.key] ?? ""}
-                            onChange={(e) =>
-                              setOauthProviderDrafts((prev) => ({
-                                ...prev,
-                                [provider.provider_id]: {
-                                  ...(prev[provider.provider_id] ?? {}),
-                                  [field.key]: e.target.value,
-                                },
-                              }))
-                            }
-                          />
-                        </div>
-                      ))}
+                              }
+                              value={draft[field.key] ?? ""}
+                              onChange={(e) =>
+                                setOauthProviderDrafts((prev) => ({
+                                  ...prev,
+                                  [provider.provider_id]: {
+                                    ...(prev[provider.provider_id] ?? {}),
+                                    [field.key]: e.target.value,
+                                  },
+                                }))
+                              }
+                            />
+                          </div>
+                        )
+                      })}
                       <Button size="sm" onClick={() => void saveOauthProvider(provider)}>
                         {t("integrations_save_provider")}
                       </Button>
@@ -1130,22 +1221,24 @@ export const IntegrationsPage = () => {
             </DialogHeader>
             {configuringApp ? (
               <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <p className="text-sm font-medium">{t("integrations_mcp_url")}</p>
-                  <Input
-                    value={catalogUrlDrafts[configuringApp.catalog_id] ?? ""}
-                    placeholder={
-                      configuringApp.admin_config_fields.find((f) => f.key === "mcp_url")
-                        ?.placeholder ?? ""
-                    }
-                    onChange={(e) =>
-                      setCatalogUrlDrafts((prev) => ({
-                        ...prev,
-                        [configuringApp.catalog_id]: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
+                {configuringApp.admin_config_fields.some((f) => f.key === "mcp_url") ? (
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium">{t("integrations_mcp_url")}</p>
+                    <Input
+                      value={catalogUrlDrafts[configuringApp.catalog_id] ?? ""}
+                      placeholder={
+                        configuringApp.admin_config_fields.find((f) => f.key === "mcp_url")
+                          ?.placeholder ?? ""
+                      }
+                      onChange={(e) =>
+                        setCatalogUrlDrafts((prev) => ({
+                          ...prev,
+                          [configuringApp.catalog_id]: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ) : null}
                 {configuringApp.catalog_id === "pitchpatterns" ? (
                   <div className="space-y-1.5">
                     <p className="text-sm font-medium">{t("integrations_embed_origins")}</p>
@@ -1207,7 +1300,8 @@ export const IntegrationsPage = () => {
               <Button variant="outline" onClick={() => setConfiguringAppId(null)}>
                 {t("common_close")}
               </Button>
-              {configuringApp ? (
+              {configuringApp?.admin_config_fields.some((f) => f.key === "mcp_url") ||
+              configuringApp?.catalog_id === "pitchpatterns" ? (
                 <Button
                   onClick={() => void saveCatalogUrl(configuringApp, "instance")}
                 >
@@ -1263,6 +1357,57 @@ export const IntegrationsPage = () => {
                     : t("integrations_connect")}
                 </Button>
               ) : null}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={entraSetupOpen} onOpenChange={setEntraSetupOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{t("integrations_entra_setup")}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 text-sm">
+              <ol className="list-decimal space-y-2 pl-4 text-muted-foreground">
+                <li>{t("integrations_entra_step_register")}</li>
+                <li>
+                  {t("integrations_entra_step_redirect")}
+                  <div className="mt-1.5 flex flex-wrap gap-2">
+                    <Input
+                      readOnly
+                      className="min-w-0 flex-1 font-mono text-xs text-foreground"
+                      value={oauthCallbackUrl}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(oauthCallbackUrl)
+                      }}
+                    >
+                      {t("integrations_embed_copy")}
+                    </Button>
+                  </div>
+                </li>
+                <li>{t("integrations_entra_step_secret")}</li>
+                <li>{t("integrations_entra_step_permissions")}</li>
+                <li>{t("integrations_entra_step_consent")}</li>
+                <li>{t("integrations_entra_step_paste")}</li>
+              </ol>
+              {microsoftGraphPermissions.length > 0 ? (
+                <div className="space-y-1.5">
+                  <p className="font-medium text-foreground">
+                    {t("integrations_entra_permissions")}
+                  </p>
+                  <ul className="max-h-48 space-y-1 overflow-y-auto rounded-md border px-3 py-2 font-mono text-xs">
+                    {microsoftGraphPermissions.map((perm) => (
+                      <li key={perm}>{perm}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setEntraSetupOpen(false)}>{t("common_close")}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

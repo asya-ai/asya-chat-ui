@@ -4,13 +4,13 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from typing import Any, AsyncIterator
 
+import httpx2
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from pydantic import AnyUrl
 
 from app.core.config import settings
@@ -20,9 +20,9 @@ from app.services.mcp.types import McpServerConfig
 logger = logging.getLogger(__name__)
 
 
-def _timeout(seconds: int | float | None = None) -> timedelta:
+def _timeout_seconds(seconds: int | float | None = None) -> float:
     value = settings.mcp_call_timeout_seconds if seconds is None else seconds
-    return timedelta(seconds=max(1, int(value)))
+    return float(max(1, int(value)))
 
 
 def _contains_timeout(exc: BaseException) -> bool:
@@ -52,18 +52,26 @@ async def open_mcp_session(
     timeout_seconds: int | float | None = None,
 ) -> AsyncIterator[ClientSession]:
     """Open a short-lived MCP client session for the configured transport."""
-    timeout = _timeout(timeout_seconds)
+    timeout_s = _timeout_seconds(timeout_seconds)
     if server.transport == "http":
         assert server.url
-        async with streamablehttp_client(
-            server.url,
+        http_timeout = httpx2.Timeout(timeout_s, read=timeout_s)
+        # Always HTTP — do not ASGI-call the embed from another event loop
+        # (Celery / ThreadPoolExecutor asyncio.run). That fights FastAPI's
+        # StreamableHTTPSessionManager lifespan (cancel-scope errors).
+        async with create_mcp_http_client(
             headers=server.headers or None,
-            timeout=timeout,
-            sse_read_timeout=timeout,
-        ) as (read, write, _get_session_id):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield session
+            timeout=http_timeout,
+        ) as http_client:
+            async with streamable_http_client(
+                server.url,
+                http_client=http_client,
+            ) as (read, write):
+                async with ClientSession(
+                    read, write, read_timeout_seconds=timeout_s
+                ) as session:
+                    await session.initialize()
+                    yield session
         return
 
     if server.transport == "sse":
@@ -71,10 +79,12 @@ async def open_mcp_session(
         async with sse_client(
             server.url,
             headers=server.headers or None,
-            timeout=timeout.total_seconds(),
-            sse_read_timeout=timeout.total_seconds(),
+            timeout=timeout_s,
+            sse_read_timeout=timeout_s,
         ) as (read, write):
-            async with ClientSession(read, write) as session:
+            async with ClientSession(
+                read, write, read_timeout_seconds=timeout_s
+            ) as session:
                 await session.initialize()
                 yield session
         return
@@ -87,7 +97,9 @@ async def open_mcp_session(
             env=server.env or None,
         )
         async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
+            async with ClientSession(
+                read, write, read_timeout_seconds=timeout_s
+            ) as session:
                 await session.initialize()
                 yield session
         return
@@ -150,6 +162,15 @@ def _prompt_to_dict(prompt: Any) -> dict[str, Any]:
     }
 
 
+def _log_optional_mcp_capability(server_id: str, capability: str, exc: BaseException) -> None:
+    """Resources/prompts are optional; Graph MCP often omits them entirely."""
+    msg = str(exc)
+    if "Method not found" in msg or "has no attribute" in msg:
+        logger.debug("MCP %s unavailable for %s: %s", capability, server_id, exc)
+        return
+    logger.warning("MCP %s failed for %s: %s", capability, server_id, exc)
+
+
 async def discover_server_capabilities(server: McpServerConfig) -> dict[str, Any]:
     """List tools/resources/prompts for one server."""
     tools: list[dict[str, Any]] = []
@@ -160,7 +181,10 @@ async def discover_server_capabilities(server: McpServerConfig) -> dict[str, Any
     async with open_mcp_session(
         server, timeout_seconds=settings.mcp_connect_timeout_seconds
     ) as session:
-        caps = session.get_server_capabilities()
+        caps = getattr(session, "server_capabilities", None)
+        if caps is None:
+            getter = getattr(session, "get_server_capabilities", None)
+            caps = getter() if callable(getter) else None
         if server.include.tools:
             try:
                 listed = await session.list_tools()
@@ -173,16 +197,18 @@ async def discover_server_capabilities(server: McpServerConfig) -> dict[str, Any
                 listed = await session.list_resources()
                 resources = [_resource_to_dict(item) for item in (listed.resources or [])]
             except Exception as exc:
-                logger.warning("MCP list_resources failed for %s: %s", server.id, exc)
+                _log_optional_mcp_capability(server.id, "list_resources", exc)
             try:
                 listed_templates = await session.list_resource_templates()
-                templates = [
-                    _template_to_dict(item)
-                    for item in (listed_templates.resourceTemplates or [])
-                ]
+                raw_templates = (
+                    getattr(listed_templates, "resourceTemplates", None)
+                    or getattr(listed_templates, "resource_templates", None)
+                    or []
+                )
+                templates = [_template_to_dict(item) for item in raw_templates]
             except Exception as exc:
-                logger.warning(
-                    "MCP list_resource_templates failed for %s: %s", server.id, exc
+                _log_optional_mcp_capability(
+                    server.id, "list_resource_templates", exc
                 )
 
         if server.include.prompts:
@@ -190,7 +216,7 @@ async def discover_server_capabilities(server: McpServerConfig) -> dict[str, Any
                 listed = await session.list_prompts()
                 prompts = [_prompt_to_dict(item) for item in (listed.prompts or [])]
             except Exception as exc:
-                logger.warning("MCP list_prompts failed for %s: %s", server.id, exc)
+                _log_optional_mcp_capability(server.id, "list_prompts", exc)
 
     return {
         "server": server,

@@ -13,4 +13,4 @@ def system_diagnosis(
     current_user: User = Depends(get_current_user),
 ) -> SystemDiagnosis:
     require_super_admin(current_user)
-    return diagnose_system()
+    return diagnose_system(user_id=current_user.id)

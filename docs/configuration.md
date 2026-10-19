@@ -145,19 +145,16 @@ Large tool/resource/prompt responses are written under `chats/{chat_id}/mcp/` an
 
 ### System diagnosis
 
-Super-admin **System diagnosis** probes enabled **instance** MCP servers. User-provided servers show as configured and require a user connection before tools appear in chat.
+Super-admin **System diagnosis** probes enabled **instance** MCP servers and any servers resolved for the signed-in viewer (including their connected catalog apps). Servers that need a user token show **Not connected for you** when that viewer has no connection.
 
 ### Microsoft 365 (Outlook, OneDrive, SharePoint, Teams, To Do)
 
-Microsoft catalog apps use OAuth in ChatUI, then call Graph through the compose service `msgraph-mcp` ([ms-graph-mcp](https://github.com/nitin27may/ms-graph-mcp), MIT). Official Microsoft “Enterprise MCP” is Entra-directory only and is not used here.
+Microsoft catalog apps use OAuth in ChatUI, then call Graph through the Graph MCP server embedded in the API process ([ms-graph-mcp](https://github.com/nitin27may/ms-graph-mcp), MIT). No separate compose service. Compose sets `GRAPH_MCP_EMBED_URL=http://backend:8000/internal/graph-mcp/mcp` so Celery workers can reach that mount (loopback `127.0.0.1` only works when the API and worker share a process/host).
 
 1. Register one Entra app (delegated Graph permissions for the apps you offer).
-2. Set the same **Application (client) ID** and **Directory (tenant) ID** in:
-   - `.env`: `GRAPH_MCP_CLIENT_ID`, `GRAPH_MCP_TENANT_ID`
-   - **Settings → Integrations → OAuth providers → Microsoft**
-3. Redirect URI: `{public_origin}/api/integrations/oauth/callback` (also paste into the provider form).
-4. Default MCP URL for Microsoft catalog cards: `http://msgraph-mcp:8094/mcp` (overridable per app).
-5. Offer apps, then **Connect** as a user.
+2. **Settings → Integrations → OAuth providers → Microsoft**: Application (client) ID, client secret, Directory (tenant) ID, redirect URI.
+3. Redirect URI: `{public_origin}/api/integrations/oauth/callback`.
+4. Offer apps, then **Connect** as a user.
 
 ChatUI forwards the user’s Graph access token as `Authorization: Bearer …` and adds `X-Toolsets` / `X-Write-Scope` so each card only sees its tool family (mail, calendar, files, chat, tasks, people).
 

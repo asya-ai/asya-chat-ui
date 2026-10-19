@@ -391,7 +391,11 @@ def build_catalog_status(
         enabled = is_catalog_enabled(
             session, catalog_id=entry.catalog_id, org_id=org_id
         )
-        configured = bool(cfg) and catalog_admin_complete(entry, cfg)
+        from app.services.integrations.catalog import resolve_catalog_mcp_url
+
+        configured = catalog_admin_complete(entry, cfg)
+        if entry.admin_config_fields:
+            configured = configured and bool(cfg)
         if entry.oauth_provider_id and org_id is not None:
             from app.services.integrations.oauth import oauth_provider_ready
 
@@ -423,9 +427,9 @@ def build_catalog_status(
                 "connected": connected,
                 "connection_status": install.status if install else "not_connected",
                 "effective_mcp_url": (
-                    cfg.get(entry.mcp.url_from)
-                    if entry.mcp.url_from and cfg.get(entry.mcp.url_from)
-                    else None
+                    None
+                    if entry.oauth_provider_id == "microsoft"
+                    else resolve_catalog_mcp_url(entry, cfg)
                 ),
                 "allowed_embed_origins": cfg.get("allowed_embed_origins") or "",
             }

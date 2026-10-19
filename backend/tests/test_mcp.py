@@ -210,14 +210,25 @@ async def test_open_mcp_session_selects_http_transport() -> None:
 
     class _TransportCM:
         async def __aenter__(self):
-            return (object(), object(), lambda: None)
+            return (object(), object())
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _HttpClientCM:
+        async def __aenter__(self):
+            return object()
 
         async def __aexit__(self, *args):
             return False
 
     with (
         patch(
-            "app.services.mcp.client.streamablehttp_client",
+            "app.services.mcp.client.create_mcp_http_client",
+            return_value=_HttpClientCM(),
+        ) as client_mock,
+        patch(
+            "app.services.mcp.client.streamable_http_client",
             return_value=_TransportCM(),
         ) as http_mock,
         patch("app.services.mcp.client.ClientSession", _SessionCM),
@@ -225,9 +236,78 @@ async def test_open_mcp_session_selects_http_transport() -> None:
         async with open_mcp_session(server) as opened:
             assert opened is fake_session
         fake_session.initialize.assert_awaited_once()
+        client_mock.assert_called_once()
+        assert client_mock.call_args.kwargs["headers"] == {
+            "Authorization": "Bearer x"
+        }
         http_mock.assert_called_once()
         assert http_mock.call_args.args[0] == "https://example.com/mcp"
-        assert http_mock.call_args.kwargs["headers"] == {"Authorization": "Bearer x"}
+
+
+def test_is_embedded_graph_mcp_url() -> None:
+    from app.services.integrations.graph_mcp_embed import is_embedded_graph_mcp_url
+
+    assert is_embedded_graph_mcp_url("http://127.0.0.1:8000/internal/graph-mcp/mcp")
+    assert is_embedded_graph_mcp_url("http://backend:8000/internal/graph-mcp/mcp")
+    assert not is_embedded_graph_mcp_url("https://example.com/mcp")
+
+
+@pytest.mark.asyncio
+async def test_open_mcp_session_uses_http_for_embedded_graph() -> None:
+    """Embed URL must use HTTP (not ASGI) so Celery/diagnosis don't share lifespan."""
+    server = McpServerConfig(
+        id="catalog-outlook",
+        name="Outlook",
+        transport="http",
+        url="http://backend:8000/internal/graph-mcp/mcp",
+        headers={"Authorization": "Bearer x"},
+    )
+
+    fake_session = AsyncMock()
+    fake_session.initialize = AsyncMock()
+
+    class _SessionCM:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return fake_session
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _TransportCM:
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _HttpClientCM:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *args):
+            return False
+
+    with (
+        patch(
+            "app.services.mcp.client.create_mcp_http_client",
+            return_value=_HttpClientCM(),
+        ) as client_mock,
+        patch(
+            "app.services.mcp.client.streamable_http_client",
+            return_value=_TransportCM(),
+        ) as http_mock,
+        patch("app.services.mcp.client.ClientSession", _SessionCM),
+    ):
+        async with open_mcp_session(server) as opened:
+            assert opened is fake_session
+        client_mock.assert_called_once()
+        http_mock.assert_called_once()
+        assert http_mock.call_args.args[0] == (
+            "http://backend:8000/internal/graph-mcp/mcp"
+        )
 
 
 @pytest.mark.asyncio

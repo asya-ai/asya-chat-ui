@@ -13,7 +13,7 @@ from sqlmodel import Session
 
 from app.api.deps import get_current_user, get_db
 from app.models import User
-from app.services.integrations.catalog import get_catalog
+from app.services.integrations.catalog import get_catalog, list_catalog
 from app.services.integrations.materialize import (
     connect_bearer_api_key,
     connect_oauth,
@@ -28,14 +28,17 @@ from app.services.integrations.oauth import (
     entry_for_oauth,
     exchange_authorization_code,
     resolve_provider_config,
+    union_oauth_scopes,
 )
 from app.services.integrations.providers import get_oauth_provider, list_oauth_providers, provider_schema
 from app.services.integrations.store import (
     admin_config_public,
     build_catalog_status,
+    catalog_admin_complete,
     get_admin_config_row,
     is_catalog_enabled,
     list_provider_public,
+    resolve_effective_admin_config,
     upsert_admin_config,
     upsert_enablement,
 )
@@ -192,6 +195,14 @@ def upsert_instance_provider_config(
         )
     except ValueError as exc:
         raise _http_error(exc) from exc
+    if provider_id == "microsoft":
+        from app.services.integrations.graph_mcp_embed import (
+            invalidate_graph_mcp_embed,
+            sync_microsoft_catalog_servers,
+        )
+
+        invalidate_graph_mcp_embed()
+        sync_microsoft_catalog_servers(session)
     return admin_config_public(
         target_kind="oauth_provider",
         target_id=provider_id,
@@ -413,6 +424,8 @@ def set_instance_enablement(
             org_id=None,
             is_enabled=payload.is_enabled,
         )
+        if payload.is_enabled:
+            sync_catalog_mcp_from_admin(session, catalog_id=catalog_id, org_id=None)
     except ValueError as exc:
         raise _http_error(exc) from exc
     return {
@@ -492,6 +505,32 @@ def connect_catalog(
     }
 
 
+def _oauth_entries_for_provider(
+    session: Session, *, provider_id: str, org_id: UUID
+) -> list:
+    """Enabled + admin-complete OAuth catalog cards for one provider."""
+    out = []
+    for entry in list_catalog():
+        if entry.connect_kind != "oauth":
+            continue
+        if entry.oauth_provider_id != provider_id:
+            continue
+        if not is_catalog_enabled(
+            session, catalog_id=entry.catalog_id, org_id=org_id
+        ):
+            continue
+        cfg, _, _ = resolve_effective_admin_config(
+            session,
+            target_kind="catalog",
+            target_id=entry.catalog_id,
+            org_id=org_id,
+        )
+        if not catalog_admin_complete(entry, cfg):
+            continue
+        out.append(entry)
+    return out
+
+
 @router.get("/integrations/catalog/{catalog_id}/oauth/start")
 def start_catalog_oauth(
     catalog_id: str,
@@ -531,6 +570,55 @@ def start_catalog_oauth(
     return {"authorize_url": authorize_url}
 
 
+@router.get("/integrations/oauth/providers/{provider_id}/start")
+def start_provider_oauth(
+    provider_id: str,
+    request: Request,
+    org_id: str = Query(...),
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """One consent for every offered catalog card on this OAuth provider."""
+    org_uuid = _parse_uuid(org_id, field="org_id")
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    if not get_oauth_provider(provider_id):
+        raise HTTPException(status_code=404, detail="Unknown OAuth provider")
+    entries = _oauth_entries_for_provider(
+        session, provider_id=provider_id, org_id=org_uuid
+    )
+    if not entries:
+        raise HTTPException(
+            status_code=400,
+            detail="No enabled apps for this provider",
+        )
+    catalog_ids = [e.catalog_id for e in entries]
+    scopes = union_oauth_scopes(entries)
+    redirect_base = _build_frontend_base(request)
+    state = encode_oauth_state(
+        user_id=current_user.id,
+        org_id=org_uuid,
+        catalog_id=catalog_ids[0],
+        catalog_ids=catalog_ids,
+        redirect_base=redirect_base,
+    )
+    try:
+        authorize_url = build_authorize_url(
+            session,
+            entry=entries[0],
+            org_id=org_uuid,
+            state=state,
+            scopes=scopes,
+        )
+    except ValueError as exc:
+        raise _http_error(exc) from exc
+    return {"authorize_url": authorize_url}
+
+
 @router.get("/integrations/oauth/callback")
 def catalog_oauth_callback(
     request: Request,
@@ -560,6 +648,7 @@ def catalog_oauth_callback(
 
     redirect_base = state_payload["redirect_base"] or fallback_base
     catalog_id = state_payload["catalog_id"]
+    catalog_ids = state_payload["catalog_ids"]
     org_id = state_payload["org_id"]
     user_id = state_payload["user_id"]
 
@@ -573,19 +662,35 @@ def catalog_oauth_callback(
         )
 
     try:
-        entry = entry_for_oauth(catalog_id)
-        assert entry.oauth_provider_id
+        entries = [entry_for_oauth(cid) for cid in catalog_ids]
+        provider_id = entries[0].oauth_provider_id
+        assert provider_id
         provider, cfg = resolve_provider_config(
-            session, provider_id=entry.oauth_provider_id, org_id=org_id
+            session, provider_id=provider_id, org_id=org_id
         )
-        token_payload = exchange_authorization_code(provider, cfg, code=code)
-        connect_oauth(
-            session,
-            user_id=user_id,
-            org_id=org_id,
-            catalog_id=catalog_id,
-            token_payload=token_payload,
+        token_payload = exchange_authorization_code(
+            provider,
+            cfg,
+            code=code,
+            scopes=union_oauth_scopes(entries),
         )
+        connected: list[str] = []
+        last_error: str | None = None
+        for entry in entries:
+            try:
+                connect_oauth(
+                    session,
+                    user_id=user_id,
+                    org_id=org_id,
+                    catalog_id=entry.catalog_id,
+                    token_payload=token_payload,
+                )
+                connected.append(entry.catalog_id)
+            except ValueError as exc:
+                last_error = str(exc)
+        if not connected:
+            raise ValueError(last_error or "OAuth connect failed")
+        catalog_id = connected[0]
     except ValueError as exc:
         return _integrations_redirect(
             redirect_base,
@@ -747,15 +852,15 @@ async def test_catalog_connection(
             status_code=400, detail="Integration MCP server is not configured"
         )
     # Apply org-effective URL for the probe
+    from app.services.integrations.catalog import resolve_catalog_mcp_url
     from app.services.integrations.store import resolve_effective_admin_config
 
     cfg, _, _ = resolve_effective_admin_config(
         session, target_kind="catalog", target_id=catalog_id, org_id=org_uuid
     )
-    if entry.mcp.url_from:
-        url = str(cfg.get(entry.mcp.url_from) or "").strip()
-        if url:
-            server.url = url
+    url = resolve_catalog_mcp_url(entry, cfg)
+    if url:
+        server.url = url
     auth_type, headers = resolve_test_auth(
         session, server, user_id=current_user.id, org_id=org_uuid
     )

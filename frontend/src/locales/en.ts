@@ -749,6 +749,7 @@ export const en = {
   integrations_not_configured: "MCP URL not configured.",
   integrations_api_key: "API key",
   integrations_connect: "Connect",
+  integrations_connect_all_microsoft: "Connect all Microsoft",
   integrations_reconnect: "Reconnect",
   integrations_update_key: "Update key",
   integrations_embed_origins: "Embed origins",
@@ -756,8 +757,19 @@ export const en = {
   integrations_embed_copy: "Copy",
   integrations_embed_copied: "Copied",
   integrations_oauth_providers: "OAuth providers",
-  integrations_oauth_providers_hint: "Microsoft Entra / Google app credentials.",
+  integrations_oauth_providers_hint: "Microsoft Entra app credentials.",
   integrations_save_provider: "Save provider",
+  integrations_entra_setup: "Entra app setup",
+  integrations_entra_step_register:
+    "Entra → App registrations → New registration. Accounts: single tenant or multitenant as needed. Platform: Web.",
+  integrations_entra_step_redirect: "Add this redirect URI:",
+  integrations_entra_step_secret: "Certificates & secrets → New client secret. Copy the value once.",
+  integrations_entra_step_permissions:
+    "API permissions → Microsoft Graph → Delegated permissions (list below).",
+  integrations_entra_step_consent: "Grant admin consent if your tenant requires it.",
+  integrations_entra_step_paste:
+    "Paste Application (client) ID, client secret, and Directory (tenant) ID into the form.",
+  integrations_entra_permissions: "Delegated permissions",
   mcp_instance_policy: "Instance policy",
   mcp_allow_org_servers: "Allow organisations to define MCP servers",
   mcp_allow_user_servers: "Allow users to define personal MCP servers",

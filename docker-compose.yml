@@ -61,6 +61,7 @@ services:
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       - SCRAPER_URL=http://scraper:3001
       - CHATUI_BUILD_ID=${CHATUI_BUILD_ID:-}
+      - GRAPH_MCP_EMBED_URL=http://backend:8000/internal/graph-mcp/mcp
     volumes:
       - ./data/files:/data/files
     # Boot deps only. scraper / dind / executor-bootstrap are runtime; they
@@ -116,22 +117,6 @@ services:
     image: redis:7
     restart: unless-stopped
 
-  # Microsoft Graph MCP (MIT: nitin27may/ms-graph-mcp). Accepts user Bearer
-  # tokens from ChatUI OAuth connect. GRAPH_MCP_CLIENT_ID must match the
-  # Microsoft app registration in Settings → Integrations → OAuth providers.
-  msgraph-mcp:
-    image: ${GRAPH_MCP_IMAGE:-ghcr.io/nitin27may/ms-graph-mcp:latest}
-    environment:
-      GRAPH_MCP_CLIENT_ID: ${GRAPH_MCP_CLIENT_ID:-}
-      GRAPH_MCP_TENANT_ID: ${GRAPH_MCP_TENANT_ID:-common}
-      GRAPH_MCP_TOOLSETS: ${GRAPH_MCP_TOOLSETS:-all}
-      GRAPH_MCP_WRITE_SCOPE: ${GRAPH_MCP_WRITE_SCOPE:-true}
-      GRAPH_MCP_PORT: "8094"
-      GRAPH_MCP_ALLOWED_HOSTS: msgraph-mcp,localhost,127.0.0.1
-      GRAPH_MCP_RESOURCE_URL: http://msgraph-mcp:8094/mcp
-    restart: unless-stopped
-    # Image ships its own /health HEALTHCHECK.
-
   worker:
     image: chatui-backend
     build:
@@ -148,6 +133,7 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       - SCRAPER_URL=http://scraper:3001
+      - GRAPH_MCP_EMBED_URL=http://backend:8000/internal/graph-mcp/mcp
     volumes:
       - ./data/files:/data/files
     depends_on:

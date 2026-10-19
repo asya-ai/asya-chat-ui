@@ -750,6 +750,7 @@ export const ja = {
   integrations_not_configured: "MCP URL未設定。",
   integrations_api_key: "APIキー",
   integrations_connect: "接続",
+  integrations_connect_all_microsoft: "Microsoftをまとめて接続",
   integrations_reconnect: "再接続",
   integrations_update_key: "キーを更新",
   integrations_embed_origins: "埋め込みオリジン",
@@ -757,8 +758,20 @@ export const ja = {
   integrations_embed_copy: "コピー",
   integrations_embed_copied: "コピー済み",
   integrations_oauth_providers: "OAuthプロバイダー",
-  integrations_oauth_providers_hint: "Microsoft Entra / Googleアプリの認証情報。",
+  integrations_oauth_providers_hint: "Microsoft Entraアプリの認証情報。",
   integrations_save_provider: "プロバイダーを保存",
+  integrations_entra_setup: "Entraアプリ設定",
+  integrations_entra_step_register:
+    "Entra → App registrations → New registration。アカウント種類は必要に応じて。プラットフォーム: Web。",
+  integrations_entra_step_redirect: "このリダイレクトURIを追加:",
+  integrations_entra_step_secret:
+    "Certificates & secrets → New client secret。値は一度だけ表示されます。",
+  integrations_entra_step_permissions:
+    "API permissions → Microsoft Graph → Delegated permissions（下記）。",
+  integrations_entra_step_consent: "テナントで必要な場合は管理者の同意を付与。",
+  integrations_entra_step_paste:
+    "Application (client) ID、クライアントシークレット、Directory (tenant) IDをフォームに貼り付け。",
+  integrations_entra_permissions: "委任されたアクセス許可",
   mcp_instance_policy: "インスタンスポリシー",
   mcp_allow_org_servers: "組織によるMCPサーバー定義を許可",
   mcp_allow_user_servers: "ユーザーによる個人MCPサーバーを許可",

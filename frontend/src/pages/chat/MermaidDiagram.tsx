@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type RefObject } from "react"
 import { Maximize2, RotateCcw, ZoomIn, ZoomOut } from "lucide-react"
 import {
   TransformComponent,
@@ -193,15 +193,26 @@ const ExplorerZoomControls = ({
 }
 
 /** Recenter after async Mermaid SVG lands in the transform content. */
-const FitWhenReady = ({ ready }: { ready: boolean }) => {
-  const { centerView } = useControls()
+const FitWhenReady = ({
+  ready,
+  targetRef,
+}: {
+  ready: boolean
+  targetRef: RefObject<HTMLDivElement | null>
+}) => {
+  const { zoomToElement, centerView } = useControls()
   useEffect(() => {
     if (!ready) return
     const id = window.requestAnimationFrame(() => {
-      centerView(1, 0)
+      const el = targetRef.current
+      if (el && el.childElementCount > 0) {
+        void zoomToElement(el, 1, 0)
+        return
+      }
+      void centerView(1, 0)
     })
     return () => window.cancelAnimationFrame(id)
-  }, [ready, centerView])
+  }, [ready, centerView, zoomToElement, targetRef])
   return null
 }
 
@@ -259,9 +270,16 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
     let cancelled = false
     const run = async () => {
       setExplorerReady(false)
-      // Wait a tick so dialog content (and explorerRef) is mounted.
-      await Promise.resolve()
-      const container = explorerRef.current
+      // Dialog portals + TransformComponent mount after open; wait for the host.
+      let container: HTMLDivElement | null = null
+      for (let i = 0; i < 30; i++) {
+        container = explorerRef.current
+        if (container) break
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => resolve())
+        })
+        if (cancelled) return
+      }
       if (!container || cancelled) return
       setExplorerError(null)
       try {
@@ -334,7 +352,7 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
               copiedLabel={copiedLabel}
             />
           </div>
-          <div className="flex min-h-0 flex-1 flex-col pt-12">
+          <div className="relative min-h-0 flex-1 pt-12">
             {explorerError ? (
               <pre className="m-4 overflow-auto rounded bg-destructive/10 p-3 text-destructive text-xs whitespace-pre-wrap">
                 {explorerError}
@@ -349,7 +367,7 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
                 pinch={{ step: 4 }}
                 doubleClick={{ mode: "zoomIn", step: 0.4 }}
               >
-                <FitWhenReady ready={explorerReady} />
+                <FitWhenReady ready={explorerReady} targetRef={explorerRef} />
                 <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2">
                   <ExplorerZoomControls
                     zoomInLabel={zoomInLabel}
@@ -358,8 +376,8 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
                   />
                 </div>
                 <TransformComponent
-                  wrapperClass="!h-full !w-full"
-                  contentClass="!flex !h-full !w-full !items-center !justify-center"
+                  wrapperClass="!absolute !inset-0 !h-full !w-full"
+                  contentClass="!w-fit !h-fit"
                   wrapperStyle={{ width: "100%", height: "100%" }}
                 >
                   <div ref={explorerRef} className="flex flex-col gap-6 p-4" />

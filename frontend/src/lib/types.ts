@@ -865,6 +865,7 @@ export type IntegrationAdminField = {
   label: string
   required: boolean
   secret: boolean
+  readonly?: boolean
   placeholder?: string | null
   help_text?: string | null
   default?: string | null

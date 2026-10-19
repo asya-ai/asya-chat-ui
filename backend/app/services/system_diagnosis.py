@@ -9,12 +9,13 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal
 from urllib.parse import unquote, urlparse
+from uuid import UUID
 
 import psycopg
 import redis
@@ -1836,57 +1837,148 @@ def _probe_mcp_server(server: Any) -> McpServerCheck:
     )
 
 
-def _collect_mcp_servers() -> list[McpServerCheck]:
-    from app.db.session import SessionLocal
-    from app.models import McpServer
+def _mcp_config_for_instance_row(
+    session: Session,
+    row: Any,
+    *,
+    user_id: UUID,
+    org_id: UUID | None,
+) -> tuple[Any | None, str | None]:
+    """Build a probe config for an instance MCP row.
+
+    Returns (config, skip_detail). skip_detail set when the viewer has no connection.
+    """
+    from app.services.integrations.catalog import (
+        get_catalog,
+        graph_mcp_request_headers,
+        is_microsoft_catalog,
+        resolve_catalog_mcp_url,
+    )
+    from app.services.integrations.store import resolve_effective_admin_config
     from app.services.mcp.auth_config import headers_from_shared_auth
+    from app.services.mcp.registry import resolve_test_auth
     from app.services.mcp.store import row_to_runtime_config
+
+    if row.auth_type == "user_provided":
+        _, headers = resolve_test_auth(
+            session, row, user_id=user_id, org_id=org_id
+        )
+        if not headers:
+            return None, "Not connected for you"
+        config = row_to_runtime_config(row, headers=headers)
+    else:
+        headers = headers_from_shared_auth(row.auth_type, row.auth_config)
+        config = row_to_runtime_config(row, headers=headers)
+
+    if getattr(row, "catalog_id", None) and is_microsoft_catalog(row.catalog_id):
+        entry = get_catalog(row.catalog_id)
+        if entry is not None:
+            cfg, _, _ = resolve_effective_admin_config(
+                session,
+                target_kind="catalog",
+                target_id=row.catalog_id,
+                org_id=org_id,
+            )
+            url = resolve_catalog_mcp_url(entry, cfg)
+            if url:
+                config = replace(config, url=url)
+        if row.auth_type == "user_provided":
+            config = replace(
+                config,
+                headers={
+                    **graph_mcp_request_headers(row.catalog_id),
+                    **(config.headers or {}),
+                },
+            )
+    return config, None
+
+
+def _collect_mcp_servers(user_id: UUID) -> list[McpServerCheck]:
+    """Probe instance MCP servers + anything resolved for the viewing user."""
+    from app.db.session import SessionLocal
+    from app.models import McpServer, OrgMembership
+    from app.services.mcp.registry import resolve_effective_mcp_servers
     from sqlmodel import select
 
+    probe_configs: list[Any] = []
+    checks: list[McpServerCheck] = []
+    seen_slugs: set[str] = set()
+
     with SessionLocal() as session:
-        rows = session.exec(
+        org_ids = [
+            m.org_id
+            for m in session.exec(
+                select(OrgMembership).where(OrgMembership.user_id == user_id)
+            ).all()
+        ]
+        primary_org = org_ids[0] if org_ids else None
+
+        # What chat would see for this user (per org membership).
+        for org_id in org_ids:
+            for item in resolve_effective_mcp_servers(
+                session, org_id=org_id, user_id=user_id
+            ):
+                slug = item.config.id
+                if slug in seen_slugs:
+                    continue
+                seen_slugs.add(slug)
+                probe_configs.append(item.config)
+
+        instance_rows = session.exec(
             select(McpServer).where(
                 McpServer.scope == "instance",
                 McpServer.is_enabled.is_(True),
             )
         ).all()
 
-    if not rows:
+        for row in instance_rows:
+            if row.slug in seen_slugs:
+                continue
+            config, skip_detail = _mcp_config_for_instance_row(
+                session,
+                row,
+                user_id=user_id,
+                org_id=primary_org,
+            )
+            if skip_detail is not None:
+                checks.append(
+                    McpServerCheck(
+                        id=row.slug,
+                        name=row.name,
+                        transport=row.transport,
+                        status="missing",
+                        detail=skip_detail,
+                    )
+                )
+                seen_slugs.add(row.slug)
+                continue
+            if config is not None:
+                seen_slugs.add(row.slug)
+                probe_configs.append(config)
+
+    if not probe_configs and not checks:
         return [
             McpServerCheck(
                 id="catalog",
                 name="MCP servers",
                 status="ok",
-                detail="No enabled instance MCP servers configured",
+                detail="No enabled MCP servers configured",
             )
         ]
 
-    checks: list[McpServerCheck] = []
-    for row in rows:
-        if row.auth_type == "user_provided":
-            checks.append(
-                McpServerCheck(
-                    id=row.slug,
-                    name=row.name,
-                    transport=row.transport,
-                    status="ok",
-                    detail="Configured; requires user connection",
-                )
-            )
-            continue
-        headers = headers_from_shared_auth(row.auth_type, row.auth_config)
-        config = row_to_runtime_config(row, headers=headers)
+    for config in probe_configs:
         try:
-            check = _probe_mcp_server(config)
-            checks.append(check)
+            checks.append(_probe_mcp_server(config))
         except Exception as exc:
             checks.append(
                 McpServerCheck(
-                    id=row.slug,
-                    name=row.name,
-                    transport=row.transport,
+                    id=config.id,
+                    name=config.name,
+                    transport=config.transport,
                     status="invalid",
-                    detail=_truncate(format_exception_detail(exc, limit=400), limit=320),
+                    detail=_truncate(
+                        format_exception_detail(exc, limit=400), limit=320
+                    ),
                 )
             )
     checks.sort(key=lambda item: item.id)
@@ -1981,7 +2073,7 @@ def _collect_data_volume() -> list[DataVolumeMetric]:
     return metrics
 
 
-def diagnose_system() -> SystemDiagnosis:
+def diagnose_system(*, user_id: UUID) -> SystemDiagnosis:
     specs = _build_specs()
     results: list[EnvKeyDiagnosis | None] = [None] * len(specs)
 
@@ -2003,7 +2095,7 @@ def diagnose_system() -> SystemDiagnosis:
         futures[executor.submit(_collect_dependencies)] = ("dependencies", None)
         futures[executor.submit(_collect_resources)] = ("resources", None)
         futures[executor.submit(_collect_providers)] = ("providers", None)
-        futures[executor.submit(_collect_mcp_servers)] = ("mcp_servers", None)
+        futures[executor.submit(_collect_mcp_servers, user_id)] = ("mcp_servers", None)
         futures[executor.submit(_collect_data_volume)] = ("data_volume", None)
         futures[executor.submit(_collect_workers)] = ("workers", None)
 

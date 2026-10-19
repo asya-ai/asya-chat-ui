@@ -40,7 +40,8 @@ dependencies = [
     "langchain-core>=1.6.1",
     "json-repair>=0.63.4",
     "pyjwt[crypto]>=2.13.0",
-    "mcp>=1.9,<2",
+    "mcp>=2.0,<3",
+    "ms-graph-mcp>=0.3.0",
     "pyyaml>=6",
 ]
 

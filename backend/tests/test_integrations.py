@@ -30,6 +30,7 @@ from app.services.integrations.oauth import (
     encode_oauth_state,
     exchange_authorization_code,
     refresh_user_connection_tokens,
+    union_oauth_scopes,
 )
 from app.services.integrations.providers import get_oauth_provider, list_oauth_providers
 from app.services.integrations.store import (
@@ -93,9 +94,12 @@ def test_catalog_includes_pitchpatterns() -> None:
 
 def test_oauth_providers_registered() -> None:
     ids = {p.provider_id for p in list_oauth_providers()}
-    assert ids == {"microsoft", "google"}
+    assert ids == {"microsoft"}
     ms = get_oauth_provider("microsoft")
     assert ms is not None
+    by_key = {f.key: f for f in ms.fields}
+    assert by_key["redirect_uri"].readonly is True
+    assert by_key["tenant_id"].required is False
     url = ms.authorize_url(
         {"client_id": "abc", "tenant_id": "common", "redirect_uri": "https://x/cb"},
         state="s",
@@ -295,8 +299,8 @@ _MS_CATALOG_IDS = {
 
 def test_microsoft_catalog_apps_registered() -> None:
     from app.services.integrations.catalog import (
-        DEFAULT_GRAPH_MCP_URL,
         graph_mcp_request_headers,
+        resolve_catalog_mcp_url,
     )
 
     ids = {entry.catalog_id for entry in list_catalog()}
@@ -307,9 +311,11 @@ def test_microsoft_catalog_apps_registered() -> None:
         assert entry.connect_kind == "oauth"
         assert entry.oauth_provider_id == "microsoft"
         assert "offline_access" in entry.oauth_scopes
-        assert entry.mcp.url_from == "mcp_url"
-        mcp_field = next(f for f in entry.admin_config_fields if f.key == "mcp_url")
-        assert mcp_field.default == DEFAULT_GRAPH_MCP_URL
+        assert entry.mcp.url_from is None
+        assert entry.admin_config_fields == ()
+        from app.services.integrations.graph_mcp_embed import embedded_graph_mcp_url
+
+        assert resolve_catalog_mcp_url(entry, {}) == embedded_graph_mcp_url()
         headers = graph_mcp_request_headers(catalog_id)
         assert headers.get("X-Write-Scope") == "true"
         assert headers.get("X-Toolsets")
@@ -332,15 +338,6 @@ def _configure_microsoft(session: Session, org_id) -> None:
         secret_keys={"client_secret"},
     )
     for catalog_id in _MS_CATALOG_IDS:
-        upsert_admin_config(
-            session,
-            target_kind="catalog",
-            target_id=catalog_id,
-            scope="instance",
-            org_id=None,
-            is_enabled=True,
-            config_updates={"mcp_url": "http://graph-mcp.internal/mcp"},
-        )
         upsert_enablement(
             session,
             catalog_id=catalog_id,
@@ -348,6 +345,65 @@ def _configure_microsoft(session: Session, org_id) -> None:
             org_id=None,
             is_enabled=True,
         )
+
+
+def test_microsoft_connect_all_scopes_and_state() -> None:
+    session = _session()
+    org, _admin, member = _seed(session)
+    _configure_microsoft(session, org.id)
+
+    entries = [
+        e
+        for e in list_catalog()
+        if e.oauth_provider_id == "microsoft" and e.connect_kind == "oauth"
+    ]
+    scopes = union_oauth_scopes(entries)
+    assert any(s.endswith("/Mail.Read") for s in scopes)
+    assert any(s.endswith("/Tasks.ReadWrite") for s in scopes)
+    assert any(s.endswith("/User.Read") for s in scopes)
+    assert len(scopes) == len(set(scopes))
+
+    catalog_ids = [e.catalog_id for e in entries]
+    state = encode_oauth_state(
+        user_id=member.id,
+        org_id=org.id,
+        catalog_id=catalog_ids[0],
+        catalog_ids=catalog_ids,
+        redirect_base="https://chat.example",
+    )
+    decoded = decode_oauth_state(state)
+    assert decoded["catalog_ids"] == catalog_ids
+
+    authorize_url = build_authorize_url(
+        session,
+        entry=entries[0],
+        org_id=org.id,
+        state=state,
+        scopes=scopes,
+    )
+    assert "login.microsoftonline.com" in authorize_url
+    assert "Tasks.ReadWrite" in authorize_url or "Tasks.ReadWrite" in authorize_url.replace(
+        "%2F", "/"
+    )
+
+    token_payload = {
+        "access_token": "ms-all-access",
+        "refresh_token": "ms-all-refresh",
+        "expires_in": 3600,
+        "scope": " ".join(scopes),
+    }
+    for catalog_id in catalog_ids:
+        connect_oauth(
+            session,
+            user_id=member.id,
+            org_id=org.id,
+            catalog_id=catalog_id,
+            token_payload=token_payload,
+        )
+    status = build_catalog_status(session, org_id=org.id, user_id=member.id)
+    for catalog_id in catalog_ids:
+        row = next(item for item in status if item["catalog_id"] == catalog_id)
+        assert row["connected"] is True
 
 
 def test_outlook_oauth_connect_resolve_disconnect() -> None:
@@ -372,6 +428,7 @@ def test_outlook_oauth_connect_resolve_disconnect() -> None:
     )
     decoded = decode_oauth_state(state)
     assert decoded["catalog_id"] == "outlook"
+    assert decoded["catalog_ids"] == ["outlook"]
     assert decoded["user_id"] == member.id
 
     authorize_url = build_authorize_url(
@@ -399,8 +456,10 @@ def test_outlook_oauth_connect_resolve_disconnect() -> None:
     resolved = resolve_effective_mcp_servers(
         session, org_id=org.id, user_id=member.id
     )
+    from app.services.integrations.graph_mcp_embed import embedded_graph_mcp_url
+
     hit = next(r for r in resolved if r.config.id == "catalog-outlook")
-    assert hit.config.url == "http://graph-mcp.internal/mcp"
+    assert hit.config.url == embedded_graph_mcp_url()
     assert hit.config.headers.get("Authorization") == "Bearer ms-access"
     assert hit.config.headers.get("X-Toolsets") == "mail"
     assert hit.config.headers.get("X-Write-Scope") == "true"
@@ -551,15 +610,6 @@ def test_oauth_token_exchange_and_refresh() -> None:
 def test_oauth_app_not_installable_without_provider() -> None:
     session = _session()
     org, _admin, member = _seed(session)
-    upsert_admin_config(
-        session,
-        target_kind="catalog",
-        target_id="teams",
-        scope="instance",
-        org_id=None,
-        is_enabled=True,
-        config_updates={"mcp_url": "http://graph-mcp.internal/mcp"},
-    )
     upsert_enablement(
         session,
         catalog_id="teams",

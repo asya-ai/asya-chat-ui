@@ -9,7 +9,11 @@ from uuid import UUID
 from sqlmodel import Session, select
 
 from app.models import McpServer, McpUserConnection
-from app.services.integrations.catalog import CatalogIntegration, get_catalog
+from app.services.integrations.catalog import (
+    CatalogIntegration,
+    get_catalog,
+    resolve_catalog_mcp_url,
+)
 from app.services.integrations.store import (
     catalog_admin_complete,
     is_catalog_enabled,
@@ -99,8 +103,10 @@ def ensure_catalog_mcp_server(
 def sync_catalog_mcp_from_admin(
     session: Session, *, catalog_id: str, org_id: UUID | None = None
 ) -> McpServer | None:
+    from app.services.integrations.catalog import is_microsoft_catalog
+
     entry = get_catalog(catalog_id)
-    if not entry or not entry.mcp.url_from:
+    if not entry:
         return None
     cfg, _, enabled = resolve_effective_admin_config(
         session,
@@ -108,9 +114,16 @@ def sync_catalog_mcp_from_admin(
         target_id=catalog_id,
         org_id=org_id,
     )
+    if is_microsoft_catalog(catalog_id):
+        url = resolve_catalog_mcp_url(entry, cfg)
+        if not url:
+            return find_catalog_mcp_server(session, catalog_id)
+        return ensure_catalog_mcp_server(session, entry, mcp_url=url)
+    if not entry.mcp.url_from:
+        return None
     if not enabled or not catalog_admin_complete(entry, cfg):
         return find_catalog_mcp_server(session, catalog_id)
-    url = str(cfg.get(entry.mcp.url_from) or "").strip()
+    url = resolve_catalog_mcp_url(entry, cfg)
     if not url:
         return find_catalog_mcp_server(session, catalog_id)
     return ensure_catalog_mcp_server(session, entry, mcp_url=url)
@@ -139,8 +152,7 @@ def connect_bearer_api_key(
     )
     if not catalog_admin_complete(entry, cfg):
         raise ValueError("Integration is not configured")
-    url_key = entry.mcp.url_from or "mcp_url"
-    url = str(cfg.get(url_key) or "").strip()
+    url = resolve_catalog_mcp_url(entry, cfg)
     if not url:
         raise ValueError("MCP URL is not configured")
 
@@ -204,8 +216,7 @@ def connect_oauth(
     )
     if not catalog_admin_complete(entry, cfg):
         raise ValueError("Integration is not configured")
-    url_key = entry.mcp.url_from or "mcp_url"
-    url = str(cfg.get(url_key) or "").strip()
+    url = resolve_catalog_mcp_url(entry, cfg)
     if not url:
         raise ValueError("MCP URL is not configured")
 
@@ -314,11 +325,12 @@ def catalog_installable_for_org(
         return False
     if not is_catalog_enabled(session, catalog_id=catalog_id, org_id=org_id):
         return False
-    cfg, _, enabled = resolve_effective_admin_config(
-        session, target_kind="catalog", target_id=catalog_id, org_id=org_id
-    )
-    if not enabled or not catalog_admin_complete(entry, cfg):
-        return False
+    if entry.admin_config_fields:
+        cfg, _, enabled = resolve_effective_admin_config(
+            session, target_kind="catalog", target_id=catalog_id, org_id=org_id
+        )
+        if not enabled or not catalog_admin_complete(entry, cfg):
+            return False
     if entry.oauth_provider_id:
         from app.services.integrations.oauth import oauth_provider_ready
 

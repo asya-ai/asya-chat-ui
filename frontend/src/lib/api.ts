@@ -676,6 +676,10 @@ export const integrationsApi = {
     apiFetch<{ authorize_url: string }>(
       `/integrations/catalog/${encodeURIComponent(catalogId)}/oauth/start?org_id=${encodeURIComponent(orgId)}`
     ),
+  oauthStartProvider: (providerId: string, orgId: string) =>
+    apiFetch<{ authorize_url: string }>(
+      `/integrations/oauth/providers/${encodeURIComponent(providerId)}/start?org_id=${encodeURIComponent(orgId)}`
+    ),
   disconnect: (catalogId: string, orgId: string) =>
     apiFetch<void>(
       `/integrations/catalog/${encodeURIComponent(catalogId)}/install?org_id=${encodeURIComponent(orgId)}`,

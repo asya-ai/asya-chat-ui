@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     mcp_call_timeout_seconds: int = Field(
         default=60, validation_alias="MCP_CALL_TIMEOUT_SECONDS"
     )
+    # Workers call this URL (Celery has no /internal/graph-mcp). In Docker set to
+    # http://backend:8000/internal/graph-mcp/mcp so workers reach the API process.
+    graph_mcp_embed_url: str = Field(
+        default="http://127.0.0.1:8000/internal/graph-mcp/mcp",
+        validation_alias="GRAPH_MCP_EMBED_URL",
+    )
     mcp_max_result_chars: int = Field(
         default=50000, validation_alias="MCP_MAX_RESULT_CHARS"
     )

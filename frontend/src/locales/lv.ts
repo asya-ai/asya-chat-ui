@@ -751,6 +751,7 @@ export const lv = {
   integrations_not_configured: "MCP URL nav konfigurēts.",
   integrations_api_key: "API atslēga",
   integrations_connect: "Savienot",
+  integrations_connect_all_microsoft: "Savienot visu Microsoft",
   integrations_reconnect: "Atkārtoti savienot",
   integrations_update_key: "Atjaunināt atslēgu",
   integrations_embed_origins: "Iegultnes izcelsmes",
@@ -758,8 +759,20 @@ export const lv = {
   integrations_embed_copy: "Kopēt",
   integrations_embed_copied: "Nokopēts",
   integrations_oauth_providers: "OAuth pakalpojumu sniedzēji",
-  integrations_oauth_providers_hint: "Microsoft Entra / Google lietotnes akreditācijas dati.",
+  integrations_oauth_providers_hint: "Microsoft Entra lietotnes akreditācijas dati.",
   integrations_save_provider: "Saglabāt sniedzēju",
+  integrations_entra_setup: "Entra lietotnes iestatīšana",
+  integrations_entra_step_register:
+    "Entra → App registrations → New registration. Konti: viena vai vairākas organizācijas. Platforma: Web.",
+  integrations_entra_step_redirect: "Pievieno šo novirzīšanas URI:",
+  integrations_entra_step_secret:
+    "Certificates & secrets → New client secret. Nokopē vērtību uzreiz.",
+  integrations_entra_step_permissions:
+    "API permissions → Microsoft Graph → Delegated permissions (saraksts zemāk).",
+  integrations_entra_step_consent: "Piešķir admin consent, ja tenanta politika to prasa.",
+  integrations_entra_step_paste:
+    "Ielīmē Application (client) ID, client secret un Directory (tenant) ID formā.",
+  integrations_entra_permissions: "Delegētās atļaujas",
   mcp_instance_policy: "Instances politika",
   mcp_allow_org_servers: "Atļaut organizācijām definēt MCP serverus",
   mcp_allow_user_servers: "Atļaut lietotājiem personīgos MCP serverus",

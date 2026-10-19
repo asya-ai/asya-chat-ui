@@ -220,14 +220,16 @@ def resolve_effective_mcp_servers(
             from app.services.integrations.store import resolve_effective_admin_config
 
             entry = get_catalog(row.catalog_id)
-            if entry and entry.mcp.url_from:
+            if entry:
+                from app.services.integrations.catalog import resolve_catalog_mcp_url
+
                 cfg, _, _ = resolve_effective_admin_config(
                     session,
                     target_kind="catalog",
                     target_id=row.catalog_id,
                     org_id=org_id,
                 )
-                url = str(cfg.get(entry.mcp.url_from) or "").strip()
+                url = resolve_catalog_mcp_url(entry, cfg)
                 if url:
                     config = McpServerConfig(
                         id=config.id,

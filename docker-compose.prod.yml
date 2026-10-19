@@ -59,6 +59,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       SCRAPER_URL: http://scraper:3001
+      GRAPH_MCP_EMBED_URL: http://backend:8000/internal/graph-mcp/mcp
     volumes:
       - files-data:/data/files
     networks:
@@ -97,6 +98,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       SCRAPER_URL: http://scraper:3001
+      GRAPH_MCP_EMBED_URL: http://backend:8000/internal/graph-mcp/mcp
     volumes:
       - files-data:/data/files
     # Stay on `app` only. Attaching the internal `executor` network breaks Docker
@@ -165,22 +167,6 @@ services:
     networks:
       - app
     restart: unless-stopped
-
-  # Microsoft Graph MCP — same Entra app as Integrations → OAuth providers.
-  msgraph-mcp:
-    image: ${GRAPH_MCP_IMAGE:-ghcr.io/nitin27may/ms-graph-mcp:latest}
-    environment:
-      GRAPH_MCP_CLIENT_ID: ${GRAPH_MCP_CLIENT_ID:-}
-      GRAPH_MCP_TENANT_ID: ${GRAPH_MCP_TENANT_ID:-common}
-      GRAPH_MCP_TOOLSETS: ${GRAPH_MCP_TOOLSETS:-all}
-      GRAPH_MCP_WRITE_SCOPE: ${GRAPH_MCP_WRITE_SCOPE:-true}
-      GRAPH_MCP_PORT: "8094"
-      GRAPH_MCP_ALLOWED_HOSTS: msgraph-mcp,localhost,127.0.0.1
-      GRAPH_MCP_RESOURCE_URL: http://msgraph-mcp:8094/mcp
-    networks:
-      - app
-    restart: unless-stopped
-    # Image ships its own /health HEALTHCHECK.
 
   dind:
     image: docker:dind
