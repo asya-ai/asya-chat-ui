@@ -67,12 +67,14 @@ const toEditableAttachments = (
 ): ChatMessageAttachmentInput[] =>
   (attachments ?? []).map((attachment) => ({
     upload_id:
+      ("upload_id" in attachment ? attachment.upload_id : undefined) ||
       ("id" in attachment ? attachment.id : undefined) ||
       extractAttachmentIdFromContentUrl(attachment.content_url),
     file_name: attachment.file_name,
     content_type: attachment.content_type,
     data_base64: attachment.data_base64,
     content_url: attachment.content_url,
+    preview_url: "preview_url" in attachment ? attachment.preview_url : undefined,
   }))
 
 const noopClipboard = (_event: ClipboardEvent<HTMLTextAreaElement>) => undefined

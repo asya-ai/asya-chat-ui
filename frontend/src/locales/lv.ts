@@ -751,7 +751,12 @@ export const lv = {
   integrations_not_configured: "MCP URL nav konfigurēts.",
   integrations_api_key: "API atslēga",
   integrations_connect: "Savienot",
-  integrations_connect_all_microsoft: "Savienot visu Microsoft",
+  integrations_connect_all_microsoft: "Savienot visu",
+  integrations_microsoft: "Microsoft",
+  integrations_microsoft_desc: "Outlook, OneDrive, Teams u.c.",
+  integrations_microsoft_modules: "Moduļi",
+  integrations_microsoft_partial: "Daļēji savienots",
+  integrations_microsoft_manage: "Pārvaldīt",
   integrations_reconnect: "Atkārtoti savienot",
   integrations_update_key: "Atjaunināt atslēgu",
   integrations_embed_origins: "Iegultnes izcelsmes",
@@ -760,8 +765,8 @@ export const lv = {
   integrations_embed_copied: "Nokopēts",
   integrations_oauth_providers: "OAuth pakalpojumu sniedzēji",
   integrations_oauth_providers_hint: "Microsoft Entra lietotnes akreditācijas dati.",
-  integrations_save_provider: "Saglabāt sniedzēju",
-  integrations_entra_setup: "Entra lietotnes iestatīšana",
+  integrations_save_provider: "Saglabāt",
+  integrations_entra_setup: "Entra iestatīšana",
   integrations_entra_step_register:
     "Entra → App registrations → New registration. Konti: viena vai vairākas organizācijas. Platforma: Web.",
   integrations_entra_step_redirect: "Pievieno šo novirzīšanas URI:",
@@ -773,6 +778,33 @@ export const lv = {
   integrations_entra_step_paste:
     "Ielīmē Application (client) ID, client secret un Directory (tenant) ID formā.",
   integrations_entra_permissions: "Delegētās atļaujas",
+  integrations_info_apps_title: "Lietotnes",
+  integrations_info_apps_body:
+    "Lietotnes pievieno rīkus čatam.\nAdministratori piedāvā moduļus organizācijai.\nLietotāji savieno savu kontu.",
+  integrations_info_microsoft_title: "Microsoft",
+  integrations_info_microsoft_body:
+    "Var savienot visus piedāvātos moduļus vienā pierakstā vai pa vienam.\nTeams vajag darba vai skolas Microsoft 365 kontu.\nPasts, kalendārs, faili un To Do darbojas arī ar personīgo kontu.",
+  integrations_info_mcp_policy_title: "Instances politika",
+  integrations_info_mcp_policy_body:
+    "Org serveri: organizācijas administratori var pievienot MCP galapunktus.\nLietotāju serveri: cilvēki var pievienot personīgus MCP.",
+  integrations_info_mcp_instance_servers_title: "Instances MCP serveri",
+  integrations_info_mcp_instance_servers_body:
+    "Kopīgi visai instancei.\nHTTP/SSE: MCP URL, kam API var piekļūt.\nStdio: komanda uz API hosta.\nAuth: nav, kopīgs tokens vai katrs lietotājs dod savu.",
+  integrations_info_mcp_org_title: "Organizācijas MCP",
+  integrations_info_mcp_org_body:
+    "Sasaistes izvēlas, kurus instances serverus izmanto šī organizācija.\nOrg serveri ir papildu galapunkti tikai šai organizācijai.",
+  integrations_info_mcp_bindings_title: "Sasaistes",
+  integrations_info_mcp_bindings_body:
+    "Inherit: izmantot instances serveri.\nOverride: organizācija aizstāj URL vai auth.\nDisabled: paslēpt serveri šai organizācijai.",
+  integrations_info_mcp_connections_title: "Mani savienojumi",
+  integrations_info_mcp_connections_body:
+    "Šeit parādās serveri, kam vajag tavu API tokenu.\nIelīmē, saglabā, tad Test.\nMicrosoft lietotnes savieno sadaļā Lietotnes.",
+  integrations_info_mcp_my_servers_title: "Mani MCP serveri",
+  integrations_info_mcp_my_servers_body:
+    "Personīgi MCP galapunkti tikai tev.\nPieejami, ja instances un organizācijas politika to atļauj.",
+  integrations_info_mcp_add_server_title: "Pievienot MCP serveri",
+  integrations_info_mcp_add_server_body:
+    "Slug ir rīku nosaukumu prefikss čatā.\nHTTP/SSE vajag URL, kam API var piekļūt.\nStdio palaiž komandu uz API hosta.\nUser-provided auth vāc katra tokenu sadaļā Mani savienojumi.",
   mcp_instance_policy: "Instances politika",
   mcp_allow_org_servers: "Atļaut organizācijām definēt MCP serverus",
   mcp_allow_user_servers: "Atļaut lietotājiem personīgos MCP serverus",

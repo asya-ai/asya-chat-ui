@@ -1821,6 +1821,10 @@ const MessageBubbleComponent = ({
                                             content_type: attachment.content_type,
                                             data_base64: attachment.data_base64,
                                             content_url: attachment.content_url,
+                                            preview_url:
+                                              "preview_url" in attachment
+                                                ? attachment.preview_url
+                                                : undefined,
                                           })
                                         }
                                       >
@@ -1930,6 +1934,10 @@ const MessageBubbleComponent = ({
                                         content_type: attachment.content_type,
                                         data_base64: attachment.data_base64,
                                         content_url: attachment.content_url,
+                                        preview_url:
+                                          "preview_url" in attachment
+                                            ? attachment.preview_url
+                                            : undefined,
                                       })
                                     }
                                   >
@@ -1977,6 +1985,10 @@ const MessageBubbleComponent = ({
                               content_type: attachment.content_type,
                               data_base64: attachment.data_base64,
                               content_url: attachment.content_url,
+                              preview_url:
+                                "preview_url" in attachment
+                                  ? attachment.preview_url
+                                  : undefined,
                             })
                           }
                         >
@@ -2034,6 +2046,10 @@ const MessageBubbleComponent = ({
                                 content_type: attachment.content_type ?? "application/octet-stream",
                                 data_base64: attachment.data_base64 ?? undefined,
                                 content_url: attachment.content_url ?? undefined,
+                                preview_url:
+                                  "preview_url" in attachment
+                                    ? attachment.preview_url
+                                    : undefined,
                               })
                             }
                           >

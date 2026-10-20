@@ -870,8 +870,13 @@ async def run_code_execution(
     except ValueError as exc:
         return ToolResult(name="code_execution", output={"error": str(exc)})
 
+    # Only current-branch messages — regenerated/hidden turns leave attachments
+    # on disk and would otherwise spam /inputs on every code run.
     message_ids = context.session.exec(
-        select(ChatMessage.id).where(ChatMessage.chat_id.in_(family_ids))
+        select(ChatMessage.id).where(
+            ChatMessage.chat_id.in_(family_ids),
+            ChatMessage.is_current.is_(True),
+        )
     ).all()
     attachments = []
     if message_ids:

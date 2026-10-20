@@ -757,6 +757,9 @@ class AgentSource(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     agent_id: UUID = Field(foreign_key="agents.id", index=True)
+    parent_source_id: Optional[UUID] = Field(
+        default=None, foreign_key="agent_sources.id", index=True
+    )
     kind: AgentSourceKind = Field(sa_column=Column(String(32), nullable=False))
     title: str
     url: Optional[str] = Field(default=None)

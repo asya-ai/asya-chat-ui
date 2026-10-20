@@ -75,7 +75,8 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "The tool returns file_name (e.g. generated-….png). To place it in a Marp presentation, "
         "reference that exact file_name in markdown — "
         "![bg right:40% cover](generated-….png) or ![](generated-….png). "
-        "The app resolves chat attachment file names; do not invent /chat/… paths or bare relative URLs that are not the returned file_name."
+        "The app resolves chat attachment and project image source file names; "
+        "do not invent /chat/… paths or bare relative URLs that are not a known file_name."
     ),
     "edit_image": (
         "Use edit_image when the user asks to modify an existing image. "
@@ -99,15 +100,19 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     ),
     "list_project_sources": (
         "Use list_project_sources to see files and indexed chats in this project. "
-        "Pass include_chats=false to list uploaded documents only."
+        "Pass include_chats=false to list uploaded documents only. "
+        "Image sources include presentation_ref (file_name) — embed that exact name in "
+        "Marp/cowork markdown as ![](file_name). Archive uploads list extracted sub-files."
     ),
     "search_project_sources": (
         "Use search_project_sources for semantic retrieval over this project's uploaded "
-        "files/URLs and indexed prior chats. When the user wants answers based only on "
-        "uploaded sources/documents (not prior chats), set include_chats=false."
+        "files/URLs (including image descriptions and archive contents) and indexed prior "
+        "chats. When the user wants answers based only on uploaded sources/documents "
+        "(not prior chats), set include_chats=false."
     ),
     "read_project_source": (
-        "Use read_project_source to read a project file or indexed chat transcript by numeric id."
+        "Use read_project_source to read a project file or indexed chat transcript by numeric id. "
+        "For images this returns the extracted text/description."
     ),
 }
 

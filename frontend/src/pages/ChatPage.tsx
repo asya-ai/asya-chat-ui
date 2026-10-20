@@ -4,7 +4,7 @@ import { flushSync } from "react-dom"
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, chatApi, configApi, mcpApi } from "@/lib/api"
+import { agentApi, ApiError, chatApi, configApi, mcpApi } from "@/lib/api"
 import { chatGenerationIndicatorsStore, useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import { composerDraftStore } from "@/lib/composer-drafts"
 import {
@@ -19,6 +19,7 @@ import {
   type ActionInfoLevel,
 } from "@/lib/storage"
 import type {
+  AgentSource,
   Chat,
   ChatModel,
   ChatMessage,
@@ -51,7 +52,10 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatSidebar from "@/pages/chat/ChatSidebar"
 import { CoworkPanel } from "@/pages/chat/CoworkPanel"
-import { collectChatImageUrlMap } from "@/pages/chat/resolveCoworkPresentationImages"
+import {
+  collectChatImageUrlMap,
+  collectProjectImageUrlMap,
+} from "@/pages/chat/resolveCoworkPresentationImages"
 import { useCoworkDocument } from "@/pages/chat/useCoworkDocument"
 import { useIsMobile } from "@/hooks/use-mobile"
 import HistoryPanel from "@/pages/chat/HistoryPanel"
@@ -155,6 +159,21 @@ const extractAttachmentIdFromContentUrl = (url?: string): string | undefined => 
   const match = url.match(/\/attachments\/([0-9a-fA-F-]{36})\/content/)
   return match?.[1]
 }
+
+const toEditableAttachments = (
+  attachments: ChatMessage["attachments"]
+): ChatMessageAttachmentInput[] =>
+  (attachments ?? []).map((attachment) => ({
+    upload_id:
+      ("upload_id" in attachment ? attachment.upload_id : undefined) ||
+      ("id" in attachment ? attachment.id : undefined) ||
+      extractAttachmentIdFromContentUrl(attachment.content_url),
+    file_name: attachment.file_name,
+    content_type: attachment.content_type,
+    data_base64: attachment.data_base64,
+    content_url: attachment.content_url,
+    preview_url: "preview_url" in attachment ? attachment.preview_url : undefined,
+  }))
 
 const isTimelineActionLabel = (label: string): boolean =>
   !/^Step \d+\/\d+$/.test(label) && label !== "Thinking" && label !== "Answering"
@@ -1759,6 +1778,7 @@ export const ChatPage = () => {
   const activeAgentId = activeAgentIdFromQuery ?? activeChat?.agent_id ?? null
   const isAgentMode = Boolean(activeAgentId)
   const isSubagentView = Boolean(activeChat?.is_subagent)
+  const [projectSources, setProjectSources] = useState<AgentSource[]>([])
   const { data: parentChat } = useChat(
     isSubagentView && activeChat?.parent_chat_id ? activeChat.parent_chat_id : null
   )
@@ -1773,6 +1793,25 @@ export const ChatPage = () => {
       !activeChat?.is_incognito &&
       !(chatDetail && chatDetail.id === chatId)
   )
+
+  useEffect(() => {
+    if (!activeAgentId || isSharedView) {
+      setProjectSources([])
+      return
+    }
+    let cancelled = false
+    void agentApi
+      .listSources(activeAgentId)
+      .then((items) => {
+        if (!cancelled) setProjectSources(items)
+      })
+      .catch(() => {
+        if (!cancelled) setProjectSources([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeAgentId, isSharedView])
   const { data: mcpPrompts = [] } = useMcpPrompts(isSharedView ? null : orgId)
   const usableMcpPrompts = isSharedView ? [] : mcpPrompts
   const hasInsertablePrompts = prompts.length > 0 || usableMcpPrompts.length > 0
@@ -2124,10 +2163,11 @@ export const ChatPage = () => {
     isSharedView,
   ])
 
-  const presentationImageUrls = useMemo(
-    () => collectChatImageUrlMap([...serverMessages, ...toolEvents]),
-    [serverMessages, toolEvents]
-  )
+  const presentationImageUrls = useMemo(() => {
+    const fromChat = collectChatImageUrlMap([...serverMessages, ...toolEvents])
+    const fromProject = collectProjectImageUrlMap(projectSources)
+    return { ...fromProject, ...fromChat }
+  }, [projectSources, serverMessages, toolEvents])
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = messagesContainerRef.current
@@ -3291,17 +3331,7 @@ export const ChatPage = () => {
     setEditingMessageId(msg.id)
     setEditingAttachmentError(null)
     setIsEditDragActive(false)
-    setEditingAttachments(
-      (msg.attachments ?? []).map((attachment) => ({
-        upload_id:
-          ("id" in attachment ? attachment.id : undefined) ||
-          extractAttachmentIdFromContentUrl(attachment.content_url),
-        file_name: attachment.file_name,
-        content_type: attachment.content_type,
-        data_base64: attachment.data_base64,
-        content_url: attachment.content_url,
-      }))
-    )
+    setEditingAttachments(toEditableAttachments(msg.attachments))
   }, [])
 
   const cancelEditMessage = useCallback(() => {
@@ -3495,15 +3525,7 @@ export const ChatPage = () => {
       if (userIndex < 0) return prev
       return [...prev.slice(0, userIndex + 1), placeholder]
     })
-    const retryAttachments = (sourceUser.attachments ?? []).map((attachment) => ({
-      upload_id:
-        ("id" in attachment ? attachment.id : undefined) ||
-        extractAttachmentIdFromContentUrl(attachment.content_url),
-      file_name: attachment.file_name,
-      content_type: attachment.content_type,
-      data_base64: attachment.data_base64,
-      content_url: attachment.content_url,
-    }))
+    const retryAttachments = toEditableAttachments(sourceUser.attachments)
     let uploadedRetryAttachments: ChatMessageAttachmentInput[]
     try {
       setIsUploadingAttachments(true)

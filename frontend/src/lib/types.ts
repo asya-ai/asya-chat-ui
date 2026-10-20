@@ -759,6 +759,10 @@ export type AgentSource = {
   content_type?: string | null
   status: AgentSourceStatus
   error_message?: string | null
+  parent_source_id?: string | null
+  is_archive?: boolean
+  is_image?: boolean
+  content_url?: string | null
   created_at: string
   updated_at: string
 }

@@ -1418,6 +1418,7 @@ export const ChatSidebar = ({
                             ref={fileInputRef}
                             type="file"
                             multiple
+                            accept=".doc,.docx,.xls,.xlsx,.md,.txt,.pdf,.ppt,.pptx,.csv,.json,.xml,.html,.htm,.yaml,.yml,.odt,.ods,.odp,.odg,.odf,.zip,.tar,.tgz,.tar.gz,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff,image/*"
                             className="hidden"
                             onChange={(event) => void handleUploadFiles(event.target.files)}
                           />
@@ -1460,62 +1461,90 @@ export const ChatSidebar = ({
                           </p>
                         ) : (
                           <div className="flex flex-col gap-2">
-                            {sources.map((source, sourceIndex) => (
-                              <div
-                                key={source.id}
-                                className="sidebar-stagger-item flex flex-col gap-1 px-2 py-1 border border-border rounded-lg"
-                                style={staggerStyle(sourceIndex)}
-                              >
-                                <div className="flex justify-between items-center gap-2">
-                                  <p className="min-w-0 font-medium text-sm truncate">
-                                    {source.title || source.file_name || source.url || "—"}
-                                  </p>
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <span className="bg-secondary px-1.5 py-0.5 rounded-full font-medium text-xs">
-                                      {sourceStatusLabel(source.status, t)}
-                                    </span>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-sm"
-                                      className="size-7"
-                                      aria-label={t("project_reindex_aria")}
-                                      onClick={() => {
-                                        void agentApi
-                                          .reindexSource(focusedAgent.id, source.id)
-                                          .then(() => loadSources(focusedAgent.id))
-                                      }}
+                            {(() => {
+                              const childrenByParent = new Map<string, AgentSource[]>()
+                              const roots: AgentSource[] = []
+                              for (const source of sources) {
+                                if (source.parent_source_id) {
+                                  const list =
+                                    childrenByParent.get(source.parent_source_id) ?? []
+                                  list.push(source)
+                                  childrenByParent.set(source.parent_source_id, list)
+                                } else {
+                                  roots.push(source)
+                                }
+                              }
+                              let staggerIndex = 0
+                              const renderSource = (source: AgentSource, nested = false) => {
+                                const children = childrenByParent.get(source.id) ?? []
+                                const index = staggerIndex++
+                                return (
+                                  <div
+                                    key={source.id}
+                                    className={nested ? "ml-3 flex flex-col gap-2" : "flex flex-col gap-2"}
+                                  >
+                                    <div
+                                      className="sidebar-stagger-item flex flex-col gap-1 px-2 py-1 border border-border rounded-lg"
+                                      style={staggerStyle(index)}
                                     >
-                                      <RefreshCw aria-hidden="true" className="size-4" />
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-sm"
-                                      className="size-7"
-                                      disabled={deletingSourceId === source.id}
-                                      aria-label={t("common_delete")}
-                                      onClick={() => {
-                                        void (async () => {
-                                          setDeletingSourceId(source.id)
-                                          try {
-                                            await agentApi.removeSource(focusedAgent.id, source.id)
-                                            await loadSources(focusedAgent.id)
-                                          } finally {
-                                            setDeletingSourceId(null)
-                                          }
-                                        })()
-                                      }}
-                                    >
-                                      <Trash2 aria-hidden="true" className="size-4" />
-                                    </Button>
+                                      <div className="flex justify-between items-center gap-2">
+                                        <p className="min-w-0 font-medium text-sm truncate">
+                                          {source.title || source.file_name || source.url || "—"}
+                                        </p>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          <span className="bg-secondary px-1.5 py-0.5 rounded-full font-medium text-xs">
+                                            {sourceStatusLabel(source.status, t)}
+                                          </span>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            className="size-7"
+                                            aria-label={t("project_reindex_aria")}
+                                            onClick={() => {
+                                              void agentApi
+                                                .reindexSource(focusedAgent.id, source.id)
+                                                .then(() => loadSources(focusedAgent.id))
+                                            }}
+                                          >
+                                            <RefreshCw aria-hidden="true" className="size-4" />
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            className="size-7"
+                                            disabled={deletingSourceId === source.id}
+                                            aria-label={t("common_delete")}
+                                            onClick={() => {
+                                              void (async () => {
+                                                setDeletingSourceId(source.id)
+                                                try {
+                                                  await agentApi.removeSource(
+                                                    focusedAgent.id,
+                                                    source.id
+                                                  )
+                                                  await loadSources(focusedAgent.id)
+                                                } finally {
+                                                  setDeletingSourceId(null)
+                                                }
+                                              })()
+                                            }}
+                                          >
+                                            <Trash2 aria-hidden="true" className="size-4" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                      <p className="text-muted-foreground text-xs line-clamp-2">
+                                        {source.summary || source.url || source.error_message || ""}
+                                      </p>
+                                    </div>
+                                    {children.map((child) => renderSource(child, true))}
                                   </div>
-                                </div>
-                                <p className="text-muted-foreground text-xs line-clamp-2">
-                                  {source.summary || source.url || source.error_message || ""}
-                                </p>
-                              </div>
-                            ))}
+                                )
+                              }
+                              return roots.map((source) => renderSource(source))
+                            })()}
                           </div>
                         )}
                       </>

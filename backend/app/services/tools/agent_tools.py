@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from app.models.entities import AgentSource, AgentSourceKind, AgentSourceStatus
 from app.services.agents.chat_index import chat_source_visible_to_user
 from app.services.agents.runtime import search_agent_chunks
+from app.services.agents.source_media import is_archive_file, is_image_file
 from app.services.tools.code_execution import project_source_exec_path
 from app.services.tools.registry import ToolResult
 
@@ -107,31 +108,51 @@ async def list_project_sources(
     context: AgentToolContext, *, include_chats: bool = True
 ) -> ToolResult:
     sources = context._all_sources(include_chats=include_chats)
-    results = [
-        {
-            "id": idx,
-            "title": source.title,
-            "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
-            "url": source.url if source.kind != AgentSourceKind.chat else None,
-            "chat_id": (
-                (source.metadata_json or {}).get("chat_id")
-                if source.kind == AgentSourceKind.chat
-                and isinstance(source.metadata_json, dict)
-                else None
-            ),
-            "status": _status_str(source),
-            "readable": source.status == AgentSourceStatus.ready,
-            "summary": _source_summary(source),
-            "length_chars": len(source.content_text or ""),
-            "exec_path": (
-                project_source_exec_path(source)
-                if source.status == AgentSourceStatus.ready
-                and source.kind != AgentSourceKind.chat
-                else None
-            ),
-        }
-        for idx, source in enumerate(sources, start=1)
-    ]
+    results = []
+    for idx, source in enumerate(sources, start=1):
+        meta = source.metadata_json if isinstance(source.metadata_json, dict) else {}
+        is_image = bool(meta.get("is_image")) or is_image_file(
+            file_name=source.file_name, content_type=source.content_type
+        )
+        is_archive = bool(meta.get("is_archive")) or is_archive_file(
+            file_name=source.file_name, content_type=source.content_type
+        )
+        results.append(
+            {
+                "id": idx,
+                "title": source.title,
+                "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
+                "url": source.url if source.kind != AgentSourceKind.chat else None,
+                "chat_id": (
+                    meta.get("chat_id")
+                    if source.kind == AgentSourceKind.chat
+                    else None
+                ),
+                "file_name": source.file_name,
+                "parent_id": (
+                    context.number_for(source.parent_source_id)
+                    if source.parent_source_id
+                    else None
+                ),
+                "is_image": is_image,
+                "is_archive": is_archive,
+                "status": _status_str(source),
+                "readable": source.status == AgentSourceStatus.ready,
+                "summary": _source_summary(source),
+                "length_chars": len(source.content_text or ""),
+                "exec_path": (
+                    project_source_exec_path(source)
+                    if source.status == AgentSourceStatus.ready
+                    and source.kind != AgentSourceKind.chat
+                    else None
+                ),
+                "presentation_ref": (
+                    source.file_name
+                    if is_image and source.status == AgentSourceStatus.ready
+                    else None
+                ),
+            }
+        )
     if not results:
         scope = (
             "uploaded files/URLs"

@@ -90,6 +90,9 @@ def summarize_source_text(text: str, max_len: int = 320) -> str | None:
 
 
 def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | None]:
+    from app.services.agents.source_prepare import prepare_source_content
+    from app.workers.celery_app import celery_app
+
     source_id = source.id
     try:
         source.status = AgentSourceStatus.indexing
@@ -97,6 +100,12 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
         source.updated_at = datetime.utcnow()
         session.add(source)
         session.flush()
+
+        child_ids = prepare_source_content(session, source)
+        session.flush()
+        source = session.get(AgentSource, source_id)
+        if not source:
+            return 0, None
 
         existing_chunk_ids = session.exec(
             select(AgentChunk.id).where(AgentChunk.source_id == source.id)
@@ -114,6 +123,12 @@ def reindex_source(session: Session, source: AgentSource) -> tuple[int, str | No
         prior_metadata = dict(source.metadata_json or {})
         summary = summarize_source_text(content_text)
         session.commit()
+
+        for child_id in child_ids:
+            celery_app.send_task(
+                "chatui.reindex_agent_source",
+                args=[str(child_id)],
+            )
 
         pieces = chunk_text(content_text)
         # Drop the full-source string before embedding so peak RSS is chunks+batch,

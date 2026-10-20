@@ -750,7 +750,12 @@ export const ja = {
   integrations_not_configured: "MCP URL未設定。",
   integrations_api_key: "APIキー",
   integrations_connect: "接続",
-  integrations_connect_all_microsoft: "Microsoftをまとめて接続",
+  integrations_connect_all_microsoft: "すべて接続",
+  integrations_microsoft: "Microsoft",
+  integrations_microsoft_desc: "Outlook、OneDrive、Teamsなど",
+  integrations_microsoft_modules: "モジュール",
+  integrations_microsoft_partial: "一部接続済み",
+  integrations_microsoft_manage: "管理",
   integrations_reconnect: "再接続",
   integrations_update_key: "キーを更新",
   integrations_embed_origins: "埋め込みオリジン",
@@ -759,8 +764,8 @@ export const ja = {
   integrations_embed_copied: "コピー済み",
   integrations_oauth_providers: "OAuthプロバイダー",
   integrations_oauth_providers_hint: "Microsoft Entraアプリの認証情報。",
-  integrations_save_provider: "プロバイダーを保存",
-  integrations_entra_setup: "Entraアプリ設定",
+  integrations_save_provider: "保存",
+  integrations_entra_setup: "Entra設定",
   integrations_entra_step_register:
     "Entra → App registrations → New registration。アカウント種類は必要に応じて。プラットフォーム: Web。",
   integrations_entra_step_redirect: "このリダイレクトURIを追加:",
@@ -772,6 +777,33 @@ export const ja = {
   integrations_entra_step_paste:
     "Application (client) ID、クライアントシークレット、Directory (tenant) IDをフォームに貼り付け。",
   integrations_entra_permissions: "委任されたアクセス許可",
+  integrations_info_apps_title: "アプリ",
+  integrations_info_apps_body:
+    "アプリはチャットにツールを追加します。\n管理者が組織向けにモジュールを提供します。\nユーザーは自分のアカウントを接続します。",
+  integrations_info_microsoft_title: "Microsoft",
+  integrations_info_microsoft_body:
+    "提供中のモジュールをまとめて、または個別に接続できます。\nTeams は職場または学校の Microsoft 365 アカウントが必要です。\nメール、予定表、ファイル、To Do は個人アカウントでも利用できます。",
+  integrations_info_mcp_policy_title: "インスタンスポリシー",
+  integrations_info_mcp_policy_body:
+    "組織サーバー: 組織管理者が MCP を追加できます。\nユーザーサーバー: 個人の MCP を追加できます。",
+  integrations_info_mcp_instance_servers_title: "インスタンス MCP サーバー",
+  integrations_info_mcp_instance_servers_body:
+    "インスタンス全体で共有します。\nHTTP/SSE: API から届く MCP URL。\nStdio: API ホスト上で実行するコマンド。\n認証: なし、共有トークン、またはユーザー各自。",
+  integrations_info_mcp_org_title: "組織 MCP",
+  integrations_info_mcp_org_body:
+    "バインディングでこの組織が使うインスタンスサーバーを選びます。\n組織サーバーはこの組織専用の追加エンドポイントです。",
+  integrations_info_mcp_bindings_title: "バインディング",
+  integrations_info_mcp_bindings_body:
+    "Inherit: インスタンスサーバーをそのまま使う。\nOverride: この組織で URL や認証を差し替える。\nDisabled: この組織では非表示。",
+  integrations_info_mcp_connections_title: "自分の接続",
+  integrations_info_mcp_connections_body:
+    "自分の API トークンが必要なサーバーがここに出ます。\n貼り付けて保存し、Test します。\nMicrosoft アプリは「アプリ」から接続します。",
+  integrations_info_mcp_my_servers_title: "自分の MCP サーバー",
+  integrations_info_mcp_my_servers_body:
+    "自分だけがチャットで使う個人 MCP です。\nインスタンスと組織のポリシーが両方許可しているとき利用できます。",
+  integrations_info_mcp_add_server_title: "MCP サーバーを追加",
+  integrations_info_mcp_add_server_body:
+    "スラッグはチャット上のツール名の接頭辞になります。\nHTTP/SSE は API から届く URL が必要です。\nStdio は API ホストでコマンドを実行します。\nユーザー提供認証は「自分の接続」で各人のトークンを集めます。",
   mcp_instance_policy: "インスタンスポリシー",
   mcp_allow_org_servers: "組織によるMCPサーバー定義を許可",
   mcp_allow_user_servers: "ユーザーによる個人MCPサーバーを許可",

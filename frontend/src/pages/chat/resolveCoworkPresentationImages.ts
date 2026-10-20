@@ -1,6 +1,6 @@
 /** Rewrite bare chat-attachment filenames in Marp markdown to fetchable URLs. */
 
-import type { ChatMessage } from "@/lib/types"
+import type { AgentSource, ChatMessage } from "@/lib/types"
 
 export type CoworkImageUrlMap = Record<string, string>
 
@@ -92,6 +92,24 @@ export const collectChatImageUrlMap = (
           : null
       considerToolAttachments(rawAttachments)
     }
+  }
+  return map
+}
+
+export const collectProjectImageUrlMap = (
+  sources: AgentSource[] | null | undefined
+): CoworkImageUrlMap => {
+  const map: CoworkImageUrlMap = {}
+  if (!sources?.length) return map
+  for (const source of sources) {
+    if (!source.is_image && !source.content_type?.startsWith("image/")) continue
+    const url = source.content_url
+    if (!url) continue
+    if (source.file_name) {
+      map[source.file_name] = url
+      map[basename(source.file_name)] = url
+    }
+    map[source.id] = url
   }
   return map
 }

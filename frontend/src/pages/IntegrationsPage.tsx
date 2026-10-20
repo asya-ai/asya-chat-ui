@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { authApi, integrationsApi, mcpApi, orgApi } from "@/lib/api"
 import { useI18n } from "@/lib/i18n-context"
+import type { TranslationKey } from "@/lib/i18n-context"
 import { orgStore } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import type {
@@ -48,6 +49,59 @@ import type {
 } from "@/lib/types"
 
 type ServerScope = "instance" | "org" | "user"
+
+type InfoTopic =
+  | "apps"
+  | "microsoft"
+  | "mcp_policy"
+  | "mcp_instance_servers"
+  | "mcp_org"
+  | "mcp_bindings"
+  | "mcp_connections"
+  | "mcp_my_servers"
+  | "mcp_add_server"
+
+const INFO_COPY: Record<
+  InfoTopic,
+  { title: TranslationKey; body: TranslationKey }
+> = {
+  apps: {
+    title: "integrations_info_apps_title",
+    body: "integrations_info_apps_body",
+  },
+  microsoft: {
+    title: "integrations_info_microsoft_title",
+    body: "integrations_info_microsoft_body",
+  },
+  mcp_policy: {
+    title: "integrations_info_mcp_policy_title",
+    body: "integrations_info_mcp_policy_body",
+  },
+  mcp_instance_servers: {
+    title: "integrations_info_mcp_instance_servers_title",
+    body: "integrations_info_mcp_instance_servers_body",
+  },
+  mcp_org: {
+    title: "integrations_info_mcp_org_title",
+    body: "integrations_info_mcp_org_body",
+  },
+  mcp_bindings: {
+    title: "integrations_info_mcp_bindings_title",
+    body: "integrations_info_mcp_bindings_body",
+  },
+  mcp_connections: {
+    title: "integrations_info_mcp_connections_title",
+    body: "integrations_info_mcp_connections_body",
+  },
+  mcp_my_servers: {
+    title: "integrations_info_mcp_my_servers_title",
+    body: "integrations_info_mcp_my_servers_body",
+  },
+  mcp_add_server: {
+    title: "integrations_info_mcp_add_server_title",
+    body: "integrations_info_mcp_add_server_body",
+  },
+}
 
 const emptyServerForm = (): McpServerWrite => ({
   slug: "",
@@ -99,11 +153,30 @@ export const IntegrationsPage = () => {
   const [embedCopied, setEmbedCopied] = useState<string | null>(null)
   const [configuringAppId, setConfiguringAppId] = useState<string | null>(null)
   const [connectingAppId, setConnectingAppId] = useState<string | null>(null)
+  const [microsoftConnectOpen, setMicrosoftConnectOpen] = useState(false)
+  const [infoTopic, setInfoTopic] = useState<InfoTopic | null>(null)
   const [oauthProviders, setOauthProviders] = useState<OAuthProviderConfig[]>([])
   const [oauthProviderDrafts, setOauthProviderDrafts] = useState<
     Record<string, Record<string, string>>
   >({})
   const [entraSetupOpen, setEntraSetupOpen] = useState(false)
+
+  const openInfo = (topic: InfoTopic, event?: { stopPropagation: () => void }) => {
+    event?.stopPropagation()
+    setInfoTopic(topic)
+  }
+
+  const InfoButton = ({ topic }: { topic: InfoTopic }) => (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      aria-label={t(INFO_COPY[topic].title)}
+      onClick={(e) => openInfo(topic, e)}
+    >
+      <Info />
+    </Button>
+  )
 
   const microsoftGraphPermissions = useMemo(() => {
     const scopes = new Set<string>()
@@ -673,18 +746,117 @@ export const IntegrationsPage = () => {
   )
 
   const orgSectionVisible = canManageOrg && selectedOrgId
-  const visibleCatalogApps = canConfigureCatalogApps
-    ? catalogApps
-    : catalogApps.filter((app) => app.installable || app.connected)
-  const showCatalogSection = canConfigureCatalogApps || visibleCatalogApps.length > 0
-  const microsoftConnectable = visibleCatalogApps.filter(
-    (app) =>
-      app.oauth_provider_id === "microsoft" &&
-      app.connect_kind === "oauth" &&
-      app.installable
+  const isMicrosoftApp = (app: CatalogIntegrationStatus) =>
+    app.oauth_provider_id === "microsoft"
+  const microsoftApps = useMemo(
+    () => catalogApps.filter(isMicrosoftApp),
+    [catalogApps]
   )
-  const showMicrosoftConnectAll =
-    Boolean(selectedOrgId) && microsoftConnectable.length > 1
+  const otherCatalogApps = useMemo(() => {
+    const rest = catalogApps.filter((app) => !isMicrosoftApp(app))
+    return canConfigureCatalogApps
+      ? rest
+      : rest.filter((app) => app.installable || app.connected)
+  }, [canConfigureCatalogApps, catalogApps])
+  const microsoftUserApps = useMemo(
+    () => microsoftApps.filter((app) => app.installable || app.connected),
+    [microsoftApps]
+  )
+  const microsoftProvider = oauthProviders.find((p) => p.provider_id === "microsoft")
+  const otherOauthProviders = oauthProviders.filter((p) => p.provider_id !== "microsoft")
+  const showMicrosoftAdmin =
+    (isSuperAdmin || canManageOrg) && microsoftApps.length > 0
+  const showMicrosoftUser =
+    !showMicrosoftAdmin && microsoftUserApps.length > 0
+  const showMicrosoftCard = showMicrosoftAdmin || showMicrosoftUser
+  const microsoftConnectable = microsoftUserApps.filter(
+    (app) => app.installable || app.connected
+  )
+  const microsoftConnectedCount = microsoftConnectable.filter((a) => a.connected).length
+  const microsoftStatusLabel =
+    microsoftConnectedCount === 0
+      ? microsoftConnectable.length > 0
+        ? t("mcp_not_connected")
+        : isSuperAdmin && microsoftProvider && !microsoftProvider.configured
+          ? t("integrations_setup_needed")
+          : null
+      : microsoftConnectedCount >= microsoftConnectable.length
+        ? t("mcp_connected")
+        : t("integrations_microsoft_partial")
+  const showCatalogSection =
+    showMicrosoftCard || otherCatalogApps.length > 0 || canConfigureCatalogApps
+
+  const renderMicrosoftOauthFields = (provider: OAuthProviderConfig) => {
+    const draft = oauthProviderDrafts[provider.provider_id] ?? {}
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium">{t("integrations_oauth_providers")}</p>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={t("integrations_entra_setup")}
+            onClick={() => setEntraSetupOpen(true)}
+          >
+            <Info />
+          </Button>
+        </div>
+        {provider.fields.map((field) => {
+          if (field.readonly || field.key === "redirect_uri") {
+            return (
+              <div key={field.key} className="space-y-1.5">
+                <p className="text-sm font-medium">{field.label}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    readOnly
+                    className="min-w-0 flex-1 font-mono text-xs"
+                    value={oauthCallbackUrl}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(oauthCallbackUrl)
+                    }}
+                  >
+                    {t("integrations_embed_copy")}
+                  </Button>
+                </div>
+              </div>
+            )
+          }
+          return (
+            <div key={field.key} className="space-y-1.5">
+              <p className="text-sm font-medium">{field.label}</p>
+              <Input
+                type={field.secret ? "password" : "text"}
+                placeholder={
+                  field.secret &&
+                  Boolean((provider as Record<string, unknown>)[`${field.key}_set`])
+                    ? t("org_provider_override_set")
+                    : field.placeholder ?? ""
+                }
+                value={draft[field.key] ?? ""}
+                onChange={(e) =>
+                  setOauthProviderDrafts((prev) => ({
+                    ...prev,
+                    [provider.provider_id]: {
+                      ...(prev[provider.provider_id] ?? {}),
+                      [field.key]: e.target.value,
+                    },
+                  }))
+                }
+              />
+            </div>
+          )
+        })}
+        <Button size="sm" onClick={() => void saveOauthProvider(provider)}>
+          {t("integrations_save_provider")}
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <SettingsShell title={t("integrations_title")}>
@@ -699,43 +871,136 @@ export const IntegrationsPage = () => {
         {showCatalogSection ? (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-medium">{t("integrations_apps")}</h2>
-              <div className="flex flex-wrap items-center gap-2">
-                {showMicrosoftConnectAll ? (
-                  <Button
-                    size="sm"
-                    onClick={() => void connectAllMicrosoftOAuth()}
-                  >
-                    {t("integrations_connect_all_microsoft")}
-                  </Button>
-                ) : null}
-                {(orgs.length > 1 || isSuperAdmin) && selectedOrgId ? (
-                  <Select
-                    value={selectedOrgId}
-                    onValueChange={(value) => {
-                      setSelectedOrgId(value)
-                      orgStore.set(value)
-                    }}
-                  >
-                    <SelectTrigger className="w-56">
-                      <SelectValue placeholder={t("org_select_placeholder")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {orgs.map((org) => (
-                        <SelectItem key={org.id} value={org.id}>
-                          {org.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : null}
+              <div className="flex items-center gap-0.5">
+                <h2 className="text-lg font-medium">{t("integrations_apps")}</h2>
+                <InfoButton topic="apps" />
               </div>
+              {(orgs.length > 1 || isSuperAdmin) && selectedOrgId ? (
+                <Select
+                  value={selectedOrgId}
+                  onValueChange={(value) => {
+                    setSelectedOrgId(value)
+                    orgStore.set(value)
+                  }}
+                >
+                  <SelectTrigger className="w-56">
+                    <SelectValue placeholder={t("org_select_placeholder")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {orgs.map((org) => (
+                      <SelectItem key={org.id} value={org.id}>
+                        {org.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
             </div>
-            {visibleCatalogApps.length === 0 ? (
+            {!showMicrosoftCard && otherCatalogApps.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("integrations_apps_empty")}</p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
-                {visibleCatalogApps.map((app) => {
+                {showMicrosoftCard ? (
+                  <Card
+                    className={cn(
+                      "gap-4 py-5 sm:col-span-2",
+                      showMicrosoftUser && selectedOrgId
+                        ? "cursor-pointer transition-colors hover:bg-muted/40"
+                        : null
+                    )}
+                    onClick={
+                      showMicrosoftUser && selectedOrgId
+                        ? () => setMicrosoftConnectOpen(true)
+                        : undefined
+                    }
+                  >
+                    <CardHeader className="flex flex-row items-start gap-3 space-y-0">
+                      <div
+                        className={cn(
+                          "flex size-11 shrink-0 items-center justify-center rounded-xl",
+                          "bg-muted text-base font-semibold tracking-tight text-foreground"
+                        )}
+                        aria-hidden
+                      >
+                        M
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-0.5">
+                            <CardTitle className="font-sans text-base font-medium leading-5">
+                              {t("integrations_microsoft")}
+                            </CardTitle>
+                            <InfoButton topic="microsoft" />
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {microsoftStatusLabel ? (
+                              <Badge
+                                variant={
+                                  microsoftConnectedCount > 0 ? "secondary" : "outline"
+                                }
+                                className="whitespace-nowrap"
+                              >
+                                {microsoftStatusLabel}
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </div>
+                        <CardDescription className="text-sm leading-5">
+                          {t("integrations_microsoft_desc")}
+                        </CardDescription>
+                      </div>
+                    </CardHeader>
+                    {showMicrosoftAdmin ? (
+                      <CardContent
+                        className="space-y-5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {isSuperAdmin && microsoftProvider
+                          ? renderMicrosoftOauthFields(microsoftProvider)
+                          : null}
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-0.5">
+                            <p className="text-sm font-medium">
+                              {t("integrations_microsoft_modules")}
+                            </p>
+                            <InfoButton topic="microsoft" />
+                          </div>
+                          {microsoftApps.map((app) => (
+                            <div
+                              key={app.catalog_id}
+                              className="flex items-center justify-between gap-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium">{app.name}</p>
+                                {app.description ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {app.description}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <Switch
+                                checked={app.enabled}
+                                onCheckedChange={(checked) =>
+                                  void toggleCatalogEnabled(app, checked)
+                                }
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        {selectedOrgId && microsoftConnectable.length > 0 ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setMicrosoftConnectOpen(true)}
+                          >
+                            {t("integrations_microsoft_manage")}
+                          </Button>
+                        ) : null}
+                      </CardContent>
+                    ) : null}
+                  </Card>
+                ) : null}
+                {otherCatalogApps.map((app) => {
                   const canConnect =
                     selectedOrgId &&
                     (app.installable || app.connected) &&
@@ -850,33 +1115,20 @@ export const IntegrationsPage = () => {
           </section>
         ) : null}
 
-        {isSuperAdmin && oauthProviders.length > 0 ? (
+        {isSuperAdmin && otherOauthProviders.length > 0 ? (
           <section className="space-y-4">
             <div>
               <h2 className="text-lg font-medium">{t("integrations_oauth_providers")}</h2>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              {oauthProviders.map((provider) => {
+              {otherOauthProviders.map((provider) => {
                 const draft = oauthProviderDrafts[provider.provider_id] ?? {}
                 return (
                   <Card key={provider.provider_id} className="gap-4 py-5">
                     <CardHeader className="pb-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <CardTitle className="font-sans text-base font-medium leading-5">
-                          {provider.name}
-                        </CardTitle>
-                        {provider.provider_id === "microsoft" ? (
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="ghost"
-                            aria-label={t("integrations_entra_setup")}
-                            onClick={() => setEntraSetupOpen(true)}
-                          >
-                            <Info />
-                          </Button>
-                        ) : null}
-                      </div>
+                      <CardTitle className="font-sans text-base font-medium leading-5">
+                        {provider.name}
+                      </CardTitle>
                       <CardDescription className="text-sm">
                         {provider.description}
                       </CardDescription>
@@ -946,7 +1198,10 @@ export const IntegrationsPage = () => {
 
         {isSuperAdmin ? (
           <section className="space-y-4">
-            <h2 className="text-lg font-medium">{t("mcp_instance_policy")}</h2>
+            <div className="flex items-center gap-0.5">
+              <h2 className="text-lg font-medium">{t("mcp_instance_policy")}</h2>
+              <InfoButton topic="mcp_policy" />
+            </div>
             <Card>
               <CardContent className="space-y-4 pt-6">
                 <div className="flex items-center justify-between gap-3">
@@ -971,7 +1226,10 @@ export const IntegrationsPage = () => {
         {isSuperAdmin ? (
           <section className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-medium">{t("mcp_instance_servers")}</h2>
+              <div className="flex items-center gap-0.5">
+                <h2 className="text-lg font-medium">{t("mcp_instance_servers")}</h2>
+                <InfoButton topic="mcp_instance_servers" />
+              </div>
               <Button onClick={() => openCreateDialog("instance")}>{t("mcp_add_server")}</Button>
             </div>
             <div className="grid gap-3">{instanceServers.map((s) => renderServerCard("instance", s))}</div>
@@ -981,7 +1239,10 @@ export const IntegrationsPage = () => {
         {orgSectionVisible ? (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-medium">{t("mcp_org_section")}</h2>
+              <div className="flex items-center gap-0.5">
+                <h2 className="text-lg font-medium">{t("mcp_org_section")}</h2>
+                <InfoButton topic="mcp_org" />
+              </div>
               {isSuperAdmin ? (
                 <Select value={selectedOrgId ?? ""} onValueChange={(value) => {
                   setSelectedOrgId(value)
@@ -1014,7 +1275,10 @@ export const IntegrationsPage = () => {
               </Card>
             ) : null}
             <div className="space-y-3">
-              <h3 className="text-sm font-medium">{t("mcp_instance_bindings")}</h3>
+              <div className="flex items-center gap-0.5">
+                <h3 className="text-sm font-medium">{t("mcp_instance_bindings")}</h3>
+                <InfoButton topic="mcp_bindings" />
+              </div>
               {bindings.map((binding) => (
                 <Card key={binding.instance_server_id}>
                   <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
@@ -1046,7 +1310,10 @@ export const IntegrationsPage = () => {
             {policy.allow_org_servers ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium">{t("mcp_org_servers")}</h3>
+                  <div className="flex items-center gap-0.5">
+                    <h3 className="text-sm font-medium">{t("mcp_org_servers")}</h3>
+                    <InfoButton topic="mcp_org" />
+                  </div>
                   <Button size="sm" onClick={() => openCreateDialog("org")}>
                     {t("mcp_add_server")}
                   </Button>
@@ -1058,7 +1325,10 @@ export const IntegrationsPage = () => {
         ) : null}
 
         <section className="space-y-4">
-          <h2 className="text-lg font-medium">{t("mcp_my_connections")}</h2>
+          <div className="flex items-center gap-0.5">
+            <h2 className="text-lg font-medium">{t("mcp_my_connections")}</h2>
+            <InfoButton topic="mcp_connections" />
+          </div>
           {overviewServers.filter((server) => String(server.user_auth_method) !== "oauth")
             .length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("mcp_no_connections")}</p>
@@ -1116,7 +1386,10 @@ export const IntegrationsPage = () => {
         {policy.allow_user_servers && (policy.org_allow_user_servers ?? true) ? (
           <section className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-medium">{t("mcp_my_servers")}</h2>
+              <div className="flex items-center gap-0.5">
+                <h2 className="text-lg font-medium">{t("mcp_my_servers")}</h2>
+                <InfoButton topic="mcp_my_servers" />
+              </div>
               <Button onClick={() => openCreateDialog("user")}>{t("mcp_add_server")}</Button>
             </div>
             <div className="grid gap-3">
@@ -1134,8 +1407,9 @@ export const IntegrationsPage = () => {
         >
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle>
+              <DialogTitle className="flex items-center gap-1">
                 {editingServer ? t("mcp_edit_server") : t("mcp_add_server")}
+                <InfoButton topic="mcp_add_server" />
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
@@ -1357,6 +1631,111 @@ export const IntegrationsPage = () => {
                     : t("integrations_connect")}
                 </Button>
               ) : null}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={microsoftConnectOpen}
+          onOpenChange={setMicrosoftConnectOpen}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-1">
+                {t("integrations_microsoft")}
+                <InfoButton topic="microsoft" />
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {selectedOrgId &&
+              microsoftConnectable.filter((a) => a.installable).length > 1 ? (
+                <Button
+                  className="w-full"
+                  onClick={() => void connectAllMicrosoftOAuth()}
+                >
+                  {t("integrations_connect_all_microsoft")}
+                </Button>
+              ) : null}
+              <div className="space-y-2">
+                {microsoftConnectable.map((app) => (
+                  <div
+                    key={app.catalog_id}
+                    className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{app.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {app.connected
+                          ? t("mcp_connected")
+                          : t("mcp_not_connected")}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-1.5">
+                      {app.connected ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void connectCatalogOAuth(app)}
+                          >
+                            {t("integrations_reconnect")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void disconnectCatalogApp(app)}
+                          >
+                            {t("mcp_disconnect")}
+                          </Button>
+                        </>
+                      ) : app.installable ? (
+                        <Button
+                          size="sm"
+                          onClick={() => void connectCatalogOAuth(app)}
+                        >
+                          {t("integrations_connect")}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setMicrosoftConnectOpen(false)}
+              >
+                {t("common_close")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={infoTopic != null}
+          onOpenChange={(open) => {
+            if (!open) setInfoTopic(null)
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {infoTopic ? t(INFO_COPY[infoTopic].title) : ""}
+              </DialogTitle>
+            </DialogHeader>
+            {infoTopic ? (
+              <div className="space-y-2 text-sm text-muted-foreground">
+                {t(INFO_COPY[infoTopic].body)
+                  .split("\n")
+                  .filter(Boolean)
+                  .map((line) => (
+                    <p key={line}>{line}</p>
+                  ))}
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button onClick={() => setInfoTopic(null)}>{t("common_close")}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

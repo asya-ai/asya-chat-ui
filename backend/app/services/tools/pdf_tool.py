@@ -27,7 +27,10 @@ class PdfToolContext:
 def _chat_attachments(session: Session, chat_id: str) -> list[ChatMessageAttachment]:
     chat_uuid = UUID(chat_id)
     message_ids = session.exec(
-        select(ChatMessage.id).where(ChatMessage.chat_id == chat_uuid)
+        select(ChatMessage.id).where(
+            ChatMessage.chat_id == chat_uuid,
+            ChatMessage.is_current.is_(True),
+        )
     ).all()
     if not message_ids:
         return []

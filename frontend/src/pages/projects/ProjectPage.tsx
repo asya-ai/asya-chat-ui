@@ -63,7 +63,7 @@ import { AppShell } from "@/components/AppShell"
 type Tab = "chats" | "files" | "instructions"
 
 const SOURCE_ACCEPT =
-  ".doc,.docx,.xls,.xlsx,.md,.txt,.pdf,.ppt,.pptx,.csv,.json,.xml,.html,.htm,.yaml,.yml,.odt,.ods,.odp,.odg,.odf"
+  ".doc,.docx,.xls,.xlsx,.md,.txt,.pdf,.ppt,.pptx,.csv,.json,.xml,.html,.htm,.yaml,.yml,.odt,.ods,.odp,.odg,.odf,.zip,.tar,.tgz,.tar.gz,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
 
 const formatDate = (value: string) => {
   try {
@@ -78,6 +78,21 @@ const SOURCE_STATUS_KEYS: Record<AgentSourceStatus, TranslationKey> = {
   indexing: "project_status_indexing",
   ready: "project_status_ready",
   failed: "project_status_failed",
+}
+
+const groupSources = (items: AgentSource[]) => {
+  const childrenByParent = new Map<string, AgentSource[]>()
+  const roots: AgentSource[] = []
+  for (const source of items) {
+    if (source.parent_source_id) {
+      const list = childrenByParent.get(source.parent_source_id) ?? []
+      list.push(source)
+      childrenByParent.set(source.parent_source_id, list)
+    } else {
+      roots.push(source)
+    }
+  }
+  return { roots, childrenByParent }
 }
 
 const ROLE_KEYS = {
@@ -652,61 +667,71 @@ export const ProjectPage = () => {
             {sources.length === 0 ? (
               <p className="text-muted-foreground text-sm">{t("project_no_files")}</p>
             ) : (
-              sources.map((source) => (
-                <Card key={source.id} className="gap-2 p-3">
-                  <div className="flex justify-between items-start gap-3">
-                    <div className="flex items-start gap-2 min-w-0">
-                      <FileText
-                        className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0"
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0">
-                        <p className="font-medium truncate">{source.title}</p>
-                        {source.url ? (
-                          <p className="text-muted-foreground text-xs truncate">{source.url}</p>
-                        ) : null}
-                        {source.summary ? (
-                          <p className="text-muted-foreground text-xs line-clamp-2">
-                            {source.summary}
-                          </p>
-                        ) : null}
-                        {source.error_message ? (
-                          <p className="text-destructive text-xs">{source.error_message}</p>
-                        ) : null}
-                      </div>
+              (() => {
+                const { roots, childrenByParent } = groupSources(sources)
+                const renderSource = (source: AgentSource, nested = false) => {
+                  const children = childrenByParent.get(source.id) ?? []
+                  return (
+                    <div key={source.id} className={nested ? "ml-4 space-y-2" : "space-y-2"}>
+                      <Card className="gap-2 p-3">
+                        <div className="flex justify-between items-start gap-3">
+                          <div className="flex items-start gap-2 min-w-0">
+                            <FileText
+                              className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0"
+                              aria-hidden="true"
+                            />
+                            <div className="min-w-0">
+                              <p className="font-medium truncate">{source.title}</p>
+                              {source.url ? (
+                                <p className="text-muted-foreground text-xs truncate">{source.url}</p>
+                              ) : null}
+                              {source.summary ? (
+                                <p className="text-muted-foreground text-xs line-clamp-2">
+                                  {source.summary}
+                                </p>
+                              ) : null}
+                              {source.error_message ? (
+                                <p className="text-destructive text-xs">{source.error_message}</p>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Badge variant={source.status === "ready" ? "secondary" : "outline"}>
+                              {t(SOURCE_STATUS_KEYS[source.status])}
+                            </Badge>
+                            {canEdit ? (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="w-8 h-8"
+                                  aria-label={t("project_reindex_aria")}
+                                  disabled={busy}
+                                  onClick={() => handleReindex(source.id)}
+                                >
+                                  <RefreshCw className="w-4 h-4" aria-hidden="true" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="w-8 h-8 text-destructive"
+                                  aria-label={t("project_delete_file_aria")}
+                                  disabled={deletingSourceId === source.id}
+                                  onClick={() => void handleDeleteSource(source.id)}
+                                >
+                                  <Trash2 className="w-4 h-4" aria-hidden="true" />
+                                </Button>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                      </Card>
+                      {children.map((child) => renderSource(child, true))}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant={source.status === "ready" ? "secondary" : "outline"}>
-                        {t(SOURCE_STATUS_KEYS[source.status])}
-                      </Badge>
-                      {canEdit ? (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="w-8 h-8"
-                            aria-label={t("project_reindex_aria")}
-                            disabled={busy}
-                            onClick={() => handleReindex(source.id)}
-                          >
-                            <RefreshCw className="w-4 h-4" aria-hidden="true" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="w-8 h-8 text-destructive"
-                            aria-label={t("project_delete_file_aria")}
-                            disabled={deletingSourceId === source.id}
-                            onClick={() => void handleDeleteSource(source.id)}
-                          >
-                            <Trash2 className="w-4 h-4" aria-hidden="true" />
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                </Card>
-              ))
+                  )
+                }
+                return roots.map((source) => renderSource(source))
+              })()
             )}
           </div>
         </div>

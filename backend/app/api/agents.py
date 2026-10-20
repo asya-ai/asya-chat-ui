@@ -3,18 +3,21 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import AuthContext, get_auth_context, get_db
+from app.core.config import settings
 from app.core.url_safety import is_blocked_hostname
 from app.models import (
     Agent,
@@ -43,8 +46,11 @@ from app.services.agent_access import (
     get_agent_role,
     list_accessible_agents,
 )
+from app.services.agents.source_media import is_archive_file, is_image_file
 from app.services.agents.source_parsing import extract_text_from_file
-from app.services.file_storage import delete_file, write_agent_source_file
+from app.services.agents.source_prepare import delete_source_tree
+from app.services.file_storage import delete_file, maybe_read_file_bytes, write_agent_source_file
+from app.services.image_normalize import normalize_image_attachment
 from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -163,6 +169,10 @@ class AgentSourceRead(BaseModel):
     content_type: str | None
     status: AgentSourceStatus
     error_message: str | None
+    parent_source_id: str | None = None
+    is_archive: bool = False
+    is_image: bool = False
+    content_url: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -311,6 +321,13 @@ def _decode_source_text(payload: AgentSourceCreateRequest) -> str:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="data_base64 is required for file sources",
             )
+        if is_archive_file(
+            file_name=payload.file_name, content_type=payload.content_type
+        ) or is_image_file(
+            file_name=payload.file_name, content_type=payload.content_type
+        ):
+            # Text / description is produced asynchronously during reindex.
+            return ""
         raw = _decode_base64_bytes(payload.data_base64)
         try:
             return extract_text_from_file(
@@ -392,8 +409,57 @@ def _fetch_url_text(url: str) -> str:
     return body
 
 
+def _source_access_token(source_id: UUID) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.attachment_url_expire_minutes
+    )
+    payload = {"src": str(source_id), "exp": expire}
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+
+def _decode_source_access_token(token: str) -> UUID:
+    try:
+        payload = jwt.decode(
+            token, settings.secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        source_id = payload.get("src")
+        if not source_id:
+            raise ValueError("Missing source id")
+        return UUID(str(source_id))
+    except (InvalidTokenError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid source token",
+        ) from exc
+
+
+def _public_api_base_url() -> str | None:
+    configured = (settings.public_api_base_url or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    return None
+
+
+def _source_content_url(source: AgentSource) -> str | None:
+    if not is_image_file(file_name=source.file_name, content_type=source.content_type):
+        meta = source.metadata_json if isinstance(source.metadata_json, dict) else {}
+        if not meta.get("is_image"):
+            return None
+    token = _source_access_token(source.id)
+    base_url = _public_api_base_url()
+    if base_url:
+        return f"{base_url}/agents/sources/{source.id}/content?token={token}"
+    return f"/api/agents/sources/{source.id}/content?token={token}"
+
+
 def _to_source_read(source: AgentSource) -> AgentSourceRead:
     metadata = source.metadata_json if isinstance(source.metadata_json, dict) else {}
+    is_archive = bool(metadata.get("is_archive")) or is_archive_file(
+        file_name=source.file_name, content_type=source.content_type
+    )
+    is_image = bool(metadata.get("is_image")) or is_image_file(
+        file_name=source.file_name, content_type=source.content_type
+    )
     return AgentSourceRead(
         id=str(source.id),
         kind=source.kind,
@@ -404,6 +470,10 @@ def _to_source_read(source: AgentSource) -> AgentSourceRead:
         content_type=source.content_type,
         status=source.status,
         error_message=source.error_message,
+        parent_source_id=str(source.parent_source_id) if source.parent_source_id else None,
+        is_archive=is_archive,
+        is_image=is_image,
+        content_url=_source_content_url(source) if is_image else None,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
@@ -596,20 +666,9 @@ def delete_agent(
         session.delete(row)
 
     sources = session.exec(select(AgentSource).where(AgentSource.agent_id == agent.id)).all()
-    source_ids = [source.id for source in sources]
-    if source_ids:
-        chunks = session.exec(select(AgentChunk).where(AgentChunk.source_id.in_(source_ids))).all()
-        chunk_ids = [chunk.id for chunk in chunks]
-        if chunk_ids:
-            embeddings = session.exec(
-                select(AgentEmbedding).where(AgentEmbedding.chunk_id.in_(chunk_ids))
-            ).all()
-            for embedding in embeddings:
-                session.delete(embedding)
-            session.flush()
-        for chunk in chunks:
-            session.delete(chunk)
-        session.flush()
+    roots = [source for source in sources if source.parent_source_id is None]
+    for source in roots:
+        delete_source_tree(session, source)
     # Detach any leftover chunks keyed only by agent_id.
     orphan_chunks = session.exec(
         select(AgentChunk).where(AgentChunk.agent_id == agent.id)
@@ -625,7 +684,10 @@ def delete_agent(
         for chunk in orphan_chunks:
             session.delete(chunk)
         session.flush()
-    for source in sources:
+    leftover_sources = session.exec(
+        select(AgentSource).where(AgentSource.agent_id == agent.id)
+    ).all()
+    for source in leftover_sources:
         delete_file(source.file_path)
         session.delete(source)
     session.flush()
@@ -666,25 +728,58 @@ def create_source(
             detail="Chat sources are managed automatically",
         )
     now = datetime.utcnow()
+    file_name = payload.file_name
+    content_type = payload.content_type
+    raw_bytes: bytes | None = None
+    metadata: dict | None = None
+
+    if payload.kind == AgentSourceKind.file and payload.data_base64:
+        raw_bytes = _decode_base64_bytes(payload.data_base64)
+        if len(raw_bytes) > settings.attachments_max_file_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Attachment exceeds maximum size.",
+            )
+        if is_image_file(file_name=file_name, content_type=content_type):
+            file_name, content_type, raw_bytes = normalize_image_attachment(
+                file_name or "image",
+                content_type or "application/octet-stream",
+                raw_bytes,
+            )
+            metadata = {"is_image": True}
+        elif is_archive_file(file_name=file_name, content_type=content_type):
+            metadata = {"is_archive": True}
+
+    # Rebuild payload fields that may have been normalized for images.
+    decode_payload = AgentSourceCreateRequest(
+        kind=payload.kind,
+        title=payload.title,
+        url=payload.url,
+        file_name=file_name,
+        content_type=content_type,
+        data_base64=payload.data_base64,
+        content_text=payload.content_text,
+    )
     source = AgentSource(
         agent_id=agent_id,
         kind=payload.kind,
-        title=(payload.title.strip() if payload.title else (payload.file_name or payload.url or "Source")),
+        title=(payload.title.strip() if payload.title else (file_name or payload.url or "Source")),
         url=payload.url,
-        file_name=payload.file_name,
-        content_type=payload.content_type,
-        content_text=_decode_source_text(payload),
+        file_name=file_name,
+        content_type=content_type,
+        content_text=_decode_source_text(decode_payload),
         status=AgentSourceStatus.queued,
+        metadata_json=metadata,
         created_at=now,
         updated_at=now,
     )
     session.add(source)
     session.flush()
-    if payload.kind == AgentSourceKind.file and payload.data_base64:
-        _store_file_source_bytes(
+    if payload.kind == AgentSourceKind.file and raw_bytes is not None:
+        _persist_source_bytes(
             source,
-            data_base64=payload.data_base64,
-            file_name=payload.file_name,
+            data=raw_bytes,
+            file_name=file_name,
         )
     source.status = AgentSourceStatus.queued
     source.error_message = None
@@ -780,21 +875,37 @@ def delete_source(
     if not source:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
 
-    chunks = session.exec(select(AgentChunk).where(AgentChunk.source_id == source.id)).all()
-    chunk_ids = [chunk.id for chunk in chunks]
-    if chunk_ids:
-        embeddings = session.exec(
-            select(AgentEmbedding).where(AgentEmbedding.chunk_id.in_(chunk_ids))
-        ).all()
-        for embedding in embeddings:
-            session.delete(embedding)
-        session.flush()
-    for chunk in chunks:
-        session.delete(chunk)
-    session.flush()
-    delete_file(source.file_path)
-    session.delete(source)
+    delete_source_tree(session, source)
     session.commit()
+
+
+@router.get("/sources/{source_id}/content")
+def get_source_content(
+    source_id: UUID,
+    token: str,
+    session: Session = Depends(get_db),
+) -> Response:
+    token_source_id = _decode_source_access_token(token)
+    if token_source_id != source_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid source token"
+        )
+    source = session.get(AgentSource, source_id)
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+    data = maybe_read_file_bytes(source.file_path)
+    if data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Source content missing"
+        )
+    return Response(
+        content=data,
+        media_type=source.content_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": f'inline; filename="{source.file_name or "source"}"',
+        },
+    )
 
 
 @router.post("/{agent_id}/sources/{source_id}/reindex", response_model=AgentSourceRead)
