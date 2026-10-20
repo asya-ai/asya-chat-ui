@@ -1850,7 +1850,9 @@ def _mcp_config_for_instance_row(
     """
     from app.services.integrations.catalog import (
         get_catalog,
+        google_mcp_request_headers,
         graph_mcp_request_headers,
+        is_google_catalog,
         is_microsoft_catalog,
         resolve_catalog_mcp_url,
     )
@@ -1870,23 +1872,31 @@ def _mcp_config_for_instance_row(
         headers = headers_from_shared_auth(row.auth_type, row.auth_config)
         config = row_to_runtime_config(row, headers=headers)
 
-    if getattr(row, "catalog_id", None) and is_microsoft_catalog(row.catalog_id):
-        entry = get_catalog(row.catalog_id)
+    catalog_id = getattr(row, "catalog_id", None)
+    if catalog_id and (
+        is_microsoft_catalog(catalog_id) or is_google_catalog(catalog_id)
+    ):
+        entry = get_catalog(catalog_id)
         if entry is not None:
             cfg, _, _ = resolve_effective_admin_config(
                 session,
                 target_kind="catalog",
-                target_id=row.catalog_id,
+                target_id=catalog_id,
                 org_id=org_id,
             )
             url = resolve_catalog_mcp_url(entry, cfg)
             if url:
                 config = replace(config, url=url)
         if row.auth_type == "user_provided":
+            extra = (
+                graph_mcp_request_headers(catalog_id)
+                if is_microsoft_catalog(catalog_id)
+                else google_mcp_request_headers(catalog_id)
+            )
             config = replace(
                 config,
                 headers={
-                    **graph_mcp_request_headers(row.catalog_id),
+                    **extra,
                     **(config.headers or {}),
                 },
             )

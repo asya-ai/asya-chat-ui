@@ -1,10 +1,14 @@
-"""Code-defined catalog integrations (PitchPatterns + Microsoft 365)."""
+"""Code-defined catalog integrations (PitchPatterns, Microsoft 365, Google)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.services.integrations.google_mcp_embed import (
+    EMBEDDED_GOOGLE_MCP_URL,
+    embedded_google_mcp_url,
+)
 from app.services.integrations.graph_mcp_embed import (
     EMBEDDED_GRAPH_MCP_URL,
     embedded_graph_mcp_url,
@@ -23,6 +27,10 @@ _MS_BASE_SCOPES = (
 # Embedded Graph MCP (mounted on the ChatUI API). See graph_mcp_embed.py.
 # Matches settings default; resolve_catalog_mcp_url reads live GRAPH_MCP_EMBED_URL.
 DEFAULT_GRAPH_MCP_URL = EMBEDDED_GRAPH_MCP_URL
+DEFAULT_GOOGLE_MCP_URL = EMBEDDED_GOOGLE_MCP_URL
+
+_GOOGLE = "https://www.googleapis.com/auth"
+_GOOGLE_BASE_SCOPES = ("openid", "email", "profile")
 
 # Narrow tools advertised by the shared Graph MCP per catalog card.
 _GRAPH_MCP_TOOLSETS: dict[str, str] = {
@@ -33,6 +41,20 @@ _GRAPH_MCP_TOOLSETS: dict[str, str] = {
     "sharepoint": "files",
     "teams": "chat",
     "todo": "tasks",
+}
+
+# Narrow tools advertised by the shared Google MCP per catalog card.
+_GOOGLE_MCP_TOOLSETS: dict[str, str] = {
+    "gmail": "gmail",
+    "google_drive": "drive",
+    "google_calendar": "calendar",
+    "google_contacts": "contacts",
+    "google_meet": "meet",
+    "google_tasks": "tasks",
+    "google_docs": "docs",
+    "google_sheets": "sheets",
+    "google_slides": "slides",
+    "google_chat": "chat",
 }
 
 
@@ -79,6 +101,10 @@ def _ms_scopes(*graph_scopes: str) -> tuple[str, ...]:
     return (*_MS_BASE_SCOPES, *(f"{_GRAPH}/{scope}" for scope in graph_scopes))
 
 
+def _google_scopes(*scope_suffixes: str) -> tuple[str, ...]:
+    return (*_GOOGLE_BASE_SCOPES, *(f"{_GOOGLE}/{s}" for s in scope_suffixes))
+
+
 def graph_mcp_request_headers(catalog_id: str) -> dict[str, str]:
     """Extra HTTP headers for the shared Graph MCP (toolset + write gate)."""
     headers = {"X-Write-Scope": "true"}
@@ -88,16 +114,31 @@ def graph_mcp_request_headers(catalog_id: str) -> dict[str, str]:
     return headers
 
 
+def google_mcp_request_headers(catalog_id: str) -> dict[str, str]:
+    """Extra HTTP headers for the shared Google MCP (toolset filter)."""
+    headers: dict[str, str] = {}
+    toolset = _GOOGLE_MCP_TOOLSETS.get(catalog_id)
+    if toolset:
+        headers["X-Toolsets"] = toolset
+    return headers
+
+
 def is_microsoft_catalog(catalog_id: str | None) -> bool:
     return bool(catalog_id) and catalog_id in _GRAPH_MCP_TOOLSETS
+
+
+def is_google_catalog(catalog_id: str | None) -> bool:
+    return bool(catalog_id) and catalog_id in _GOOGLE_MCP_TOOLSETS
 
 
 def resolve_catalog_mcp_url(
     entry: CatalogIntegration, config: dict[str, Any]
 ) -> str | None:
-    """Effective MCP URL for a catalog entry (embedded for Microsoft apps)."""
+    """Effective MCP URL for a catalog entry (embedded for Microsoft/Google apps)."""
     if is_microsoft_catalog(entry.catalog_id):
         return embedded_graph_mcp_url()
+    if is_google_catalog(entry.catalog_id):
+        return embedded_google_mcp_url()
     if not entry.mcp.url_from:
         return None
     url = str(config.get(entry.mcp.url_from) or "").strip()
@@ -227,6 +268,142 @@ TODO = CatalogIntegration(
     icon_key="todo",
 )
 
+_GOOGLE_MCP = CatalogMcpBinding(transport="http", url_from=None)
+
+GMAIL = CatalogIntegration(
+    catalog_id="gmail",
+    name="Gmail",
+    description="Read and send email",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("gmail.modify"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="gmail",
+)
+
+GOOGLE_DRIVE = CatalogIntegration(
+    catalog_id="google_drive",
+    name="Google Drive",
+    description="Files and folders",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("drive"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_drive",
+)
+
+GOOGLE_CALENDAR = CatalogIntegration(
+    catalog_id="google_calendar",
+    name="Google Calendar",
+    description="Events and calendars",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("calendar"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_calendar",
+)
+
+GOOGLE_CONTACTS = CatalogIntegration(
+    catalog_id="google_contacts",
+    name="Google Contacts",
+    description="People and contacts",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("contacts.readonly"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_contacts",
+)
+
+GOOGLE_MEET = CatalogIntegration(
+    catalog_id="google_meet",
+    name="Google Meet",
+    description="Meet links from calendar",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("calendar.readonly"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_meet",
+)
+
+GOOGLE_TASKS = CatalogIntegration(
+    catalog_id="google_tasks",
+    name="Google Tasks",
+    description="Tasks and lists",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("tasks"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_tasks",
+)
+
+GOOGLE_DOCS = CatalogIntegration(
+    catalog_id="google_docs",
+    name="Google Docs",
+    description="Documents",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("documents.readonly", "drive.readonly"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_docs",
+)
+
+GOOGLE_SHEETS = CatalogIntegration(
+    catalog_id="google_sheets",
+    name="Google Sheets",
+    description="Spreadsheets",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("spreadsheets.readonly", "drive.readonly"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_sheets",
+)
+
+GOOGLE_SLIDES = CatalogIntegration(
+    catalog_id="google_slides",
+    name="Google Slides",
+    description="Presentations",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes("presentations.readonly", "drive.readonly"),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_slides",
+)
+
+GOOGLE_CHAT = CatalogIntegration(
+    catalog_id="google_chat",
+    name="Google Chat",
+    description="Spaces and messages",
+    connect_kind="oauth",
+    oauth_provider_id="google",
+    oauth_scopes=_google_scopes(
+        "chat.spaces.readonly",
+        "chat.messages.readonly",
+        "chat.memberships.readonly",
+    ),
+    admin_config_fields=(),
+    mcp=_GOOGLE_MCP,
+    user_instructions="Sign in with Google",
+    icon_key="google_chat",
+)
+
 
 _CATALOG: dict[str, CatalogIntegration] = {
     entry.catalog_id: entry
@@ -239,6 +416,16 @@ _CATALOG: dict[str, CatalogIntegration] = {
         SHAREPOINT,
         TEAMS,
         TODO,
+        GMAIL,
+        GOOGLE_DRIVE,
+        GOOGLE_CALENDAR,
+        GOOGLE_CONTACTS,
+        GOOGLE_MEET,
+        GOOGLE_TASKS,
+        GOOGLE_DOCS,
+        GOOGLE_SHEETS,
+        GOOGLE_SLIDES,
+        GOOGLE_CHAT,
     )
 }
 

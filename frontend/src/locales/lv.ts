@@ -210,6 +210,7 @@ export const lv = {
   chat_download_docx: "DOCX",
   chat_download_markdown: "Markdown",
   chat_share_answer: "Kopīgot",
+  chat_fork: "Forkot",
   chat_copy_code: "Kopēt kodu",
   chat_copy_mermaid: "Kopēt Mermaid",
   chat_activity: "Aktivitāte",
@@ -269,6 +270,8 @@ export const lv = {
   chat_group_older: "Vecākas",
   chat_pinned: "Piespraustie",
   chat_pin: "Piespraust",
+  chat_hide_from_others: "Paslēpt no citiem",
+  chat_show_to_others: "Rādīt citiem",
   chat_unpin: "Atspraust",
   chat_open_in_new_tab: "Atvērt jaunā cilnē",
   chat_history: "Vēsture",
@@ -752,11 +755,17 @@ export const lv = {
   integrations_api_key: "API atslēga",
   integrations_connect: "Savienot",
   integrations_connect_all_microsoft: "Savienot visu",
+  integrations_connect_all_google: "Savienot visu",
   integrations_microsoft: "Microsoft",
   integrations_microsoft_desc: "Outlook, OneDrive, Teams u.c.",
   integrations_microsoft_modules: "Moduļi",
   integrations_microsoft_partial: "Daļēji savienots",
   integrations_microsoft_manage: "Pārvaldīt",
+  integrations_google: "Google",
+  integrations_google_desc: "Gmail, Drive, Calendar u.c.",
+  integrations_google_modules: "Moduļi",
+  integrations_google_partial: "Daļēji savienots",
+  integrations_google_manage: "Pārvaldīt",
   integrations_reconnect: "Atkārtoti savienot",
   integrations_update_key: "Atjaunināt atslēgu",
   integrations_embed_origins: "Iegultnes izcelsmes",
@@ -778,12 +787,23 @@ export const lv = {
   integrations_entra_step_paste:
     "Ielīmē Application (client) ID, client secret un Directory (tenant) ID formā.",
   integrations_entra_permissions: "Delegētās atļaujas",
+  integrations_google_setup: "Google Cloud iestatīšana",
+  integrations_google_step_project:
+    "Google Cloud Console → APIs & Services → Credentials → Create OAuth client ID (Web application).",
+  integrations_google_step_apis:
+    "APIs & Services → Library → Enable: Gmail, Drive, Calendar, People, Tasks, Docs, Sheets, Slides, Chat APIs.",
+  integrations_google_step_redirect: "Authorized redirect URI:",
+  integrations_google_step_paste: "Ielīmē Client ID un client secret formā.",
+  integrations_google_scopes: "OAuth scopes",
   integrations_info_apps_title: "Lietotnes",
   integrations_info_apps_body:
     "Lietotnes pievieno rīkus čatam.\nAdministratori piedāvā moduļus organizācijai.\nLietotāji savieno savu kontu.",
   integrations_info_microsoft_title: "Microsoft",
   integrations_info_microsoft_body:
     "Var savienot visus piedāvātos moduļus vienā pierakstā vai pa vienam.\nTeams vajag darba vai skolas Microsoft 365 kontu.\nPasts, kalendārs, faili un To Do darbojas arī ar personīgo kontu.",
+  integrations_info_google_title: "Google",
+  integrations_info_google_body:
+    "Var savienot visus piedāvātos moduļus vienā pierakstā vai pa vienam.\nNepieciešams Google Cloud OAuth klients un katra moduļa API.",
   integrations_info_mcp_policy_title: "Instances politika",
   integrations_info_mcp_policy_body:
     "Org serveri: organizācijas administratori var pievienot MCP galapunktus.\nLietotāju serveri: cilvēki var pievienot personīgus MCP.",
@@ -798,7 +818,7 @@ export const lv = {
     "Inherit: izmantot instances serveri.\nOverride: organizācija aizstāj URL vai auth.\nDisabled: paslēpt serveri šai organizācijai.",
   integrations_info_mcp_connections_title: "Mani savienojumi",
   integrations_info_mcp_connections_body:
-    "Šeit parādās serveri, kam vajag tavu API tokenu.\nIelīmē, saglabā, tad Test.\nMicrosoft lietotnes savieno sadaļā Lietotnes.",
+    "Šeit parādās serveri, kam vajag tavu API tokenu.\nIelīmē, saglabā, tad Test.\nMicrosoft un Google lietotnes savieno sadaļā Lietotnes.",
   integrations_info_mcp_my_servers_title: "Mani MCP serveri",
   integrations_info_mcp_my_servers_body:
     "Personīgi MCP galapunkti tikai tev.\nPieejami, ja instances un organizācijas politika to atļauj.",

@@ -156,6 +156,12 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8000/internal/graph-mcp/mcp",
         validation_alias="GRAPH_MCP_EMBED_URL",
     )
+    # Workers call this URL (Celery has no /internal/google-mcp). In Docker set to
+    # http://backend:8000/internal/google-mcp/mcp so workers reach the API process.
+    google_mcp_embed_url: str = Field(
+        default="http://127.0.0.1:8000/internal/google-mcp/mcp",
+        validation_alias="GOOGLE_MCP_EMBED_URL",
+    )
     mcp_max_result_chars: int = Field(
         default=50000, validation_alias="MCP_MAX_RESULT_CHARS"
     )

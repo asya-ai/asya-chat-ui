@@ -94,7 +94,7 @@ def test_catalog_includes_pitchpatterns() -> None:
 
 def test_oauth_providers_registered() -> None:
     ids = {p.provider_id for p in list_oauth_providers()}
-    assert ids == {"microsoft"}
+    assert ids == {"microsoft", "google"}
     ms = get_oauth_provider("microsoft")
     assert ms is not None
     by_key = {f.key: f for f in ms.fields}
@@ -106,6 +106,15 @@ def test_oauth_providers_registered() -> None:
         scopes=["openid"],
     )
     assert "login.microsoftonline.com" in url
+    google = get_oauth_provider("google")
+    assert google is not None
+    g_url = google.authorize_url(
+        {"client_id": "g-client", "redirect_uri": "https://x/cb"},
+        state="s",
+        scopes=["openid", "email"],
+    )
+    assert "accounts.google.com" in g_url
+    assert "access_type=offline" in g_url
 
 
 def test_pitchpatterns_config_enable_connect_resolve() -> None:
@@ -318,6 +327,42 @@ def test_microsoft_catalog_apps_registered() -> None:
         assert resolve_catalog_mcp_url(entry, {}) == embedded_graph_mcp_url()
         headers = graph_mcp_request_headers(catalog_id)
         assert headers.get("X-Write-Scope") == "true"
+        assert headers.get("X-Toolsets")
+
+
+_GOOGLE_CATALOG_IDS = {
+    "gmail",
+    "google_drive",
+    "google_calendar",
+    "google_contacts",
+    "google_meet",
+    "google_tasks",
+    "google_docs",
+    "google_sheets",
+    "google_slides",
+    "google_chat",
+}
+
+
+def test_google_catalog_apps_registered() -> None:
+    from app.services.integrations.catalog import (
+        google_mcp_request_headers,
+        resolve_catalog_mcp_url,
+    )
+    from app.services.integrations.google_mcp_embed import embedded_google_mcp_url
+
+    ids = {entry.catalog_id for entry in list_catalog()}
+    assert _GOOGLE_CATALOG_IDS.issubset(ids)
+    for catalog_id in _GOOGLE_CATALOG_IDS:
+        entry = get_catalog(catalog_id)
+        assert entry is not None
+        assert entry.connect_kind == "oauth"
+        assert entry.oauth_provider_id == "google"
+        assert "openid" in entry.oauth_scopes
+        assert entry.mcp.url_from is None
+        assert entry.admin_config_fields == ()
+        assert resolve_catalog_mcp_url(entry, {}) == embedded_google_mcp_url()
+        headers = google_mcp_request_headers(catalog_id)
         assert headers.get("X-Toolsets")
 
 

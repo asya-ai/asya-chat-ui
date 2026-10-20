@@ -85,8 +85,38 @@ class MicrosoftProvider(OAuthProviderDef):
         return f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 
 
+@dataclass(frozen=True)
+class GoogleProvider(OAuthProviderDef):
+    provider_id: str = "google"
+    name: str = "Google"
+    description: str = "Google Cloud OAuth"
+    docs_url: str | None = "https://console.cloud.google.com/apis/credentials"
+    default_scopes: tuple[str, ...] = ("openid", "email", "profile")
+    fields: tuple[ProviderField, ...] = (
+        ProviderField("client_id", "Client ID"),
+        ProviderField("client_secret", "Client secret", secret=True),
+        ProviderField("redirect_uri", "Redirect URI", readonly=True),
+    )
+
+    def authorize_url(self, config: dict[str, Any], *, state: str, scopes: list[str]) -> str:
+        params = {
+            "client_id": str(config.get("client_id") or "").strip(),
+            "response_type": "code",
+            "redirect_uri": str(config.get("redirect_uri") or "").strip(),
+            "scope": " ".join(scopes),
+            "state": state,
+            "access_type": "offline",
+            "prompt": "consent",
+        }
+        return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+
+    def token_url(self, config: dict[str, Any]) -> str:
+        return "https://oauth2.googleapis.com/token"
+
+
 _PROVIDERS: dict[str, OAuthProviderDef] = {
     "microsoft": MicrosoftProvider(),
+    "google": GoogleProvider(),
 }
 
 

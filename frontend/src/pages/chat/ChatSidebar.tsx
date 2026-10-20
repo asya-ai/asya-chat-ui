@@ -33,6 +33,8 @@ import {
   GripVertical,
   Link2,
   Loader2,
+  Eye,
+  EyeOff,
   Lock,
   MessageSquareDot,
   MoreVertical,
@@ -80,6 +82,8 @@ import {
   useDeleteAgent,
   useDeleteChat,
   useDeletePrompt,
+  useHideChatFromOthers,
+  useMe,
   useOrgsMine,
   usePinChat,
   usePrompts,
@@ -321,9 +325,11 @@ export const ChatSidebar = ({
   const { data: orgs = [] } = useOrgsMine()
   const orgId = orgStore.get() ?? orgs[0]?.id ?? null
   const { data: chats = [] } = useChats(orgId)
+  const { data: currentUser } = useMe()
   const deleteChatMutation = useDeleteChat(orgId)
   const renameChatMutation = useRenameChat(orgId)
   const pinChatMutation = usePinChat(orgId)
+  const hideChatMutation = useHideChatFromOthers(orgId)
   const createAgentMutation = useCreateAgent(orgId)
   const updateAgentMutation = useUpdateAgent(orgId)
   const deleteAgentMutation = useDeleteAgent(orgId)
@@ -418,14 +424,14 @@ export const ChatSidebar = ({
     onPromptCountChange?.(prompts.length)
   }, [prompts.length, onPromptCountChange])
 
-  const loadSources = useCallback(async (agentId: string) => {
-    setSourcesLoading(true)
+  const loadSources = useCallback(async (agentId: string, options?: { silent?: boolean }) => {
+    if (!options?.silent) setSourcesLoading(true)
     try {
       setSources(await agentApi.listSources(agentId))
     } catch {
-      setSources([])
+      if (!options?.silent) setSources([])
     } finally {
-      setSourcesLoading(false)
+      if (!options?.silent) setSourcesLoading(false)
     }
   }, [])
 
@@ -436,6 +442,19 @@ export const ChatSidebar = ({
     }
     void loadSources(focusedAgentId)
   }, [focusedAgentId, loadSources])
+
+  const hasPendingSources = useMemo(
+    () => sources.some((source) => source.status === "queued" || source.status === "indexing"),
+    [sources]
+  )
+
+  useEffect(() => {
+    if (!focusedAgentId || !hasPendingSources) return
+    const interval = window.setInterval(() => {
+      void loadSources(focusedAgentId, { silent: true })
+    }, 3000)
+    return () => window.clearInterval(interval)
+  }, [focusedAgentId, hasPendingSources, loadSources])
 
   useEffect(() => {
     if (!focusedAgent || projectSubTab !== "instructions") return
@@ -525,6 +544,16 @@ export const ChatSidebar = ({
       is_pinned: !chat.is_pinned,
     })
   }
+
+  const toggleHideFromOthers = (chat: Chat) => {
+    void hideChatMutation.mutateAsync({
+      chatId: chat.id,
+      is_hidden_from_others: !chat.is_hidden_from_others,
+    })
+  }
+
+  const isOwnChat = (chat: Chat) =>
+    !chat.owner_user_id || chat.owner_user_id === currentUser?.id
 
   const chatHref = (chat: Chat) =>
     chat.agent_id
@@ -853,59 +882,78 @@ export const ChatSidebar = ({
     Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator
   ) => {
     const canMarkUnread = generationIndicators[chat.id] !== "generating"
+    const own = isOwnChat(chat)
     return (
       <>
         <Item onClick={() => openChatInNewTab(chat)}>
           <SquareArrowOutUpRight />
           {t("chat_open_in_new_tab")}
         </Item>
-        <Item onClick={() => togglePin(chat)}>
-          <Pin />
-          {chat.is_pinned ? t("chat_unpin") : t("chat_pin")}
-        </Item>
-        <Item onClick={() => openRename(chat)}>
-          <Pencil />
-          {t("chat_rename")}
-        </Item>
+        {own ? (
+          <>
+            <Item onClick={() => togglePin(chat)}>
+              <Pin />
+              {chat.is_pinned ? t("chat_unpin") : t("chat_pin")}
+            </Item>
+            <Item onClick={() => openRename(chat)}>
+              <Pencil />
+              {t("chat_rename")}
+            </Item>
+          </>
+        ) : null}
         {canMarkUnread ? (
           <Item onClick={() => markChatUnread(chat)}>
             <MessageSquareDot />
             {t("chat_mark_unread")}
           </Item>
         ) : null}
-        <Separator />
-        {onToggleShareChat ? (
-          chat.is_shared ? (
-            <>
-              {chat.share_token ? (
-                <Item
-                  onClick={() => void copyLinkWithToast(`/shared/${chat.share_token}`)}
-                >
+        {own && chat.agent_id ? (
+          <Item onClick={() => toggleHideFromOthers(chat)}>
+            {chat.is_hidden_from_others ? <Eye /> : <EyeOff />}
+            {chat.is_hidden_from_others
+              ? t("chat_show_to_others")
+              : t("chat_hide_from_others")}
+          </Item>
+        ) : null}
+        {own ? (
+          <>
+            <Separator />
+            {onToggleShareChat ? (
+              chat.is_shared ? (
+                <>
+                  {chat.share_token ? (
+                    <Item
+                      onClick={() =>
+                        void copyLinkWithToast(`/shared/${chat.share_token}`)
+                      }
+                    >
+                      <Link2 />
+                      {t("chat_share_public")}
+                    </Item>
+                  ) : null}
+                  <Item onClick={() => togglePublicShare(chat)}>
+                    <X />
+                    {t("chat_unshare_public")}
+                  </Item>
+                </>
+              ) : (
+                <Item onClick={() => togglePublicShare(chat)}>
                   <Link2 />
                   {t("chat_share_public")}
                 </Item>
-              ) : null}
-              <Item onClick={() => togglePublicShare(chat)}>
-                <X />
-                {t("chat_unshare_public")}
-              </Item>
-            </>
-          ) : (
-            <Item onClick={() => togglePublicShare(chat)}>
-              <Link2 />
-              {t("chat_share_public")}
+              )
+            ) : null}
+            <Item onClick={() => shareInternalLink(chat)}>
+              <Lock />
+              {t("chat_share_internal")}
             </Item>
-          )
+            <Separator />
+            <Item variant="destructive" onClick={() => setDeleteConfirmChat(chat)}>
+              <Trash2 />
+              {t("chat_delete")}
+            </Item>
+          </>
         ) : null}
-        <Item onClick={() => shareInternalLink(chat)}>
-          <Lock />
-          {t("chat_share_internal")}
-        </Item>
-        <Separator />
-        <Item variant="destructive" onClick={() => setDeleteConfirmChat(chat)}>
-          <Trash2 />
-          {t("chat_delete")}
-        </Item>
       </>
     )
   }
@@ -916,10 +964,17 @@ export const ChatSidebar = ({
     const showStatusPill = status === "generating" || status === "ready"
     const showPinnedIcon = Boolean(chat.is_pinned) && !showStatusPill
     const showShareIcon = Boolean(chat.is_shared) && !showStatusPill
-    const trailingIconCount = Number(showPinnedIcon) + Number(showShareIcon)
+    const showHiddenIcon =
+      Boolean(chat.is_hidden_from_others) && isOwnChat(chat) && !showStatusPill
+    const trailingIconCount =
+      Number(showPinnedIcon) + Number(showShareIcon) + Number(showHiddenIcon)
     const projectName =
       showProjectChatIndicationStore.get() && tab === "history" && chat.agent_id
         ? agents.find((agent) => agent.id === chat.agent_id)?.name ?? null
+        : null
+    const ownerLabel =
+      !isOwnChat(chat) && chat.owner_display_name
+        ? chat.owner_display_name
         : null
     return (
       <ContextMenu key={chat.id}>
@@ -945,6 +1000,11 @@ export const ChatSidebar = ({
                   <span className="block w-full min-w-0 text-sidebar-foreground text-sm truncate leading-4">
                     {chatDisplayTitle(chat)}
                   </span>
+                  {ownerLabel ? (
+                    <span className="block w-full min-w-0 truncate text-xs leading-4 text-muted-foreground">
+                      {ownerLabel}
+                    </span>
+                  ) : null}
                   {projectName ? (
                     <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs leading-4 text-muted-foreground">
                       <span
@@ -979,6 +1039,11 @@ export const ChatSidebar = ({
                 {showShareIcon ? (
                   <span className="flex justify-center items-center size-7">
                     <Link2 className="size-4" />
+                  </span>
+                ) : null}
+                {showHiddenIcon ? (
+                  <span className="flex justify-center items-center size-7">
+                    <EyeOff className="size-4" />
                   </span>
                 ) : null}
                 {showPinnedIcon ? (

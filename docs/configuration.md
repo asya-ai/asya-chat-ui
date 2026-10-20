@@ -158,6 +158,15 @@ Microsoft catalog apps use OAuth in ChatUI, then call Graph through the Graph MC
 
 ChatUI forwards the user’s Graph access token as `Authorization: Bearer …` and adds `X-Toolsets` / `X-Write-Scope` so each card only sees its tool family (mail, calendar, files, chat, tasks, people).
 
+### Google (Gmail, Drive, Calendar, Contacts, Meet, Tasks)
+
+Google catalog apps use OAuth in ChatUI, then call Google APIs through an MCP server embedded in the API process. Compose sets `GOOGLE_MCP_EMBED_URL=http://backend:8000/internal/google-mcp/mcp` for Celery workers.
+
+1. Google Cloud Console → Credentials → OAuth client ID (Web application).
+2. **APIs & Services → Library** → Enable each (credentials alone are not enough): Gmail, Drive, Calendar, People, Tasks, Docs, Sheets, Slides, Chat APIs.
+3. **Settings → Integrations → Google**: Client ID, client secret; redirect URI `{public_origin}/api/integrations/oauth/callback`.
+4. Offer modules, then **Connect** / **Connect all**.
+
 ## Network and Port Configuration
 
 - `CHATUI_BIND_ADDRESS` (prod compose nginx bind, default: `127.0.0.1`)

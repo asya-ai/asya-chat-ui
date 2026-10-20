@@ -152,6 +152,9 @@ export type Chat = {
   is_incognito?: boolean
   is_subagent?: boolean
   is_pinned?: boolean
+  is_hidden_from_others?: boolean
+  owner_user_id?: string | null
+  owner_display_name?: string | null
   created_at: string
   last_activity_at: string
 }
@@ -178,6 +181,8 @@ export type ChatMessage = {
   completed_at?: string | null
   model_id?: string | null
   model_name?: string | null
+  user_id?: string | null
+  user_display_name?: string | null
   attachments?: ChatMessageAttachmentLike[] | null
   sources?: SourceItem[] | null
   thinking_steps?: string[] | null

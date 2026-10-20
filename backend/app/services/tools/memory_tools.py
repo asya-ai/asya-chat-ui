@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlmodel import Session
 
 from app.models.entities import Chat, ChatMessage, UserMemory
@@ -64,14 +64,21 @@ async def search_past_chats(
     session = context.session
 
     base_chat_filters = [
-        Chat.user_id == context.user_id,
         Chat.is_deleted.is_(False),
         Chat.is_incognito.is_(False),
         Chat.is_subagent.is_(False),
     ]
     if context.agent_id is not None:
+        # Own chats in this project, plus other members' non-hidden project chats.
         base_chat_filters.append(Chat.agent_id == context.agent_id)
+        base_chat_filters.append(
+            or_(
+                Chat.user_id == context.user_id,
+                Chat.is_hidden_from_others.is_(False),
+            )
+        )
     else:
+        base_chat_filters.append(Chat.user_id == context.user_id)
         base_chat_filters.append(Chat.agent_id.is_(None))
     if context.current_chat_id:
         base_chat_filters.append(Chat.id != context.current_chat_id)

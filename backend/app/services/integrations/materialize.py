@@ -103,7 +103,10 @@ def ensure_catalog_mcp_server(
 def sync_catalog_mcp_from_admin(
     session: Session, *, catalog_id: str, org_id: UUID | None = None
 ) -> McpServer | None:
-    from app.services.integrations.catalog import is_microsoft_catalog
+    from app.services.integrations.catalog import (
+        is_google_catalog,
+        is_microsoft_catalog,
+    )
 
     entry = get_catalog(catalog_id)
     if not entry:
@@ -114,7 +117,7 @@ def sync_catalog_mcp_from_admin(
         target_id=catalog_id,
         org_id=org_id,
     )
-    if is_microsoft_catalog(catalog_id):
+    if is_microsoft_catalog(catalog_id) or is_google_catalog(catalog_id):
         url = resolve_catalog_mcp_url(entry, cfg)
         if not url:
             return find_catalog_mcp_server(session, catalog_id)

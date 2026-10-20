@@ -25,6 +25,7 @@ from app.models import (
     AgentSourceStatus,
     ChatModel,
     OrgModel,
+    UsageEvent,
 )
 from app.services.agents.source_media import (
     guess_content_type,
@@ -363,6 +364,23 @@ async def _describe_image_async(
         },
     ]
     response = await provider.chat(model.model_name, messages)
+    usage = getattr(response, "usage", None)
+    if usage:
+        session.add(
+            UsageEvent(
+                org_id=agent.org_id,
+                user_id=agent.owner_user_id,
+                model_id=model.id,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                total_tokens=usage.total_tokens,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_tokens=usage.cached_tokens,
+                thinking_tokens=usage.thinking_tokens,
+            )
+        )
+        session.flush()
     text = (response.content or "").strip()
     if not text:
         return f"Image file: {file_name or 'image'}."

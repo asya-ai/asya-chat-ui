@@ -1800,18 +1800,46 @@ export const ChatPage = () => {
       return
     }
     let cancelled = false
-    void agentApi
-      .listSources(activeAgentId)
-      .then((items) => {
-        if (!cancelled) setProjectSources(items)
-      })
-      .catch(() => {
-        if (!cancelled) setProjectSources([])
-      })
+    const refresh = () => {
+      void agentApi
+        .listSources(activeAgentId)
+        .then((items) => {
+          if (!cancelled) setProjectSources(items)
+        })
+        .catch(() => {
+          if (!cancelled) setProjectSources([])
+        })
+    }
+    refresh()
     return () => {
       cancelled = true
     }
   }, [activeAgentId, isSharedView])
+
+  const hasPendingProjectSources = useMemo(
+    () =>
+      projectSources.some(
+        (source) => source.status === "queued" || source.status === "indexing"
+      ),
+    [projectSources]
+  )
+
+  useEffect(() => {
+    if (!activeAgentId || isSharedView || !hasPendingProjectSources) return
+    let cancelled = false
+    const interval = window.setInterval(() => {
+      void agentApi
+        .listSources(activeAgentId)
+        .then((items) => {
+          if (!cancelled) setProjectSources(items)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [activeAgentId, hasPendingProjectSources, isSharedView])
   const { data: mcpPrompts = [] } = useMcpPrompts(isSharedView ? null : orgId)
   const usableMcpPrompts = isSharedView ? [] : mcpPrompts
   const hasInsertablePrompts = prompts.length > 0 || usableMcpPrompts.length > 0
@@ -2637,6 +2665,25 @@ export const ChatPage = () => {
     [activeChat, chatId, copyShareLink, orgId, queryClient, t]
   )
 
+  const forkChat = useCallback(
+    async (_msg: ChatMessage) => {
+      if (!chatId) return
+      try {
+        const forked = await chatApi.fork(chatId)
+        queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
+          prev ? [forked, ...prev.filter((item) => item.id !== forked.id)] : [forked]
+        )
+        const href = forked.agent_id
+          ? `/chat/${forked.id}?agent=${encodeURIComponent(forked.agent_id)}`
+          : `/chat/${forked.id}`
+        navigate({ href })
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t("chat_generation_failed"))
+      }
+    },
+    [chatId, navigate, orgId, queryClient, t]
+  )
+
   const sendMessage = async () => {
     if (composerBusyRef.current) return
     const trimmed = (composerRef.current?.getValue() ?? "").trim()
@@ -2687,6 +2734,9 @@ export const ChatPage = () => {
         role: "user",
         content: trimmed,
         created_at: activityAt,
+        user_id: currentUser?.id ?? null,
+        user_display_name:
+          currentUser?.display_name || currentUser?.username || currentUser?.email || null,
         attachments: uploadedAttachments,
       }
       const assistantId = `temp-assistant-${Date.now()}`
@@ -3604,6 +3654,7 @@ export const ChatPage = () => {
     updateChatMessagesFor,
     bumpChatActivity,
     setChatGenerating,
+    currentUser,
   ])
 
   const renderMessage = useCallback(
@@ -3671,6 +3722,7 @@ export const ChatPage = () => {
           onDeleteFromMessage={deleteFromMessage}
           onRetryMessage={retryFailedMessage}
           onShareMessage={shareMessage}
+          onForkChat={isSharedView ? undefined : forkChat}
           onSaveAsPrompt={saveMessageAsPrompt}
           onSaveEditedMessage={saveEditedMessage}
           onCancelEdit={cancelEditMessage}
@@ -3697,6 +3749,7 @@ export const ChatPage = () => {
       deleteFromMessage,
       retryFailedMessage,
       shareMessage,
+      forkChat,
       saveMessageAsPrompt,
       saveEditedMessage,
       cancelEditMessage,

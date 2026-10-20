@@ -60,6 +60,7 @@ services:
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       SCRAPER_URL: http://scraper:3001
       GRAPH_MCP_EMBED_URL: http://backend:8000/internal/graph-mcp/mcp
+      GOOGLE_MCP_EMBED_URL: http://backend:8000/internal/google-mcp/mcp
     volumes:
       - files-data:/data/files
     networks:
@@ -99,6 +100,7 @@ services:
       AGENT_EMBEDDING_MODEL: ${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       SCRAPER_URL: http://scraper:3001
       GRAPH_MCP_EMBED_URL: http://backend:8000/internal/graph-mcp/mcp
+      GOOGLE_MCP_EMBED_URL: http://backend:8000/internal/google-mcp/mcp
     volumes:
       - files-data:/data/files
     # Stay on `app` only. Attaching the internal `executor` network breaks Docker

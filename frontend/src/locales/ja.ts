@@ -210,6 +210,7 @@ export const ja = {
   chat_download_docx: "DOCX",
   chat_download_markdown: "Markdown",
   chat_share_answer: "共有",
+  chat_fork: "フォーク",
   chat_copy_code: "コードをコピー",
   chat_copy_mermaid: "Mermaidをコピー",
   chat_activity: "アクティビティ",
@@ -269,6 +270,8 @@ export const ja = {
   chat_group_older: "それ以前",
   chat_pinned: "ピン留め",
   chat_pin: "ピン留めする",
+  chat_hide_from_others: "他の人から隠す",
+  chat_show_to_others: "他の人に表示",
   chat_unpin: "ピン留めを外す",
   chat_open_in_new_tab: "新しいタブで開く",
   chat_history: "履歴",
@@ -751,11 +754,17 @@ export const ja = {
   integrations_api_key: "APIキー",
   integrations_connect: "接続",
   integrations_connect_all_microsoft: "すべて接続",
+  integrations_connect_all_google: "すべて接続",
   integrations_microsoft: "Microsoft",
   integrations_microsoft_desc: "Outlook、OneDrive、Teamsなど",
   integrations_microsoft_modules: "モジュール",
   integrations_microsoft_partial: "一部接続済み",
   integrations_microsoft_manage: "管理",
+  integrations_google: "Google",
+  integrations_google_desc: "Gmail、Drive、Calendarなど",
+  integrations_google_modules: "モジュール",
+  integrations_google_partial: "一部接続済み",
+  integrations_google_manage: "管理",
   integrations_reconnect: "再接続",
   integrations_update_key: "キーを更新",
   integrations_embed_origins: "埋め込みオリジン",
@@ -777,12 +786,23 @@ export const ja = {
   integrations_entra_step_paste:
     "Application (client) ID、クライアントシークレット、Directory (tenant) IDをフォームに貼り付け。",
   integrations_entra_permissions: "委任されたアクセス許可",
+  integrations_google_setup: "Google Cloud 設定",
+  integrations_google_step_project:
+    "Google Cloud Console → APIs & Services → Credentials → Create OAuth client ID（Web application）。",
+  integrations_google_step_apis:
+    "APIs & Services → Library で有効化: Gmail、Drive、Calendar、People、Tasks、Docs、Sheets、Slides、Chat API。",
+  integrations_google_step_redirect: "承認済みのリダイレクト URI:",
+  integrations_google_step_paste: "Client ID とクライアントシークレットをフォームに貼り付け。",
+  integrations_google_scopes: "OAuth スコープ",
   integrations_info_apps_title: "アプリ",
   integrations_info_apps_body:
     "アプリはチャットにツールを追加します。\n管理者が組織向けにモジュールを提供します。\nユーザーは自分のアカウントを接続します。",
   integrations_info_microsoft_title: "Microsoft",
   integrations_info_microsoft_body:
     "提供中のモジュールをまとめて、または個別に接続できます。\nTeams は職場または学校の Microsoft 365 アカウントが必要です。\nメール、予定表、ファイル、To Do は個人アカウントでも利用できます。",
+  integrations_info_google_title: "Google",
+  integrations_info_google_body:
+    "提供中のモジュールをまとめて、または個別に接続できます。\nGoogle Cloud の OAuth クライアントと各モジュールの API が必要です。",
   integrations_info_mcp_policy_title: "インスタンスポリシー",
   integrations_info_mcp_policy_body:
     "組織サーバー: 組織管理者が MCP を追加できます。\nユーザーサーバー: 個人の MCP を追加できます。",
@@ -797,7 +817,7 @@ export const ja = {
     "Inherit: インスタンスサーバーをそのまま使う。\nOverride: この組織で URL や認証を差し替える。\nDisabled: この組織では非表示。",
   integrations_info_mcp_connections_title: "自分の接続",
   integrations_info_mcp_connections_body:
-    "自分の API トークンが必要なサーバーがここに出ます。\n貼り付けて保存し、Test します。\nMicrosoft アプリは「アプリ」から接続します。",
+    "自分の API トークンが必要なサーバーがここに出ます。\n貼り付けて保存し、Test します。\nMicrosoft / Google アプリは「アプリ」から接続します。",
   integrations_info_mcp_my_servers_title: "自分の MCP サーバー",
   integrations_info_mcp_my_servers_body:
     "自分だけがチャットで使う個人 MCP です。\nインスタンスと組織のポリシーが両方許可しているとき利用できます。",

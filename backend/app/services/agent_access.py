@@ -12,8 +12,11 @@ from app.models import (
     AgentAccessRole,
     AgentTeamAccess,
     AgentUserOrder,
+    Chat,
+    ChatMessage,
     Team,
     TeamMembership,
+    User,
 )
 
 ROLE_ORDER = {
@@ -145,3 +148,42 @@ def list_accessible_agents(
         )
     )
     return ranked
+
+
+def can_manage_chat(chat: Chat, user: User) -> bool:
+    if user.is_super_admin:
+        return True
+    return chat.user_id == user.id
+
+
+def can_access_chat(session: Session, chat: Chat, user: User) -> bool:
+    if chat.is_deleted:
+        return False
+    if can_manage_chat(chat, user):
+        return True
+    if chat.is_incognito or chat.is_subagent or chat.is_hidden_from_others:
+        return False
+    if chat.agent_id is None:
+        return False
+    agent = session.exec(
+        select(Agent).where(Agent.id == chat.agent_id, Agent.org_id == chat.org_id)
+    ).first()
+    if not agent:
+        return False
+    return get_agent_role(session, agent, user.id) is not None
+
+
+def can_edit_chat_message(chat: Chat, message: ChatMessage, user: User) -> bool:
+    if message.role != "user":
+        return False
+    if user.is_super_admin:
+        return True
+    if message.user_id is not None:
+        return message.user_id == user.id
+    return chat.user_id == user.id
+
+
+def user_display_label(user: User | None) -> str | None:
+    if user is None:
+        return None
+    return (user.display_name or user.username or user.email or "").strip() or None

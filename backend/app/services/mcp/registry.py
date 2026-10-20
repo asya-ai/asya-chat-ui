@@ -161,12 +161,16 @@ def resolve_test_auth(
         headers = headers_from_shared_auth(auth_type, auth_config)
     if getattr(row, "origin", None) == "catalog" and row.catalog_id:
         from app.services.integrations.catalog import (
+            google_mcp_request_headers,
             graph_mcp_request_headers,
+            is_google_catalog,
             is_microsoft_catalog,
         )
 
         if is_microsoft_catalog(row.catalog_id):
             headers = {**graph_mcp_request_headers(row.catalog_id), **headers}
+        elif is_google_catalog(row.catalog_id):
+            headers = {**google_mcp_request_headers(row.catalog_id), **headers}
     return auth_type, headers
 
 
@@ -254,13 +258,17 @@ def resolve_effective_mcp_servers(
         )
         if getattr(row, "origin", None) == "catalog" and row.catalog_id:
             from app.services.integrations.catalog import (
+                google_mcp_request_headers,
                 graph_mcp_request_headers,
+                is_google_catalog,
                 is_microsoft_catalog,
             )
 
             if is_microsoft_catalog(row.catalog_id):
                 # Authorization from the user connection must win.
                 headers = {**graph_mcp_request_headers(row.catalog_id), **headers}
+            elif is_google_catalog(row.catalog_id):
+                headers = {**google_mcp_request_headers(row.catalog_id), **headers}
         config = McpServerConfig(
             id=config.id,
             name=config.name,

@@ -111,8 +111,9 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "(not prior chats), set include_chats=false."
     ),
     "read_project_source": (
-        "Use read_project_source to read a project file or indexed chat transcript by numeric id. "
-        "For images this returns the extracted text/description."
+        "Use read_project_source to read a project file or indexed chat by numeric id. "
+        "For images it returns the indexed description and attaches the original image "
+        "for vision — call it when you need to see the image, not only the summary."
     ),
 }
 

@@ -203,6 +203,12 @@ def upsert_instance_provider_config(
 
         invalidate_graph_mcp_embed()
         sync_microsoft_catalog_servers(session)
+    elif provider_id == "google":
+        from app.services.integrations.google_mcp_embed import (
+            sync_google_catalog_servers,
+        )
+
+        sync_google_catalog_servers(session)
     return admin_config_public(
         target_kind="oauth_provider",
         target_id=provider_id,

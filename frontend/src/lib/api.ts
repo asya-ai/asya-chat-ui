@@ -930,6 +930,8 @@ export const chatApi = {
     is_incognito?: boolean
   }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
+  fork: (chatId: string) =>
+    apiFetch<Chat>(`/chats/${chatId}/fork`, { method: "POST" }),
   uploadAttachment: (
     chatId: string,
     file: File,
@@ -1023,7 +1025,10 @@ export const chatApi = {
   },
   deleteChat: (chatId: string) =>
     apiFetch(`/chats/${chatId}`, { method: "DELETE" }),
-  update: (chatId: string, payload: { title?: string; is_pinned?: boolean }) =>
+  update: (
+    chatId: string,
+    payload: { title?: string; is_pinned?: boolean; is_hidden_from_others?: boolean }
+  ) =>
     apiFetch<Chat>(`/chats/${chatId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),

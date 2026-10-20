@@ -53,6 +53,7 @@ type ServerScope = "instance" | "org" | "user"
 type InfoTopic =
   | "apps"
   | "microsoft"
+  | "google"
   | "mcp_policy"
   | "mcp_instance_servers"
   | "mcp_org"
@@ -72,6 +73,10 @@ const INFO_COPY: Record<
   microsoft: {
     title: "integrations_info_microsoft_title",
     body: "integrations_info_microsoft_body",
+  },
+  google: {
+    title: "integrations_info_google_title",
+    body: "integrations_info_google_body",
   },
   mcp_policy: {
     title: "integrations_info_mcp_policy_title",
@@ -154,12 +159,16 @@ export const IntegrationsPage = () => {
   const [configuringAppId, setConfiguringAppId] = useState<string | null>(null)
   const [connectingAppId, setConnectingAppId] = useState<string | null>(null)
   const [microsoftConnectOpen, setMicrosoftConnectOpen] = useState(false)
+  const [microsoftSettingsOpen, setMicrosoftSettingsOpen] = useState(false)
+  const [googleConnectOpen, setGoogleConnectOpen] = useState(false)
+  const [googleSettingsOpen, setGoogleSettingsOpen] = useState(false)
   const [infoTopic, setInfoTopic] = useState<InfoTopic | null>(null)
   const [oauthProviders, setOauthProviders] = useState<OAuthProviderConfig[]>([])
   const [oauthProviderDrafts, setOauthProviderDrafts] = useState<
     Record<string, Record<string, string>>
   >({})
   const [entraSetupOpen, setEntraSetupOpen] = useState(false)
+  const [googleSetupOpen, setGoogleSetupOpen] = useState(false)
 
   const openInfo = (topic: InfoTopic, event?: { stopPropagation: () => void }) => {
     event?.stopPropagation()
@@ -191,6 +200,24 @@ export const IntegrationsPage = () => {
           name !== "offline_access"
         ) {
           scopes.add(name)
+        }
+      }
+    }
+    return [...scopes].sort((a, b) => a.localeCompare(b))
+  }, [catalogApps])
+
+  const googleOAuthScopes = useMemo(() => {
+    const scopes = new Set<string>()
+    for (const app of catalogApps) {
+      if (app.oauth_provider_id !== "google") continue
+      for (const scope of app.oauth_scopes ?? []) {
+        if (
+          scope &&
+          scope !== "openid" &&
+          scope !== "email" &&
+          scope !== "profile"
+        ) {
+          scopes.add(scope)
         }
       }
     }
@@ -580,6 +607,20 @@ export const IntegrationsPage = () => {
     }
   }
 
+  const connectAllGoogleOAuth = async () => {
+    if (!selectedOrgId) return
+    setError(null)
+    try {
+      const { authorize_url } = await integrationsApi.oauthStartProvider(
+        "google",
+        selectedOrgId
+      )
+      window.location.assign(authorize_url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("common_error"))
+    }
+  }
+
   const saveOauthProvider = async (provider: OAuthProviderConfig) => {
     const draft = oauthProviderDrafts[provider.provider_id] ?? {}
     setError(null)
@@ -748,12 +789,20 @@ export const IntegrationsPage = () => {
   const orgSectionVisible = canManageOrg && selectedOrgId
   const isMicrosoftApp = (app: CatalogIntegrationStatus) =>
     app.oauth_provider_id === "microsoft"
+  const isGoogleApp = (app: CatalogIntegrationStatus) =>
+    app.oauth_provider_id === "google"
   const microsoftApps = useMemo(
     () => catalogApps.filter(isMicrosoftApp),
     [catalogApps]
   )
+  const googleApps = useMemo(
+    () => catalogApps.filter(isGoogleApp),
+    [catalogApps]
+  )
   const otherCatalogApps = useMemo(() => {
-    const rest = catalogApps.filter((app) => !isMicrosoftApp(app))
+    const rest = catalogApps.filter(
+      (app) => !isMicrosoftApp(app) && !isGoogleApp(app)
+    )
     return canConfigureCatalogApps
       ? rest
       : rest.filter((app) => app.installable || app.connected)
@@ -762,31 +811,74 @@ export const IntegrationsPage = () => {
     () => microsoftApps.filter((app) => app.installable || app.connected),
     [microsoftApps]
   )
+  const googleUserApps = useMemo(
+    () => googleApps.filter((app) => app.installable || app.connected),
+    [googleApps]
+  )
   const microsoftProvider = oauthProviders.find((p) => p.provider_id === "microsoft")
-  const otherOauthProviders = oauthProviders.filter((p) => p.provider_id !== "microsoft")
-  const showMicrosoftAdmin =
-    (isSuperAdmin || canManageOrg) && microsoftApps.length > 0
-  const showMicrosoftUser =
-    !showMicrosoftAdmin && microsoftUserApps.length > 0
-  const showMicrosoftCard = showMicrosoftAdmin || showMicrosoftUser
+  const googleProvider = oauthProviders.find((p) => p.provider_id === "google")
+  const otherOauthProviders = oauthProviders.filter(
+    (p) => p.provider_id !== "microsoft" && p.provider_id !== "google"
+  )
+  const canConfigureMicrosoft = (isSuperAdmin || canManageOrg) && microsoftApps.length > 0
+  const canConfigureGoogle = (isSuperAdmin || canManageOrg) && googleApps.length > 0
+  const showMicrosoftCard =
+    canConfigureMicrosoft || microsoftUserApps.length > 0
+  const showGoogleCard = canConfigureGoogle || googleUserApps.length > 0
   const microsoftConnectable = microsoftUserApps.filter(
     (app) => app.installable || app.connected
   )
+  const googleConnectable = googleUserApps.filter(
+    (app) => app.installable || app.connected
+  )
   const microsoftConnectedCount = microsoftConnectable.filter((a) => a.connected).length
+  const googleConnectedCount = googleConnectable.filter((a) => a.connected).length
+  const microsoftFullyConnected =
+    microsoftConnectable.length > 0 &&
+    microsoftConnectedCount >= microsoftConnectable.length
+  const googleFullyConnected =
+    googleConnectable.length > 0 &&
+    googleConnectedCount >= googleConnectable.length
+  const microsoftShowActions = Boolean(selectedOrgId) && microsoftConnectable.length > 0
+  const googleShowActions = Boolean(selectedOrgId) && googleConnectable.length > 0
+  const microsoftCanConnectAll =
+    microsoftShowActions && !microsoftFullyConnected
+  const googleCanConnectAll = googleShowActions && !googleFullyConnected
   const microsoftStatusLabel =
     microsoftConnectedCount === 0
       ? microsoftConnectable.length > 0
         ? t("mcp_not_connected")
-        : isSuperAdmin && microsoftProvider && !microsoftProvider.configured
+        : canConfigureMicrosoft && microsoftProvider && !microsoftProvider.configured
           ? t("integrations_setup_needed")
-          : null
-      : microsoftConnectedCount >= microsoftConnectable.length
+          : canConfigureMicrosoft
+            ? t("integrations_disabled")
+            : null
+      : microsoftFullyConnected
         ? t("mcp_connected")
         : t("integrations_microsoft_partial")
+  const googleStatusLabel =
+    googleConnectedCount === 0
+      ? googleConnectable.length > 0
+        ? t("mcp_not_connected")
+        : canConfigureGoogle && googleProvider && !googleProvider.configured
+          ? t("integrations_setup_needed")
+          : canConfigureGoogle
+            ? t("integrations_disabled")
+            : null
+      : googleFullyConnected
+        ? t("mcp_connected")
+        : t("integrations_google_partial")
   const showCatalogSection =
-    showMicrosoftCard || otherCatalogApps.length > 0 || canConfigureCatalogApps
+    showMicrosoftCard ||
+    showGoogleCard ||
+    otherCatalogApps.length > 0 ||
+    canConfigureCatalogApps
 
-  const renderMicrosoftOauthFields = (provider: OAuthProviderConfig) => {
+  const renderBundledOauthFields = (
+    provider: OAuthProviderConfig,
+    setupLabel: TranslationKey,
+    onSetup: () => void
+  ) => {
     const draft = oauthProviderDrafts[provider.provider_id] ?? {}
     return (
       <div className="space-y-3">
@@ -796,8 +888,8 @@ export const IntegrationsPage = () => {
             type="button"
             size="icon-sm"
             variant="ghost"
-            aria-label={t("integrations_entra_setup")}
-            onClick={() => setEntraSetupOpen(true)}
+            aria-label={t(setupLabel)}
+            onClick={onSetup}
           >
             <Info />
           </Button>
@@ -896,24 +988,14 @@ export const IntegrationsPage = () => {
                 </Select>
               ) : null}
             </div>
-            {!showMicrosoftCard && otherCatalogApps.length === 0 ? (
+            {!showMicrosoftCard &&
+            !showGoogleCard &&
+            otherCatalogApps.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("integrations_apps_empty")}</p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
                 {showMicrosoftCard ? (
-                  <Card
-                    className={cn(
-                      "gap-4 py-5 sm:col-span-2",
-                      showMicrosoftUser && selectedOrgId
-                        ? "cursor-pointer transition-colors hover:bg-muted/40"
-                        : null
-                    )}
-                    onClick={
-                      showMicrosoftUser && selectedOrgId
-                        ? () => setMicrosoftConnectOpen(true)
-                        : undefined
-                    }
-                  >
+                  <Card className="gap-4 py-5">
                     <CardHeader className="flex flex-row items-start gap-3 space-y-0">
                       <div
                         className={cn(
@@ -926,12 +1008,9 @@ export const IntegrationsPage = () => {
                       </div>
                       <div className="min-w-0 flex-1 space-y-1">
                         <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-0.5">
-                            <CardTitle className="font-sans text-base font-medium leading-5">
-                              {t("integrations_microsoft")}
-                            </CardTitle>
-                            <InfoButton topic="microsoft" />
-                          </div>
+                          <CardTitle className="font-sans text-base font-medium leading-5">
+                            {t("integrations_microsoft")}
+                          </CardTitle>
                           <div className="flex shrink-0 items-center gap-1">
                             {microsoftStatusLabel ? (
                               <Badge
@@ -943,6 +1022,17 @@ export const IntegrationsPage = () => {
                                 {microsoftStatusLabel}
                               </Badge>
                             ) : null}
+                            {canConfigureMicrosoft ? (
+                              <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                aria-label={t("common_settings")}
+                                onClick={() => setMicrosoftSettingsOpen(true)}
+                              >
+                                <Settings2 />
+                              </Button>
+                            ) : null}
                           </div>
                         </div>
                         <CardDescription className="text-sm leading-5">
@@ -950,52 +1040,90 @@ export const IntegrationsPage = () => {
                         </CardDescription>
                       </div>
                     </CardHeader>
-                    {showMicrosoftAdmin ? (
-                      <CardContent
-                        className="space-y-5"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {isSuperAdmin && microsoftProvider
-                          ? renderMicrosoftOauthFields(microsoftProvider)
-                          : null}
-                        <div className="space-y-3">
-                          <div className="flex items-center gap-0.5">
-                            <p className="text-sm font-medium">
-                              {t("integrations_microsoft_modules")}
-                            </p>
-                            <InfoButton topic="microsoft" />
-                          </div>
-                          {microsoftApps.map((app) => (
-                            <div
-                              key={app.catalog_id}
-                              className="flex items-center justify-between gap-3"
-                            >
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium">{app.name}</p>
-                                {app.description ? (
-                                  <p className="text-xs text-muted-foreground">
-                                    {app.description}
-                                  </p>
-                                ) : null}
-                              </div>
-                              <Switch
-                                checked={app.enabled}
-                                onCheckedChange={(checked) =>
-                                  void toggleCatalogEnabled(app, checked)
-                                }
-                              />
-                            </div>
-                          ))}
-                        </div>
-                        {selectedOrgId && microsoftConnectable.length > 0 ? (
+                    {microsoftShowActions ? (
+                      <CardContent className="flex flex-wrap gap-2">
+                        {microsoftCanConnectAll ? (
                           <Button
                             size="sm"
-                            variant="outline"
-                            onClick={() => setMicrosoftConnectOpen(true)}
+                            onClick={() => void connectAllMicrosoftOAuth()}
                           >
-                            {t("integrations_microsoft_manage")}
+                            {t("integrations_connect_all_microsoft")}
                           </Button>
                         ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setMicrosoftConnectOpen(true)}
+                        >
+                          {t("integrations_microsoft_manage")}
+                        </Button>
+                      </CardContent>
+                    ) : null}
+                  </Card>
+                ) : null}
+                {showGoogleCard ? (
+                  <Card className="gap-4 py-5">
+                    <CardHeader className="flex flex-row items-start gap-3 space-y-0">
+                      <div
+                        className={cn(
+                          "flex size-11 shrink-0 items-center justify-center rounded-xl",
+                          "bg-muted text-base font-semibold tracking-tight text-foreground"
+                        )}
+                        aria-hidden
+                      >
+                        G
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <CardTitle className="font-sans text-base font-medium leading-5">
+                            {t("integrations_google")}
+                          </CardTitle>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {googleStatusLabel ? (
+                              <Badge
+                                variant={
+                                  googleConnectedCount > 0 ? "secondary" : "outline"
+                                }
+                                className="whitespace-nowrap"
+                              >
+                                {googleStatusLabel}
+                              </Badge>
+                            ) : null}
+                            {canConfigureGoogle ? (
+                              <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                aria-label={t("common_settings")}
+                                onClick={() => setGoogleSettingsOpen(true)}
+                              >
+                                <Settings2 />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <CardDescription className="text-sm leading-5">
+                          {t("integrations_google_desc")}
+                        </CardDescription>
+                      </div>
+                    </CardHeader>
+                    {googleShowActions ? (
+                      <CardContent className="flex flex-wrap gap-2">
+                        {googleCanConnectAll ? (
+                          <Button
+                            size="sm"
+                            onClick={() => void connectAllGoogleOAuth()}
+                          >
+                            {t("integrations_connect_all_google")}
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setGoogleConnectOpen(true)}
+                        >
+                          {t("integrations_google_manage")}
+                        </Button>
                       </CardContent>
                     ) : null}
                   </Card>
@@ -1636,6 +1764,121 @@ export const IntegrationsPage = () => {
         </Dialog>
 
         <Dialog
+          open={microsoftSettingsOpen}
+          onOpenChange={setMicrosoftSettingsOpen}
+        >
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-1">
+                {t("integrations_configure_app", {
+                  name: t("integrations_microsoft"),
+                })}
+                <InfoButton topic="microsoft" />
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-5">
+              {isSuperAdmin && microsoftProvider
+                ? renderBundledOauthFields(
+                    microsoftProvider,
+                    "integrations_entra_setup",
+                    () => setEntraSetupOpen(true)
+                  )
+                : null}
+              <div className="space-y-3">
+                <p className="text-sm font-medium">
+                  {t("integrations_microsoft_modules")}
+                </p>
+                {microsoftApps.map((app) => (
+                  <div
+                    key={app.catalog_id}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{app.name}</p>
+                      {app.description ? (
+                        <p className="text-xs text-muted-foreground">
+                          {app.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Switch
+                      checked={app.enabled}
+                      onCheckedChange={(checked) =>
+                        void toggleCatalogEnabled(app, checked)
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setMicrosoftSettingsOpen(false)}
+              >
+                {t("common_close")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={googleSettingsOpen} onOpenChange={setGoogleSettingsOpen}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-1">
+                {t("integrations_configure_app", {
+                  name: t("integrations_google"),
+                })}
+                <InfoButton topic="google" />
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-5">
+              {isSuperAdmin && googleProvider
+                ? renderBundledOauthFields(
+                    googleProvider,
+                    "integrations_google_setup",
+                    () => setGoogleSetupOpen(true)
+                  )
+                : null}
+              <div className="space-y-3">
+                <p className="text-sm font-medium">
+                  {t("integrations_google_modules")}
+                </p>
+                {googleApps.map((app) => (
+                  <div
+                    key={app.catalog_id}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{app.name}</p>
+                      {app.description ? (
+                        <p className="text-xs text-muted-foreground">
+                          {app.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Switch
+                      checked={app.enabled}
+                      onCheckedChange={(checked) =>
+                        void toggleCatalogEnabled(app, checked)
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setGoogleSettingsOpen(false)}
+              >
+                {t("common_close")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
           open={microsoftConnectOpen}
           onOpenChange={setMicrosoftConnectOpen}
         >
@@ -1647,8 +1890,7 @@ export const IntegrationsPage = () => {
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
-              {selectedOrgId &&
-              microsoftConnectable.filter((a) => a.installable).length > 1 ? (
+              {selectedOrgId && microsoftCanConnectAll ? (
                 <Button
                   className="w-full"
                   onClick={() => void connectAllMicrosoftOAuth()}
@@ -1705,6 +1947,79 @@ export const IntegrationsPage = () => {
               <Button
                 variant="outline"
                 onClick={() => setMicrosoftConnectOpen(false)}
+              >
+                {t("common_close")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={googleConnectOpen} onOpenChange={setGoogleConnectOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-1">
+                {t("integrations_google")}
+                <InfoButton topic="google" />
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {selectedOrgId && googleCanConnectAll ? (
+                <Button
+                  className="w-full"
+                  onClick={() => void connectAllGoogleOAuth()}
+                >
+                  {t("integrations_connect_all_google")}
+                </Button>
+              ) : null}
+              <div className="space-y-2">
+                {googleConnectable.map((app) => (
+                  <div
+                    key={app.catalog_id}
+                    className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{app.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {app.connected
+                          ? t("mcp_connected")
+                          : t("mcp_not_connected")}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-1.5">
+                      {app.connected ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void connectCatalogOAuth(app)}
+                          >
+                            {t("integrations_reconnect")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void disconnectCatalogApp(app)}
+                          >
+                            {t("mcp_disconnect")}
+                          </Button>
+                        </>
+                      ) : app.installable ? (
+                        <Button
+                          size="sm"
+                          onClick={() => void connectCatalogOAuth(app)}
+                        >
+                          {t("integrations_connect")}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setGoogleConnectOpen(false)}
               >
                 {t("common_close")}
               </Button>
@@ -1787,6 +2102,57 @@ export const IntegrationsPage = () => {
             </div>
             <DialogFooter>
               <Button onClick={() => setEntraSetupOpen(false)}>{t("common_close")}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={googleSetupOpen} onOpenChange={setGoogleSetupOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{t("integrations_google_setup")}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 text-sm">
+              <ol className="list-decimal space-y-2 pl-4 text-muted-foreground">
+                <li>{t("integrations_google_step_project")}</li>
+                <li>{t("integrations_google_step_apis")}</li>
+                <li>
+                  {t("integrations_google_step_redirect")}
+                  <div className="mt-1.5 flex flex-wrap gap-2">
+                    <Input
+                      readOnly
+                      className="min-w-0 flex-1 font-mono text-xs text-foreground"
+                      value={oauthCallbackUrl}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(oauthCallbackUrl)
+                      }}
+                    >
+                      {t("integrations_embed_copy")}
+                    </Button>
+                  </div>
+                </li>
+                <li>{t("integrations_google_step_paste")}</li>
+              </ol>
+              {googleOAuthScopes.length > 0 ? (
+                <div className="space-y-1.5">
+                  <p className="font-medium text-foreground">
+                    {t("integrations_google_scopes")}
+                  </p>
+                  <ul className="max-h-48 space-y-1 overflow-y-auto rounded-md border px-3 py-2 font-mono text-xs">
+                    {googleOAuthScopes.map((scope) => (
+                      <li key={scope}>{scope}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setGoogleSetupOpen(false)}>
+                {t("common_close")}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

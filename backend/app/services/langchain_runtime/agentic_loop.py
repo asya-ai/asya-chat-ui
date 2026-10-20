@@ -230,6 +230,34 @@ def _strip_inline_attachment_data(value: Any) -> Any:
     return value
 
 
+def _vision_parts_from_tool_attachments(
+    attachments: list[dict] | None,
+) -> list[dict[str, Any]]:
+    """Build multimodal image_url parts from tool result attachments (no base64 in tool JSON)."""
+    parts: list[dict[str, Any]] = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        content_type = str(item.get("content_type") or "").split(";")[0].strip()
+        data_base64 = item.get("data_base64")
+        if not content_type.startswith("image/") or not isinstance(data_base64, str) or not data_base64:
+            continue
+        file_name = str(item.get("file_name") or "image").strip() or "image"
+        parts.append(
+            {
+                "type": "text",
+                "text": f"[Project image for vision: {file_name}]",
+            }
+        )
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{content_type};base64,{data_base64}"},
+            }
+        )
+    return parts
+
+
 async def run_agentic_loop_langchain(
     *,
     provider: Any,
@@ -241,6 +269,7 @@ async def run_agentic_loop_langchain(
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
     delta_sender: anyio.abc.ObjectSendStream | None = None,
+    supports_image_input: bool = False,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     executor = LangChainToolExecutor(tool_registry)
     tool_specs = executor.list_specs()
@@ -849,7 +878,13 @@ async def run_agentic_loop_langchain(
             assert item is not None
             call, result, tool_output, answer_usage, extra_model_usage = item
             usage = _merge_chat_usage(usage, answer_usage)
-            if result.attachments:
+            # Project-image vision bytes are injected into messages only — do not
+            # persist them as new chat attachments.
+            if result.attachments and not (
+                call.name == "read_project_source"
+                and isinstance(tool_output, dict)
+                and tool_output.get("vision_attached")
+            ):
                 attachments.extend(result.attachments)
             if extra_model_usage:
                 image_usages.append(extra_model_usage)
@@ -911,6 +946,16 @@ async def run_agentic_loop_langchain(
                     "content": json.dumps(tool_output, ensure_ascii=False),
                 }
             )
+            # Project image reads: attach bytes as vision input for the next turn.
+            if (
+                supports_image_input
+                and call.name == "read_project_source"
+                and isinstance(tool_output, dict)
+                and tool_output.get("vision_attached")
+            ):
+                vision_parts = _vision_parts_from_tool_attachments(result.attachments)
+                if vision_parts:
+                    messages.append({"role": "user", "content": vision_parts})
 
     return (
         "I reached the tool step limit before finishing. Please refine your request and try again.",

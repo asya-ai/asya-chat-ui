@@ -13,7 +13,7 @@ import json
 import httpx
 import anyio
 from json_repair import loads as repair_json_loads
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from fastapi import (
     APIRouter,
     Depends,
@@ -52,7 +52,14 @@ from app.models import (
     User,
     UserMemory,
 )
-from app.services.agent_access import get_agent_role
+from app.services.agent_access import (
+    accessible_agent_ids,
+    can_access_chat,
+    can_edit_chat_message,
+    can_manage_chat,
+    get_agent_role,
+    user_display_label,
+)
 from app.services.org_service import require_org_member, require_provider_enabled
 from app.services.file_storage import (
     attachment_bytes,
@@ -1016,11 +1023,11 @@ def _build_tool_registry(
             ToolSpec(
                 name="read_project_source",
                 description=(
-                    "Read the full text of a project document by its numeric id. Returns a "
-                    "chunk of characters starting at offset along with total_length_chars and "
-                    "next_offset. If has_more is true, call again with next_offset to keep "
-                    "reading. Use this to actually review a document rather than relying on "
-                    "search snippets alone."
+                    "Read a project document by its numeric id. Returns a text chunk with "
+                    "total_length_chars and next_offset (call again with next_offset when "
+                    "has_more). For image sources, also attaches the original image for "
+                    "vision when the model supports it — use this when the indexed "
+                    "description is not enough."
                 ),
                 parameters={
                     "type": "object",
@@ -2480,6 +2487,7 @@ async def _run_agentic_loop(
         activity_sender=activity_sender,
         tool_event_sender=tool_event_sender,
         delta_sender=delta_sender,
+        supports_image_input=supports_image_input(model),
     )
 
     tool_specs = tool_registry.list_specs()
@@ -2963,6 +2971,7 @@ class ChatCreateRequest(BaseModel):
 class ChatUpdateRequest(BaseModel):
     title: str | None = None
     is_pinned: bool | None = None
+    is_hidden_from_others: bool | None = None
 
 
 class ChatRead(BaseModel):
@@ -2976,11 +2985,14 @@ class ChatRead(BaseModel):
     is_incognito: bool = False
     is_subagent: bool = False
     is_pinned: bool = False
+    is_hidden_from_others: bool = False
+    owner_user_id: str | None = None
+    owner_display_name: str | None = None
     created_at: datetime
     last_activity_at: datetime
 
 
-def _chat_read(chat: Chat) -> ChatRead:
+def _chat_read(chat: Chat, *, owner: User | None = None) -> ChatRead:
     return ChatRead(
         id=str(chat.id),
         title=chat.title,
@@ -2992,9 +3004,23 @@ def _chat_read(chat: Chat) -> ChatRead:
         is_incognito=bool(chat.is_incognito),
         is_subagent=bool(chat.is_subagent),
         is_pinned=bool(chat.is_pinned),
+        is_hidden_from_others=bool(chat.is_hidden_from_others),
+        owner_user_id=str(chat.user_id),
+        owner_display_name=user_display_label(owner),
         created_at=chat.created_at,
         last_activity_at=chat.last_activity_at or chat.created_at,
     )
+
+
+def _chat_reads(session: Session, chats: list[Chat]) -> list[ChatRead]:
+    if not chats:
+        return []
+    owner_ids = {chat.user_id for chat in chats}
+    owners = {
+        user.id: user
+        for user in session.exec(select(User).where(User.id.in_(owner_ids))).all()
+    }
+    return [_chat_read(chat, owner=owners.get(chat.user_id)) for chat in chats]
 
 
 class ChatShareRead(BaseModel):
@@ -3336,6 +3362,8 @@ class ChatMessageRead(BaseModel):
     completed_at: datetime | None = None
     model_id: str | None = None
     model_name: str | None = None
+    user_id: str | None = None
+    user_display_name: str | None = None
     attachments: list[ChatMessageAttachmentRead] | None = None
     sources: list[dict] | None = None
     thinking_steps: list[str] | None = None
@@ -3510,6 +3538,9 @@ async def _stream_message_ws(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        await _ws_send_event(websocket, {"error": "Cannot access this chat"})
+        return
     try:
         enforce_chat_usage_limits(
             session, org_id=chat.org_id, user_id=current_user.id
@@ -3536,7 +3567,7 @@ async def _stream_message_ws(
         await _ws_send_event(websocket, {"error": "Model not found"})
         return
     model = ensure_model_capabilities(session, model)
-    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
+    if not _user_can_use_model(session, chat.org_id, current_user.id, model.id):
         await _ws_send_event(
             websocket, {"error": "Model is not enabled for this organization"}
         )
@@ -3544,6 +3575,7 @@ async def _stream_message_ws(
 
     user_message = ChatMessage(
         chat_id=chat.id,
+        user_id=current_user.id,
         role="user",
         content=payload.content,
         page_context=payload.page_context,
@@ -3641,13 +3673,13 @@ async def _stream_edit_ws(
     if not chat or chat.is_deleted:
         await _ws_send_event(websocket, {"error": "Chat not found"})
         return
-    if chat.user_id != current_user.id:
-        await _ws_send_event(websocket, {"error": "Cannot edit this message"})
-        return
 
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        await _ws_send_event(websocket, {"error": "Cannot access this chat"})
+        return
     try:
         enforce_chat_usage_limits(
             session, org_id=chat.org_id, user_id=current_user.id
@@ -3663,6 +3695,9 @@ async def _stream_edit_ws(
     ).first()
     if not message:
         await _ws_send_event(websocket, {"error": "Message not found"})
+        return
+    if not can_edit_chat_message(chat, message, current_user):
+        await _ws_send_event(websocket, {"error": "Cannot edit this message"})
         return
 
     model_id = chat.model_id
@@ -3682,7 +3717,7 @@ async def _stream_edit_ws(
         await _ws_send_event(websocket, {"error": "Model not found"})
         return
     model = ensure_model_capabilities(session, model)
-    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
+    if not _user_can_use_model(session, chat.org_id, current_user.id, model.id):
         await _ws_send_event(
             websocket, {"error": "Model is not enabled for this organization"}
         )
@@ -3701,6 +3736,7 @@ async def _stream_edit_ws(
 
     new_message = ChatMessage(
         chat_id=chat.id,
+        user_id=current_user.id,
         role="user",
         content=payload.content,
         parent_id=message.id,
@@ -3862,7 +3898,126 @@ def create_chat(
     session.add(chat)
     session.commit()
     session.refresh(chat)
-    return _chat_read(chat)
+    return _chat_read(chat, owner=current_user)
+
+
+@router.post("/{chat_id}/fork", response_model=ChatRead)
+def fork_chat(
+    chat_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatRead:
+    """Copy a chat (current messages only) for the caller. Usage is not copied."""
+    try:
+        chat_uuid = UUID(chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid chat id"
+        ) from exc
+
+    source = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not source or source.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session,
+        source.org_id,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    if not can_access_chat(session, source, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+    if source.is_subagent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Subagent chats cannot be forked",
+        )
+
+    agent_id = source.agent_id
+    if agent_id is not None:
+        agent = session.exec(
+            select(Agent).where(Agent.id == agent_id, Agent.org_id == source.org_id)
+        ).first()
+        if agent is None or get_agent_role(session, agent, current_user.id) is None:
+            agent_id = None
+
+    now = datetime.utcnow()
+    forked = Chat(
+        org_id=source.org_id,
+        user_id=current_user.id,
+        model_id=source.model_id,
+        agent_id=agent_id,
+        title=source.title,
+        is_incognito=False,
+        is_subagent=False,
+        is_pinned=False,
+        is_hidden_from_others=False,
+        created_at=now,
+        last_activity_at=source.last_activity_at or now,
+    )
+    session.add(forked)
+    session.flush()
+
+    messages = session.exec(
+        select(ChatMessage)
+        .where(
+            ChatMessage.chat_id == source.id,
+            ChatMessage.is_current.is_(True),
+            ChatMessage.role.in_(("user", "assistant")),
+        )
+        .order_by(ChatMessage.created_at.asc())
+    ).all()
+
+    id_map: dict[UUID, UUID] = {}
+    for message in messages:
+        new_id = uuid4()
+        id_map[message.id] = new_id
+        session.add(
+            ChatMessage(
+                id=new_id,
+                chat_id=forked.id,
+                user_id=message.user_id if message.role == "user" else None,
+                model_id=message.model_id,
+                parent_id=None,
+                branch_id=None,
+                is_current=True,
+                role=message.role,
+                content=message.content,
+                sources=message.sources,
+                page_context=message.page_context,
+                status=message.status if message.status else "done",
+                started_at=message.started_at,
+                completed_at=message.completed_at,
+                error_message=None,
+                created_at=message.created_at,
+            )
+        )
+    session.flush()
+
+    if messages:
+        attachments = session.exec(
+            select(ChatMessageAttachment).where(
+                ChatMessageAttachment.message_id.in_(list(id_map.keys()))
+            )
+        ).all()
+        by_message: dict[UUID, list[ChatMessageAttachment]] = {}
+        for attachment in attachments:
+            by_message.setdefault(attachment.message_id, []).append(attachment)
+        for old_id, new_id in id_map.items():
+            source_attachments = by_message.get(old_id)
+            if not source_attachments:
+                continue
+            copy_message_attachments(
+                session,
+                chat_id=forked.id,
+                source_attachments=source_attachments,
+                new_message_id=new_id,
+            )
+
+    session.commit()
+    session.refresh(forked)
+    return _chat_read(forked, owner=current_user)
 
 
 @router.get("", response_model=list[ChatRead])
@@ -3882,16 +4037,25 @@ def list_chats(
         session, org_uuid, current_user.id, is_super_admin=current_user.is_super_admin
     )
 
+    agent_ids = accessible_agent_ids(session, org_uuid, current_user.id)
+    visibility = [Chat.user_id == current_user.id]
+    if agent_ids:
+        visibility.append(
+            (Chat.agent_id.in_(agent_ids))
+            & (Chat.is_hidden_from_others.is_(False))
+            & (Chat.is_incognito.is_(False))
+            & (Chat.is_subagent.is_(False))
+        )
     chats = session.exec(
         select(Chat).where(
             Chat.org_id == org_uuid,
-            Chat.user_id == current_user.id,
             Chat.is_deleted.is_(False),
             Chat.is_incognito.is_(False),
             Chat.is_subagent.is_(False),
+            or_(*visibility),
         )
     ).all()
-    return [_chat_read(chat) for chat in chats]
+    return _chat_reads(session, list(chats))
 
 
 @router.get("/{chat_id}/subagents", response_model=list[ChatRead])
@@ -3910,13 +4074,13 @@ def list_subagents(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id and not current_user.is_super_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
-        )
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
     children = session.exec(
         select(Chat)
         .where(
@@ -3926,7 +4090,7 @@ def list_subagents(
         )
         .order_by(Chat.created_at.desc())
     ).all()
-    return [_chat_read(child) for child in children]
+    return _chat_reads(session, list(children))
 
 
 @router.get("/search", response_model=list[ChatRead])
@@ -3952,11 +4116,26 @@ def search_chats(
     if not query:
         return []
     capped_limit = max(1, min(limit, 100))
+    agent_ids: set[UUID] = set()
+    if org_uuid:
+        agent_ids = accessible_agent_ids(session, org_uuid, current_user.id)
+    else:
+        # Search across all orgs the user belongs to is not supported here;
+        # without org_id only own chats are eligible.
+        pass
+    visibility = [Chat.user_id == current_user.id]
+    if agent_ids:
+        visibility.append(
+            (Chat.agent_id.in_(agent_ids))
+            & (Chat.is_hidden_from_others.is_(False))
+            & (Chat.is_incognito.is_(False))
+            & (Chat.is_subagent.is_(False))
+        )
     base_chat_filters = [
-        Chat.user_id == current_user.id,
         Chat.is_deleted.is_(False),
         Chat.is_incognito.is_(False),
         Chat.is_subagent.is_(False),
+        or_(*visibility),
     ]
     if org_uuid:
         base_chat_filters.append(Chat.org_id == org_uuid)
@@ -4003,7 +4182,7 @@ def search_chats(
         )
         .limit(capped_limit)
     ).all()
-    return [_chat_read(chat) for chat, _rank in chats]
+    return _chat_reads(session, [chat for chat, _rank in chats])
 
 
 @router.get("/{chat_id}", response_model=ChatRead)
@@ -4022,15 +4201,15 @@ def get_chat(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    is_owner = chat.user_id == current_user.id
-    if not is_owner and not current_user.is_super_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
-        )
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
-    return _chat_read(chat)
+    if not can_access_chat(session, chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+    owner = session.exec(select(User).where(User.id == chat.user_id)).first()
+    return _chat_read(chat, owner=owner)
 
 
 def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRead"]:
@@ -4126,6 +4305,16 @@ def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRe
             _attach_generation_timing(session, timing_only)
             usage_by_message.update(timing_only)
 
+    author_ids = {message.user_id for message in messages if message.user_id}
+    authors = (
+        {
+            user.id: user
+            for user in session.exec(select(User).where(User.id.in_(author_ids))).all()
+        }
+        if author_ids
+        else {}
+    )
+
     results: list[ChatMessageRead] = []
     for message in messages:
         message_attachments = attachments_by_message.get(message.id)
@@ -4140,6 +4329,7 @@ def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRe
                     message_attachments=message_attachments,
                 )
         task = task_map.get(message.id)
+        author = authors.get(message.user_id) if message.user_id else None
         results.append(
             ChatMessageRead(
                 id=str(message.id),
@@ -4152,6 +4342,8 @@ def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRe
                 or (task.completed_at if task is not None else None),
                 model_id=str(message.model_id) if message.model_id else None,
                 model_name=model_map.get(message.model_id),
+                user_id=str(message.user_id) if message.user_id else None,
+                user_display_name=user_display_label(author),
                 attachments=message_attachments,
                 sources=message.sources,
                 thinking_steps=thinking_steps or None,
@@ -4231,14 +4423,16 @@ def list_messages(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    is_owner = chat.user_id == current_user.id
-    if not is_owner:
-        # Shared chats are reachable via the normal /chat/{id} link while share_token is set.
-        if not (chat.share_token or "").strip():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=CHAT_NOT_SHARED_DETAIL,
-            )
+
+    if can_access_chat(session, chat, current_user):
+        require_org_member(
+            session,
+            chat.org_id,
+            current_user.id,
+            is_super_admin=current_user.is_super_admin,
+        )
+    elif (chat.share_token or "").strip():
+        # Public share-token link (not a project collaborator).
         viewer_label = _viewer_label(current_user)
         session.add(
             ChatViewEvent(
@@ -4249,13 +4443,9 @@ def list_messages(
         )
         session.commit()
     else:
-        org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
-        if not org:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
-            )
-        require_org_member(
-            session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=CHAT_NOT_SHARED_DETAIL,
         )
 
     return _message_reads_for_chat(session, chat)
@@ -4392,13 +4582,13 @@ def _require_chat_for_cowork(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id and not current_user.is_super_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
-        )
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
     return chat
 
 
@@ -4808,17 +4998,13 @@ def delete_chat(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id and not current_user.is_super_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
-        )
-    if chat.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete this chat"
-        )
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_manage_chat(chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete this chat"
+        )
     chat.is_deleted = True
     session.add(chat)
     children = session.exec(
@@ -4864,14 +5050,18 @@ def update_chat(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot update this chat"
-        )
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
-    if payload.title is None and payload.is_pinned is None:
+    if not can_manage_chat(chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot update this chat"
+        )
+    if (
+        payload.title is None
+        and payload.is_pinned is None
+        and payload.is_hidden_from_others is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided"
         )
@@ -4888,10 +5078,26 @@ def update_chat(
         chat.title = title
     if payload.is_pinned is not None:
         chat.is_pinned = payload.is_pinned
+    if payload.is_hidden_from_others is not None:
+        if not chat.agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only project chats can be hidden from others",
+            )
+        chat.is_hidden_from_others = payload.is_hidden_from_others
+        try:
+            from app.services.agents.chat_index import sync_chat_source_hidden_flag
+
+            sync_chat_source_hidden_flag(session, chat)
+        except Exception:
+            logger.exception(
+                "Failed to sync chat hide flag for chat_id=%s", chat.id
+            )
     session.add(chat)
     session.commit()
     session.refresh(chat)
-    return _chat_read(chat)
+    owner = session.exec(select(User).where(User.id == chat.user_id)).first()
+    return _chat_read(chat, owner=owner)
 
 
 @router.get("/shared/{share_token}", response_model=SharedChatResolveRead)
@@ -4936,7 +5142,7 @@ def share_chat(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id:
+    if not can_manage_chat(chat, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Cannot share this chat"
         )
@@ -4979,7 +5185,7 @@ def unshare_chat(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id:
+    if not can_manage_chat(chat, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Cannot unshare this chat"
         )
@@ -5016,6 +5222,10 @@ async def create_message(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
     enforce_chat_usage_limits(session, org_id=chat.org_id, user_id=current_user.id)
 
     model_id = chat.model_id
@@ -5039,7 +5249,7 @@ async def create_message(
             status_code=status.HTTP_404_NOT_FOUND, detail="Model not found"
         )
     model = ensure_model_capabilities(session, model)
-    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
+    if not _user_can_use_model(session, chat.org_id, current_user.id, model.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model is not enabled for this organization",
@@ -5047,6 +5257,7 @@ async def create_message(
 
     user_message = ChatMessage(
         chat_id=chat.id,
+        user_id=current_user.id,
         role="user",
         content=payload.content,
         page_context=payload.page_context,
@@ -5124,6 +5335,8 @@ async def create_message(
             role=user_message.role,
             content=user_message.content,
             created_at=user_message.created_at,
+            user_id=str(current_user.id),
+            user_display_name=user_display_label(current_user),
             attachments=attachment_reads,
         ),
         ChatMessageRead(
@@ -5823,10 +6036,6 @@ async def edit_message(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message"
-        )
 
     org = session.exec(select(Org).where(Org.id == chat.org_id)).first()
     if not org:
@@ -5837,6 +6046,10 @@ async def edit_message(
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
     enforce_chat_usage_limits(session, org_id=chat.org_id, user_id=current_user.id)
 
     message = session.exec(
@@ -5852,6 +6065,10 @@ async def edit_message(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only user messages can be edited",
+        )
+    if not can_edit_chat_message(chat, message, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message"
         )
 
     model_id = chat.model_id
@@ -5871,7 +6088,7 @@ async def edit_message(
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     model = ensure_model_capabilities(session, model)
-    if not _user_can_use_model(session, chat.org_id, chat.user_id, model.id):
+    if not _user_can_use_model(session, chat.org_id, current_user.id, model.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model is not enabled for this organization",
@@ -5891,6 +6108,7 @@ async def edit_message(
 
     new_message = ChatMessage(
         chat_id=chat.id,
+        user_id=current_user.id,
         role=message.role,
         content=payload.content,
         parent_id=message.id,
@@ -5981,6 +6199,8 @@ async def edit_message(
             role=new_message.role,
             content=new_message.content,
             created_at=new_message.created_at,
+            user_id=str(current_user.id),
+            user_display_name=user_display_label(current_user),
             attachments=attachment_reads,
         ),
         assistant_message=ChatMessageRead(
@@ -6290,6 +6510,8 @@ async def edit_message(
             role=new_message.role,
             content=new_message.content,
             created_at=new_message.created_at,
+            user_id=str(current_user.id),
+            user_display_name=user_display_label(current_user),
             attachments=attachment_reads,
         ),
         assistant_message=ChatMessageRead(
@@ -6323,14 +6545,14 @@ def delete_message_branch(
     chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not chat or chat.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    if chat.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message"
-        )
 
     require_org_member(
         session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
     )
+    if not can_access_chat(session, chat, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
 
     message = session.exec(
         select(ChatMessage).where(
@@ -6345,6 +6567,10 @@ def delete_message_branch(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only user messages can be removed",
+        )
+    if not can_edit_chat_message(chat, message, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message"
         )
 
     to_hide = session.exec(

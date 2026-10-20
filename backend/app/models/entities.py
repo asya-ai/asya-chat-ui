@@ -476,6 +476,7 @@ class Chat(SQLModel, table=True):
     is_incognito: bool = Field(default=False, index=True)
     is_subagent: bool = Field(default=False, index=True)
     is_pinned: bool = Field(default=False, index=True)
+    is_hidden_from_others: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
     last_activity_at: datetime = Field(
         default_factory=datetime.utcnow, nullable=False, index=True
@@ -492,6 +493,7 @@ class ChatMessage(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     chat_id: UUID = Field(foreign_key="chats.id", index=True)
+    user_id: Optional[UUID] = Field(default=None, foreign_key="users.id", index=True)
     model_id: Optional[UUID] = Field(default=None, foreign_key="chat_models.id")
     parent_id: Optional[UUID] = Field(
         default=None, foreign_key="chat_messages.id", index=True
@@ -513,6 +515,7 @@ class ChatMessage(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     chat: Chat = Relationship(back_populates="messages")
+    user: Optional[User] = Relationship()
 
 
 class ChatMessageAttachment(SQLModel, table=True):

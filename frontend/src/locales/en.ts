@@ -208,6 +208,7 @@ export const en = {
   chat_download_docx: "DOCX",
   chat_download_markdown: "Markdown",
   chat_share_answer: "Share",
+  chat_fork: "Fork",
   chat_copy_code: "Copy code",
   chat_copy_mermaid: "Copy Mermaid",
   chat_activity: "Activity",
@@ -268,6 +269,8 @@ export const en = {
   chat_pinned: "Pinned",
   chat_pin: "Pin",
   chat_unpin: "Unpin",
+  chat_hide_from_others: "Hide from others",
+  chat_show_to_others: "Show to others",
   chat_open_in_new_tab: "Open in new tab",
   chat_history: "History",
   chat_history_empty: "No chats yet",
@@ -750,11 +753,17 @@ export const en = {
   integrations_api_key: "API key",
   integrations_connect: "Connect",
   integrations_connect_all_microsoft: "Connect all",
+  integrations_connect_all_google: "Connect all",
   integrations_microsoft: "Microsoft",
   integrations_microsoft_desc: "Outlook, OneDrive, Teams, and more",
   integrations_microsoft_modules: "Modules",
   integrations_microsoft_partial: "Partially connected",
   integrations_microsoft_manage: "Manage",
+  integrations_google: "Google",
+  integrations_google_desc: "Gmail, Drive, Calendar, and more",
+  integrations_google_modules: "Modules",
+  integrations_google_partial: "Partially connected",
+  integrations_google_manage: "Manage",
   integrations_reconnect: "Reconnect",
   integrations_update_key: "Update key",
   integrations_embed_origins: "Embed origins",
@@ -775,12 +784,23 @@ export const en = {
   integrations_entra_step_paste:
     "Paste Application (client) ID, client secret, and Directory (tenant) ID into the form.",
   integrations_entra_permissions: "Delegated permissions",
+  integrations_google_setup: "Google Cloud setup",
+  integrations_google_step_project:
+    "Google Cloud Console → APIs & Services → Credentials → Create OAuth client ID (Web application).",
+  integrations_google_step_apis:
+    "APIs & Services → Library → Enable: Gmail, Drive, Calendar, People, Tasks, Docs, Sheets, Slides, Chat APIs.",
+  integrations_google_step_redirect: "Authorized redirect URI:",
+  integrations_google_step_paste: "Paste Client ID and client secret into the form.",
+  integrations_google_scopes: "OAuth scopes",
   integrations_info_apps_title: "Apps",
   integrations_info_apps_body:
     "Apps add tools to chat.\nAdmins offer modules to the organisation.\nUsers connect their own account.",
   integrations_info_microsoft_title: "Microsoft",
   integrations_info_microsoft_body:
     "Connect all offered modules in one sign-in, or one at a time.\nTeams needs a work or school Microsoft 365 account.\nMail, calendar, files, and To Do also work with personal accounts.",
+  integrations_info_google_title: "Google",
+  integrations_info_google_body:
+    "Connect all offered modules in one sign-in, or one at a time.\nRequires a Google Cloud OAuth client and the product APIs for each module.",
   integrations_info_mcp_policy_title: "Instance policy",
   integrations_info_mcp_policy_body:
     "Org servers: organisation admins can add MCP endpoints.\nUser servers: people can add personal MCP endpoints.",
@@ -795,7 +815,7 @@ export const en = {
     "Inherit: use the instance server as-is.\nOverride: this organisation replaces URL or auth.\nDisabled: hide the server for this organisation.",
   integrations_info_mcp_connections_title: "My connections",
   integrations_info_mcp_connections_body:
-    "Servers that need your own API token show up here.\nPaste the token, save, then Test.\nMicrosoft apps connect under Apps.",
+    "Servers that need your own API token show up here.\nPaste the token, save, then Test.\nMicrosoft and Google apps connect under Apps.",
   integrations_info_mcp_my_servers_title: "My MCP servers",
   integrations_info_mcp_my_servers_body:
     "Personal MCP endpoints only you use in chat.\nAvailable when instance and organisation policy both allow it.",

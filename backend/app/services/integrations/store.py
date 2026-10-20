@@ -428,7 +428,7 @@ def build_catalog_status(
                 "connection_status": install.status if install else "not_connected",
                 "effective_mcp_url": (
                     None
-                    if entry.oauth_provider_id == "microsoft"
+                    if entry.oauth_provider_id in {"microsoft", "google"}
                     else resolve_catalog_mcp_url(entry, cfg)
                 ),
                 "allowed_embed_origins": cfg.get("allowed_embed_origins") or "",

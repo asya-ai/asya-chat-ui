@@ -120,6 +120,7 @@ def upsert_project_chat_source(session: Session, chat: Chat) -> AgentSource | No
         "chat_id": str(chat.id),
         "user_id": str(chat.user_id),
         "origin": "chat",
+        "is_hidden_from_others": bool(chat.is_hidden_from_others),
     }
     source = find_chat_source(session, agent_id=chat.agent_id, chat_id=chat.id)
     if source is None:
@@ -223,4 +224,26 @@ def chat_source_visible_to_user(source: AgentSource, viewer_user_id: UUID | None
     if viewer_user_id is None:
         return False
     meta = source.metadata_json if isinstance(source.metadata_json, dict) else {}
-    return str(meta.get("user_id") or "") == str(viewer_user_id)
+    owner_id = str(meta.get("user_id") or "")
+    if owner_id == str(viewer_user_id):
+        return True
+    if bool(meta.get("is_hidden_from_others")):
+        return False
+    return True
+
+
+def sync_chat_source_hidden_flag(session: Session, chat: Chat) -> None:
+    """Keep indexed chat-source metadata in sync with hide toggle."""
+    if not chat.agent_id:
+        return
+    source = find_chat_source(session, agent_id=chat.agent_id, chat_id=chat.id)
+    if source is None:
+        return
+    meta = dict(source.metadata_json) if isinstance(source.metadata_json, dict) else {}
+    meta["chat_id"] = str(chat.id)
+    meta["user_id"] = str(chat.user_id)
+    meta["origin"] = meta.get("origin") or "chat"
+    meta["is_hidden_from_others"] = bool(chat.is_hidden_from_others)
+    source.metadata_json = meta
+    source.updated_at = datetime.utcnow()
+    session.add(source)

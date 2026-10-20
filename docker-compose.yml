@@ -62,6 +62,7 @@ services:
       - SCRAPER_URL=http://scraper:3001
       - CHATUI_BUILD_ID=${CHATUI_BUILD_ID:-}
       - GRAPH_MCP_EMBED_URL=http://backend:8000/internal/graph-mcp/mcp
+      - GOOGLE_MCP_EMBED_URL=http://backend:8000/internal/google-mcp/mcp
     volumes:
       - ./data/files:/data/files
     # Boot deps only. scraper / dind / executor-bootstrap are runtime; they
@@ -134,6 +135,7 @@ services:
       - AGENT_EMBEDDING_MODEL=${AGENT_EMBEDDING_MODEL:-BAAI/bge-m3}
       - SCRAPER_URL=http://scraper:3001
       - GRAPH_MCP_EMBED_URL=http://backend:8000/internal/graph-mcp/mcp
+      - GOOGLE_MCP_EMBED_URL=http://backend:8000/internal/google-mcp/mcp
     volumes:
       - ./data/files:/data/files
     depends_on:

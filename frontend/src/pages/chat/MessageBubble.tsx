@@ -23,6 +23,7 @@ import {
   Check,
   Download,
   Bookmark,
+  GitFork,
   Pencil,
   RotateCcw,
   Share,
@@ -42,6 +43,7 @@ import { collectChatImageUrlMap } from "@/pages/chat/resolveCoworkPresentationIm
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import { ThinkingFruitRive } from "@/components/ThinkingFruitRive"
+import { useMe } from "@/hooks/use-chat-query"
 import { useBranding } from "@/lib/branding"
 import { normalizeMathContent } from "@/lib/normalizeMathContent"
 import {
@@ -116,6 +118,7 @@ type MessageBubbleProps = {
   onDeleteFromMessage: (msg: ChatMessage) => void
   onRetryMessage: (msg: ChatMessage) => void
   onShareMessage?: (msg: ChatMessage) => void
+  onForkChat?: (msg: ChatMessage) => void
   onSaveAsPrompt?: (msg: ChatMessage) => void
   onSaveEditedMessage: (msg: ChatMessage, content: string) => void
   onCancelEdit: () => void
@@ -1171,6 +1174,7 @@ const MessageBubbleComponent = ({
   onDeleteFromMessage,
   onRetryMessage,
   onShareMessage,
+  onForkChat,
   onSaveAsPrompt,
   onSaveEditedMessage,
   onCancelEdit,
@@ -1191,6 +1195,8 @@ const MessageBubbleComponent = ({
   const [thinkingElapsedMs, setThinkingElapsedMs] = useState(0)
   const [thoughtDurationMs, setThoughtDurationMs] = useState<number | null>(null)
   const { appTitle: brandingTitle, logoUrl } = useBranding()
+  const { data: currentUser } = useMe()
+  const currentUserId = currentUser?.id
 
   useEffect(() => {
     if (!isEditing) return
@@ -1574,7 +1580,16 @@ const MessageBubbleComponent = ({
       (actionInfoLevel === "detailed" &&
         ((msg.usage?.total_tokens ?? 0) > 0 ||
           resolveTotalTimeMs(msg.usage) != null)) ||
+      (actionsEnabled && Boolean(onForkChat)) ||
       (actionsEnabled && msg.generation_status === "failed"))
+
+  const authorLabel =
+    isUser && msg.user_display_name && msg.user_id && msg.user_id !== currentUserId
+      ? msg.user_display_name
+      : null
+  const canManageMessage =
+    actionsEnabled &&
+    (!msg.user_id || !currentUserId || msg.user_id === currentUserId)
 
   return (
     <div
@@ -1583,6 +1598,9 @@ const MessageBubbleComponent = ({
       }`}
     >
       <div className={`group relative min-w-0 ${isEditing || !isUser ? "w-full" : "max-w-[85%]"}`}>
+        {authorLabel ? (
+          <p className="mb-1 text-right text-xs text-muted-foreground">{authorLabel}</p>
+        ) : null}
         <div
           className={`min-w-0 rounded-lg wrap-break-word whitespace-normal ${
             isUser
@@ -2082,7 +2100,7 @@ const MessageBubbleComponent = ({
         {showUserSideActions ? (
           <div className="flex justify-end mt-1 md:mt-0 md:right-full md:absolute md:inset-y-0 md:flex-col md:justify-end md:mr-0.5 pointer-events-none">
             <div className="bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 md:flex md:items-center md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto">
-              {actionsEnabled ? (
+              {canManageMessage ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -2103,7 +2121,7 @@ const MessageBubbleComponent = ({
                   className="opacity-70 hover:opacity-100 size-7"
                 />
               ) : null}
-              {actionsEnabled && onSaveAsPrompt && canCopyMessage ? (
+              {canManageMessage && onSaveAsPrompt && canCopyMessage ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -2115,7 +2133,7 @@ const MessageBubbleComponent = ({
                   <Bookmark aria-hidden="true" className="size-4" />
                 </Button>
               ) : null}
-              {actionsEnabled ? (
+              {canManageMessage ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -2209,6 +2227,23 @@ const MessageBubbleComponent = ({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>{t("chat_share_answer")}</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  {actionsEnabled && onForkChat ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="opacity-70 hover:opacity-100 size-7"
+                          onClick={() => onForkChat(msg)}
+                          aria-label={t("chat_fork")}
+                        >
+                          <GitFork aria-hidden="true" className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("chat_fork")}</TooltipContent>
                     </Tooltip>
                   ) : null}
                   {actionsEnabled ? (

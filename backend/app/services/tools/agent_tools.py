@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -10,6 +11,7 @@ from app.models.entities import AgentSource, AgentSourceKind, AgentSourceStatus
 from app.services.agents.chat_index import chat_source_visible_to_user
 from app.services.agents.runtime import search_agent_chunks
 from app.services.agents.source_media import is_archive_file, is_image_file
+from app.services.file_storage import maybe_read_file_bytes
 from app.services.tools.code_execution import project_source_exec_path
 from app.services.tools.registry import ToolResult
 
@@ -258,27 +260,59 @@ async def read_project_source(
                 )
             },
         )
+
+    meta = source.metadata_json if isinstance(source.metadata_json, dict) else {}
+    is_image = bool(meta.get("is_image")) or is_image_file(
+        file_name=source.file_name, content_type=source.content_type
+    )
     text = source.content_text or ""
     start = max(0, int(offset or 0))
     cap = max(1, min(int(max_chars or READ_MAX_CHARS), READ_MAX_CHARS))
     slice_ = text[start : start + cap]
     next_offset = start + len(slice_)
+    output: dict = {
+        "id": context.number_for(source.id),
+        "title": source.title,
+        "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
+        "file_name": source.file_name,
+        "is_image": is_image,
+        "chat_id": (
+            meta.get("chat_id") if source.kind == AgentSourceKind.chat else None
+        ),
+        "offset": start,
+        "next_offset": next_offset if next_offset < len(text) else None,
+        "has_more": next_offset < len(text),
+        "total_length_chars": len(text),
+        "content": slice_,
+    }
+
+    attachments: list[dict] | None = None
+    if is_image and start == 0:
+        data = maybe_read_file_bytes(source.file_path)
+        if data:
+            content_type = (
+                (source.content_type or "image/png").split(";")[0].strip() or "image/png"
+            )
+            attachments = [
+                {
+                    "file_name": source.file_name or source.title or "image",
+                    "content_type": content_type,
+                    "data_base64": base64.b64encode(data).decode("ascii"),
+                }
+            ]
+            output["vision_attached"] = True
+            output["message"] = (
+                "Indexed description is in content. The original image is attached for "
+                "vision on the next turn when the chat model supports image input."
+            )
+        else:
+            output["vision_attached"] = False
+            output["message"] = (
+                "Image file bytes are missing; only the indexed description is available."
+            )
+
     return ToolResult(
         name="read_project_source",
-        output={
-            "id": context.number_for(source.id),
-            "title": source.title,
-            "kind": source.kind.value if hasattr(source.kind, "value") else str(source.kind),
-            "chat_id": (
-                (source.metadata_json or {}).get("chat_id")
-                if source.kind == AgentSourceKind.chat
-                and isinstance(source.metadata_json, dict)
-                else None
-            ),
-            "offset": start,
-            "next_offset": next_offset if next_offset < len(text) else None,
-            "has_more": next_offset < len(text),
-            "total_length_chars": len(text),
-            "content": slice_,
-        },
+        output=output,
+        attachments=attachments,
     )

@@ -401,6 +401,28 @@ export const usePinChat = (orgId: string | null) => {
   })
 }
 
+export const useHideChatFromOthers = (orgId: string | null) => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      chatId,
+      is_hidden_from_others,
+    }: {
+      chatId: string
+      is_hidden_from_others: boolean
+    }) => chatApi.update(chatId, { is_hidden_from_others }),
+    onSuccess: (updated) => {
+      if (!orgId) return
+      queryClient.setQueryData<Chat[]>(chatKeys.list(orgId), (prev) =>
+        prev
+          ? prev.map((chat) => (chat.id === updated.id ? { ...chat, ...updated } : chat))
+          : prev
+      )
+      queryClient.invalidateQueries({ queryKey: [...chatKeys.list(orgId), "search"] })
+    },
+  })
+}
+
 export const useUpdateChatMessages = (chatId: string | null) => {
   const queryClient = useQueryClient()
   return (updater: (prev: ChatMessage[]) => ChatMessage[]) => {

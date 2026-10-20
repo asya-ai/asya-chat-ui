@@ -39,7 +39,16 @@ def test_chat_source_visibility():
         url=chat_source_url(uuid4()),
         content_text="user: hi",
         status=AgentSourceStatus.ready,
-        metadata_json={"user_id": str(owner)},
+        metadata_json={"user_id": str(owner), "is_hidden_from_others": False},
+    )
+    hidden = AgentSource(
+        agent_id=uuid4(),
+        kind=AgentSourceKind.chat,
+        title="Hidden",
+        url=chat_source_url(uuid4()),
+        content_text="user: secret",
+        status=AgentSourceStatus.ready,
+        metadata_json={"user_id": str(owner), "is_hidden_from_others": True},
     )
     file_source = AgentSource(
         agent_id=uuid4(),
@@ -49,7 +58,9 @@ def test_chat_source_visibility():
         status=AgentSourceStatus.ready,
     )
     assert chat_source_visible_to_user(source, owner) is True
-    assert chat_source_visible_to_user(source, other) is False
+    assert chat_source_visible_to_user(source, other) is True
+    assert chat_source_visible_to_user(hidden, owner) is True
+    assert chat_source_visible_to_user(hidden, other) is False
     assert chat_source_visible_to_user(source, None) is False
     assert chat_source_visible_to_user(file_source, other) is True
 
@@ -111,6 +122,7 @@ def test_upsert_project_chat_source_creates_queued_chat_source(monkeypatch):
     assert source.status == AgentSourceStatus.queued
     assert source.url == chat_source_url(chat.id)
     assert source.metadata_json["user_id"] == str(chat.user_id)
+    assert source.metadata_json["is_hidden_from_others"] is False
     assert "budget" in source.content_text.lower()
 
 

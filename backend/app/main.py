@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
+from app.services.integrations.google_mcp_embed import google_mcp_embed
 from app.services.integrations.graph_mcp_embed import graph_mcp_embed
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -60,24 +61,30 @@ async def lifespan(_app: FastAPI):
 
     try:
         from app.db.session import SessionLocal
+        from app.services.integrations.google_mcp_embed import (
+            sync_google_catalog_servers,
+        )
         from app.services.integrations.graph_mcp_embed import (
             sync_microsoft_catalog_servers,
         )
 
         with SessionLocal() as session:
             sync_microsoft_catalog_servers(session)
+            sync_google_catalog_servers(session)
     except Exception:
         logging.getLogger(__name__).exception(
-            "Failed to sync Microsoft catalog MCP URLs"
+            "Failed to sync Microsoft/Google catalog MCP URLs"
         )
 
     async with graph_mcp_embed.lifespan():
-        yield
+        async with google_mcp_embed.lifespan():
+            yield
 
 
 app = FastAPI(title="ChatUI API", lifespan=lifespan)
 app.include_router(api_router)
 app.mount("/internal/graph-mcp", graph_mcp_embed)
+app.mount("/internal/google-mcp", google_mcp_embed)
 
 
 @app.middleware("http")
