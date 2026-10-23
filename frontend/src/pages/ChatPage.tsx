@@ -42,7 +42,6 @@ import { EldigenTreeRive } from "@/components/EldigenTreeRive"
 import { UsageLimitBanners } from "@/components/UsageLimitBanners"
 import { ChatModelSelect } from "@/pages/chat/ChatModelSelect"
 import { Button } from "@/components/ui/button"
-import { PromptFormDialog } from "@/components/PromptFormDialog"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
@@ -619,8 +618,6 @@ export const ChatPage = () => {
   const justCreatedChatIdRef = useRef<string | null>(null)
   const skipDraftPersistRef = useRef(false)
   const [insertPromptOpen, setInsertPromptOpen] = useState(false)
-  const [savePromptOpen, setSavePromptOpen] = useState(false)
-  const [savePromptBody, setSavePromptBody] = useState("")
   const [mcpArgsPrompt, setMcpArgsPrompt] = useState<McpPrompt | null>(null)
   const [mcpArgsValues, setMcpArgsValues] = useState<Record<string, string>>({})
   const [mcpArgsError, setMcpArgsError] = useState<string | null>(null)
@@ -2666,10 +2663,11 @@ export const ChatPage = () => {
   )
 
   const forkChat = useCallback(
-    async (_msg: ChatMessage) => {
+    async (msg: ChatMessage) => {
       if (!chatId) return
+      if (msg.id.startsWith("temp-")) return
       try {
-        const forked = await chatApi.fork(chatId)
+        const forked = await chatApi.fork(chatId, msg.id)
         queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
           prev ? [forked, ...prev.filter((item) => item.id !== forked.id)] : [forked]
         )
@@ -3059,14 +3057,6 @@ export const ChatPage = () => {
 
   const openInsertPromptPicker = useCallback(() => {
     setInsertPromptOpen(true)
-  }, [])
-
-  const saveMessageAsPrompt = useCallback((msg: ChatMessage) => {
-    if (msg.role !== "user") return
-    const body = msg.content.trim()
-    if (!body) return
-    setSavePromptBody(body)
-    setSavePromptOpen(true)
   }, [])
 
   const handlePasteAttachments = async (
@@ -3723,7 +3713,6 @@ export const ChatPage = () => {
           onRetryMessage={retryFailedMessage}
           onShareMessage={shareMessage}
           onForkChat={isSharedView ? undefined : forkChat}
-          onSaveAsPrompt={saveMessageAsPrompt}
           onSaveEditedMessage={saveEditedMessage}
           onCancelEdit={cancelEditMessage}
           onEditPasteAttachments={handleEditPasteAttachments}
@@ -3750,7 +3739,6 @@ export const ChatPage = () => {
       retryFailedMessage,
       shareMessage,
       forkChat,
-      saveMessageAsPrompt,
       saveEditedMessage,
       cancelEditMessage,
       handleEditPasteAttachments,
@@ -4515,30 +4503,6 @@ export const ChatPage = () => {
           onSubmit={() => {
             if (!mcpArgsPrompt) return
             void resolveMcpPrompt(mcpArgsPrompt, mcpArgsValues)
-          }}
-        />
-        <PromptFormDialog
-          open={savePromptOpen}
-          onOpenChange={setSavePromptOpen}
-          orgId={orgId}
-          projects={agents}
-          initial={{
-            body: savePromptBody,
-            agent_id:
-              activeAgentId &&
-              agents.some(
-                (agent) =>
-                  agent.id === activeAgentId &&
-                  (agent.role === "owner" || agent.role === "editor")
-              )
-                ? activeAgentId
-                : null,
-          }}
-          title={t("prompt_save_message")}
-          description={t("prompt_form_description")}
-          contextAgentId={activeAgentId}
-          onSaved={() => {
-            toast.success(t("prompt_saved"))
           }}
         />
       </main>

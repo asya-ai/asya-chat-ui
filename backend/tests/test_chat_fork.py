@@ -114,6 +114,7 @@ def test_fork_chat_copies_messages_without_usage(monkeypatch):
 
     result = chats_api.fork_chat(
         chat_id=str(source.id),
+        payload=chats_api.ChatForkRequest(),
         session=session,  # type: ignore[arg-type]
         current_user=current_user,  # type: ignore[arg-type]
     )
@@ -128,6 +129,83 @@ def test_fork_chat_copies_messages_without_usage(monkeypatch):
     assert {m.role for m in forked_messages} == {"user", "assistant"}
     assert all(m.parent_id is None for m in forked_messages)
     assert not any(type(obj).__name__ == "UsageEvent" for obj in session.added)
+
+
+def test_fork_chat_cuts_off_at_message(monkeypatch):
+    owner_id = uuid4()
+    source = Chat(
+        id=uuid4(),
+        org_id=uuid4(),
+        user_id=owner_id,
+        agent_id=None,
+        title="Thread",
+        is_deleted=False,
+        is_incognito=False,
+        is_subagent=False,
+        created_at=datetime.utcnow(),
+        last_activity_at=datetime.utcnow(),
+    )
+    first_assistant = uuid4()
+    messages = [
+        ChatMessage(
+            id=uuid4(),
+            chat_id=source.id,
+            user_id=owner_id,
+            role="user",
+            content="Q1",
+            is_current=True,
+            status="done",
+            created_at=datetime(2026, 1, 1, 12, 0, 0),
+        ),
+        ChatMessage(
+            id=first_assistant,
+            chat_id=source.id,
+            role="assistant",
+            content="A1",
+            is_current=True,
+            status="done",
+            created_at=datetime(2026, 1, 1, 12, 0, 1),
+        ),
+        ChatMessage(
+            id=uuid4(),
+            chat_id=source.id,
+            user_id=owner_id,
+            role="user",
+            content="Q2",
+            is_current=True,
+            status="done",
+            created_at=datetime(2026, 1, 1, 12, 0, 2),
+        ),
+        ChatMessage(
+            id=uuid4(),
+            chat_id=source.id,
+            role="assistant",
+            content="A2",
+            is_current=True,
+            status="done",
+            created_at=datetime(2026, 1, 1, 12, 0, 3),
+        ),
+    ]
+    session = _ForkSession(source, messages)
+    current_user = SimpleNamespace(
+        id=owner_id,
+        is_super_admin=False,
+        display_name="Owner",
+        username="owner",
+        email="owner@example.com",
+    )
+    monkeypatch.setattr(chats_api, "require_org_member", lambda *a, **k: None)
+    monkeypatch.setattr(chats_api, "can_access_chat", lambda *a, **k: True)
+    monkeypatch.setattr(chats_api, "copy_message_attachments", lambda *a, **k: [])
+
+    chats_api.fork_chat(
+        chat_id=str(source.id),
+        payload=chats_api.ChatForkRequest(message_id=str(first_assistant)),
+        session=session,  # type: ignore[arg-type]
+        current_user=current_user,  # type: ignore[arg-type]
+    )
+    forked_messages = [obj for obj in session.added if isinstance(obj, ChatMessage)]
+    assert [m.content for m in forked_messages] == ["Q1", "A1"]
 
 
 def test_fork_rejects_inaccessible(monkeypatch):
@@ -146,6 +224,7 @@ def test_fork_rejects_inaccessible(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         chats_api.fork_chat(
             chat_id=str(source.id),
+            payload=chats_api.ChatForkRequest(),
             session=session,  # type: ignore[arg-type]
             current_user=current_user,  # type: ignore[arg-type]
         )

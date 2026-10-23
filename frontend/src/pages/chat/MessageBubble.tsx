@@ -22,7 +22,6 @@ import {
   Copy,
   Check,
   Download,
-  Bookmark,
   GitFork,
   Pencil,
   RotateCcw,
@@ -119,7 +118,6 @@ type MessageBubbleProps = {
   onRetryMessage: (msg: ChatMessage) => void
   onShareMessage?: (msg: ChatMessage) => void
   onForkChat?: (msg: ChatMessage) => void
-  onSaveAsPrompt?: (msg: ChatMessage) => void
   onSaveEditedMessage: (msg: ChatMessage, content: string) => void
   onCancelEdit: () => void
   onEditPasteAttachments: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void
@@ -1175,7 +1173,6 @@ const MessageBubbleComponent = ({
   onRetryMessage,
   onShareMessage,
   onForkChat,
-  onSaveAsPrompt,
   onSaveEditedMessage,
   onCancelEdit,
   onEditPasteAttachments,
@@ -2120,18 +2117,6 @@ const MessageBubbleComponent = ({
                   iconOnly
                   className="opacity-70 hover:opacity-100 size-7"
                 />
-              ) : null}
-              {canManageMessage && onSaveAsPrompt && canCopyMessage ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-70 hover:opacity-100 size-7"
-                  onClick={() => onSaveAsPrompt(msg)}
-                  aria-label={t("prompt_save_message")}
-                >
-                  <Bookmark aria-hidden="true" className="size-4" />
-                </Button>
               ) : null}
               {canManageMessage ? (
                 <Button

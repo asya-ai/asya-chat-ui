@@ -3901,13 +3901,18 @@ def create_chat(
     return _chat_read(chat, owner=current_user)
 
 
+class ChatForkRequest(BaseModel):
+    message_id: str | None = None
+
+
 @router.post("/{chat_id}/fork", response_model=ChatRead)
 def fork_chat(
     chat_id: str,
+    payload: ChatForkRequest = ChatForkRequest(),
     session: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatRead:
-    """Copy a chat (current messages only) for the caller. Usage is not copied."""
+    """Copy current messages up to message_id (inclusive). Usage is not copied."""
     try:
         chat_uuid = UUID(chat_id)
     except ValueError as exc:
@@ -3934,6 +3939,16 @@ def fork_chat(
             detail="Subagent chats cannot be forked",
         )
 
+    cutoff_id: UUID | None = None
+    raw_message_id = payload.message_id
+    if raw_message_id:
+        try:
+            cutoff_id = UUID(raw_message_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message id"
+            ) from exc
+
     agent_id = source.agent_id
     if agent_id is not None:
         agent = session.exec(
@@ -3942,7 +3957,31 @@ def fork_chat(
         if agent is None or get_agent_role(session, agent, current_user.id) is None:
             agent_id = None
 
+    all_messages = session.exec(
+        select(ChatMessage)
+        .where(
+            ChatMessage.chat_id == source.id,
+            ChatMessage.is_current.is_(True),
+            ChatMessage.role.in_(("user", "assistant")),
+        )
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+    ).all()
+
+    if cutoff_id is not None:
+        cutoff_index = next(
+            (idx for idx, message in enumerate(all_messages) if message.id == cutoff_id),
+            None,
+        )
+        if cutoff_index is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
+            )
+        messages = all_messages[: cutoff_index + 1]
+    else:
+        messages = all_messages
+
     now = datetime.utcnow()
+    last_activity = messages[-1].created_at if messages else (source.last_activity_at or now)
     forked = Chat(
         org_id=source.org_id,
         user_id=current_user.id,
@@ -3954,20 +3993,10 @@ def fork_chat(
         is_pinned=False,
         is_hidden_from_others=False,
         created_at=now,
-        last_activity_at=source.last_activity_at or now,
+        last_activity_at=last_activity,
     )
     session.add(forked)
     session.flush()
-
-    messages = session.exec(
-        select(ChatMessage)
-        .where(
-            ChatMessage.chat_id == source.id,
-            ChatMessage.is_current.is_(True),
-            ChatMessage.role.in_(("user", "assistant")),
-        )
-        .order_by(ChatMessage.created_at.asc())
-    ).all()
 
     id_map: dict[UUID, UUID] = {}
     for message in messages:

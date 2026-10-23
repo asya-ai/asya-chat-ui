@@ -930,8 +930,11 @@ export const chatApi = {
     is_incognito?: boolean
   }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
-  fork: (chatId: string) =>
-    apiFetch<Chat>(`/chats/${chatId}/fork`, { method: "POST" }),
+  fork: (chatId: string, messageId?: string) =>
+    apiFetch<Chat>(`/chats/${chatId}/fork`, {
+      method: "POST",
+      body: JSON.stringify(messageId ? { message_id: messageId } : {}),
+    }),
   uploadAttachment: (
     chatId: string,
     file: File,
