@@ -513,7 +513,27 @@ def mcp_action_summary(name: str, arguments: dict[str, Any] | None = None) -> st
     if remote == META_GET_PROMPT:
         prompt_name = str(args.get("name") or "").strip()
         return f"Loading {server_id} prompt" + (f": {prompt_name}" if prompt_name else "")
-    return f"Querying {server_id}: {remote}"
+    # Prefer a short verb-ish line for write tools (approval cards).
+    label = remote.replace("_", " ")
+    hint_parts: list[str] = []
+    for key in (
+        "to",
+        "subject",
+        "title",
+        "summary",
+        "name",
+        "sheet_title",
+        "a1_range",
+        "display_name",
+        "query",
+    ):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            hint_parts.append(value.strip()[:60])
+            break
+    if hint_parts:
+        return f"{label}: {hint_parts[0]}"
+    return label
 
 
 _URL_KEYS = frozenset(

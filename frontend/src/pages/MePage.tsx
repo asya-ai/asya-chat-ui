@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 
-import { apiKeyApi, authApi, memoryApi } from "@/lib/api"
+import { apiKeyApi, authApi, integrationsApi, memoryApi, type WritePreferencesStatus } from "@/lib/api"
 import { useUsageLimits } from "@/hooks/use-chat-query"
 import { useAuth } from "@/lib/auth-context"
 import { useI18n, type TranslationKey } from "@/lib/i18n-context"
@@ -84,6 +84,7 @@ export const MePage = () => {
   const [memories, setMemories] = useState<UserMemory[]>([])
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState("")
+  const [writePrefs, setWritePrefs] = useState<WritePreferencesStatus | null>(null)
   const hasError = Boolean(error)
 
   useEffect(() => {
@@ -94,6 +95,17 @@ export const MePage = () => {
       })
       .catch(() => null)
   }, [])
+
+  useEffect(() => {
+    if (!orgId) {
+      setWritePrefs(null)
+      return
+    }
+    integrationsApi
+      .getWritePreferences(orgId)
+      .then(setWritePrefs)
+      .catch(() => setWritePrefs(null))
+  }, [orgId])
 
   useEffect(() => {
     if (!memoriesOpen || !memoryEnabled) return
@@ -341,6 +353,99 @@ export const MePage = () => {
             />
           ) : null}
         </SettingsSection>
+
+        {orgId ? (
+          <SettingsSection title={t("me_write_access")}>
+            {(["google", "microsoft"] as const).map((providerId) => {
+              const allowed = writePrefs?.always_allow.some(
+                (row) => row.provider_id === providerId && row.always_allow
+              )
+              if (!allowed) return null
+              return (
+                <SettingsRow
+                  key={providerId}
+                  label={
+                    providerId === "google"
+                      ? t("me_write_access_google")
+                      : t("me_write_access_microsoft")
+                  }
+                >
+                  <SettingsControl>
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground text-sm">
+                        {t("me_write_access_always")}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          void integrationsApi
+                            .revokeWritePreference(orgId, providerId)
+                            .then(() =>
+                              setWritePrefs((prev) =>
+                                prev
+                                  ? {
+                                      ...prev,
+                                      always_allow: prev.always_allow.filter(
+                                        (row) => row.provider_id !== providerId
+                                      ),
+                                    }
+                                  : prev
+                              )
+                            )
+                            .catch(() => null)
+                        }}
+                      >
+                        {t("me_write_access_revoke")}
+                      </Button>
+                    </div>
+                  </SettingsControl>
+                </SettingsRow>
+              )
+            })}
+            {(writePrefs?.session_chat_ids ?? []).map((sessionChatId) => (
+              <SettingsRow
+                key={sessionChatId}
+                label={t("me_write_access_session")}
+              >
+                <SettingsControl>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground text-xs truncate max-w-40">
+                      {sessionChatId}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void integrationsApi
+                          .clearWriteSession(orgId, sessionChatId)
+                          .then(() =>
+                            setWritePrefs((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    session_chat_ids: prev.session_chat_ids.filter(
+                                      (id) => id !== sessionChatId
+                                    ),
+                                  }
+                                : prev
+                            )
+                          )
+                          .catch(() => null)
+                      }}
+                    >
+                      {t("me_write_access_clear_session")}
+                    </Button>
+                  </div>
+                </SettingsControl>
+              </SettingsRow>
+            ))}
+            {!writePrefs?.always_allow.some((row) => row.always_allow) &&
+            !(writePrefs?.session_chat_ids.length) ? (
+              <p className="text-muted-foreground text-sm">{t("me_write_access_empty")}</p>
+            ) : null}
+          </SettingsSection>
+        ) : null}
 
         {showUsageLimit && userUsageLimit ? (
           <SettingsSection title={t("me_usage_limit")} description={t("me_usage_limit_desc")}>

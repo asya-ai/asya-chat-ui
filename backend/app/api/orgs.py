@@ -379,7 +379,7 @@ def update_web_settings(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
     updates = payload.model_dump(exclude_unset=True)
     exec_policy = updates.get("exec_policy")
-    if exec_policy is not None and exec_policy not in {"off", "prompt", "always"}:
+    if exec_policy is not None and exec_policy not in {"off", "always"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid exec policy",

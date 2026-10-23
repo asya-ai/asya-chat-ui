@@ -323,7 +323,10 @@ def _resolve_exec_policy(org_exec_policy: str, code_execution_enabled: object) -
     enabled = _coerce_optional_bool(code_execution_enabled)
     if enabled is False:
         return "off"
-    return org_exec_policy
+    # Legacy "prompt" (approval stub) collapsed to always allow sandbox runs.
+    if org_exec_policy == "prompt":
+        return "always"
+    return org_exec_policy if org_exec_policy in {"off", "always"} else "always"
 
 
 def _effective_web_tool_enabled(org_tool_enabled: bool, request_enabled: object) -> bool:
@@ -748,15 +751,6 @@ def _build_tool_registry(
 
         async def _exec_handler(args: dict) -> object:
             code = args.get("code", "")
-            if exec_policy == "prompt":
-                return ToolResult(
-                    name="code_execution",
-                    output={
-                        "error": "Execution requires approval",
-                        "code": code,
-                        "requires_approval": True,
-                    },
-                )
             return await run_code_execution(
                 CodeExecutionContext(
                     session=session,
@@ -2474,6 +2468,7 @@ async def _run_agentic_loop(
     activity_sender: anyio.abc.ObjectSendStream | None = None,
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
     delta_sender: anyio.abc.ObjectSendStream | None = None,
+    write_approval: Any | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     from app.services.langchain_runtime import run_agentic_loop_langchain
 
@@ -2488,6 +2483,7 @@ async def _run_agentic_loop(
         tool_event_sender=tool_event_sender,
         delta_sender=delta_sender,
         supports_image_input=supports_image_input(model),
+        write_approval=write_approval,
     )
 
     tool_specs = tool_registry.list_specs()
@@ -2822,8 +2818,6 @@ async def _run_agentic_loop(
                     error_text = result.output.get("error")
                     if isinstance(error_text, str) and error_text:
                         last_tool_error = error_text
-                if isinstance(result.output, dict) and result.output.get("requires_approval"):
-                    last_tool_error = "Execution requires approval."
                 await _emit_tool_event(
                     {
                         "type": "tool_call",
@@ -3903,6 +3897,7 @@ def create_chat(
 
 class ChatForkRequest(BaseModel):
     message_id: str | None = None
+    org_id: str | None = None
 
 
 @router.post("/{chat_id}/fork", response_model=ChatRead)
@@ -3923,21 +3918,39 @@ def fork_chat(
     source = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
     if not source or source.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-    require_org_member(
-        session,
-        source.org_id,
-        current_user.id,
-        is_super_admin=current_user.is_super_admin,
-    )
-    if not can_access_chat(session, source, current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
-        )
     if source.is_subagent:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Subagent chats cannot be forked",
         )
+
+    has_access = can_access_chat(session, source, current_user)
+    has_share = bool((source.share_token or "").strip()) and not source.is_incognito
+    if not has_access and not has_share:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access this chat"
+        )
+
+    target_org_id = source.org_id
+    if payload.org_id:
+        try:
+            target_org_id = UUID(payload.org_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org id"
+            ) from exc
+    elif not has_access:
+        # Shared link: require an explicit destination org from the client.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="org_id is required"
+        )
+
+    require_org_member(
+        session,
+        target_org_id,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
 
     cutoff_id: UUID | None = None
     raw_message_id = payload.message_id
@@ -3949,7 +3962,7 @@ def fork_chat(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message id"
             ) from exc
 
-    agent_id = source.agent_id
+    agent_id = source.agent_id if target_org_id == source.org_id else None
     if agent_id is not None:
         agent = session.exec(
             select(Agent).where(Agent.id == agent_id, Agent.org_id == source.org_id)
@@ -3983,9 +3996,9 @@ def fork_chat(
     now = datetime.utcnow()
     last_activity = messages[-1].created_at if messages else (source.last_activity_at or now)
     forked = Chat(
-        org_id=source.org_id,
+        org_id=target_org_id,
         user_id=current_user.id,
-        model_id=source.model_id,
+        model_id=source.model_id if target_org_id == source.org_id else None,
         agent_id=agent_id,
         title=source.title,
         is_incognito=False,
@@ -4043,6 +4056,15 @@ def fork_chat(
                 source_attachments=source_attachments,
                 new_message_id=new_id,
             )
+
+    if has_share and not has_access:
+        session.add(
+            ChatViewEvent(
+                chat_id=source.id,
+                viewer_user_id=current_user.id,
+                viewer_label=_viewer_label(current_user),
+            )
+        )
 
     session.commit()
     session.refresh(forked)
@@ -4920,6 +4942,61 @@ def get_generation_task(
         model_id=(task.metadata_json or {}).get("model_id"),
         model_name=(task.metadata_json or {}).get("model_name"),
     )
+
+
+class WriteApprovalDecisionBody(BaseModel):
+    decision: Literal["once", "session", "always", "deny"]
+
+
+@router.post(
+    "/{chat_id}/generation/{task_id}/write-approval",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def submit_write_approval(
+    chat_id: str,
+    task_id: str,
+    payload: WriteApprovalDecisionBody,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    from app.services.integrations.write_approval import publish_write_decision
+
+    try:
+        chat_uuid = UUID(chat_id)
+        task_uuid = UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid id"
+        ) from exc
+    task = session.exec(
+        select(ChatGenerationTask).where(ChatGenerationTask.id == task_uuid)
+    ).first()
+    if not task or task.chat_id != chat_uuid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    chat = session.exec(select(Chat).where(Chat.id == chat_uuid)).first()
+    if not chat or chat.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    require_org_member(
+        session, chat.org_id, current_user.id, is_super_admin=current_user.is_super_admin
+    )
+    if chat.user_id != current_user.id and not current_user.is_super_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if task.status not in {
+        GenerationStatus.awaiting_approval,
+        GenerationStatus.streaming,
+        GenerationStatus.running,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Task is not awaiting approval"
+        )
+    meta = task.metadata_json if isinstance(task.metadata_json, dict) else {}
+    pending = meta.get("write_approval") if isinstance(meta.get("write_approval"), dict) else {}
+    request_id = str(pending.get("request_id") or "").strip()
+    if not request_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="No pending write approval"
+        )
+    publish_write_decision(task_uuid, request_id, payload.decision)
 
 
 @router.post("/{chat_id}/generation/{task_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)

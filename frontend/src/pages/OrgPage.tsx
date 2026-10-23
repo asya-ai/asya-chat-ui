@@ -1298,9 +1298,6 @@ export const OrgPage = () => {
                                           <SelectItem value="off">
                                             {t("org_code_execution_off")}
                                           </SelectItem>
-                                          <SelectItem value="prompt">
-                                            {t("org_code_execution_prompt")}
-                                          </SelectItem>
                                           <SelectItem value="always">
                                             {t("org_code_execution_always")}
                                           </SelectItem>
@@ -1437,9 +1434,6 @@ export const OrgPage = () => {
                             <SelectContent>
                               <SelectItem value="off">
                                 {t("org_code_execution_off")}
-                              </SelectItem>
-                              <SelectItem value="prompt">
-                                {t("org_code_execution_prompt")}
                               </SelectItem>
                               <SelectItem value="always">
                                 {t("org_code_execution_always")}

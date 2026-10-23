@@ -36,31 +36,103 @@ async def test_list_tools_respects_toolsets() -> None:
     try:
         tools = await server.list_tools()
         names = {t.name for t in tools}
-        assert names == {"gmail_list_messages", "gmail_get_message"}
+        assert "gmail_list_messages" in names
+        assert "gmail_send_message" in names
+        assert "gmail_reply_message" in names
         assert "drive_list_files" not in names
     finally:
         _toolsets.reset(token)
 
 
 @pytest.mark.asyncio
-async def test_list_tools_docs_sheets_slides_chat() -> None:
+async def test_write_tools_present_per_toolset() -> None:
     server = _build_server()
-    token = _toolsets.set(frozenset({"docs", "sheets", "slides", "chat"}))
-    try:
-        tools = await server.list_tools()
-        names = {t.name for t in tools}
-        assert names == {
-            "docs_list_documents",
-            "docs_get_document",
-            "sheets_list_spreadsheets",
-            "sheets_get_values",
-            "slides_list_presentations",
-            "slides_get_presentation",
-            "chat_list_spaces",
-            "chat_list_messages",
-        }
-    finally:
-        _toolsets.reset(token)
+    expected = {
+        "gmail": {
+            "gmail_send_message",
+            "gmail_create_draft",
+            "gmail_reply_message",
+            "gmail_trash_message",
+            "gmail_modify_labels",
+        },
+        "drive": {
+            "drive_create_folder",
+            "drive_move_file",
+            "drive_trash_file",
+            "drive_copy_file",
+            "drive_export_file",
+        },
+        "calendar": {
+            "calendar_create_event",
+            "calendar_update_event",
+            "calendar_delete_event",
+        },
+        "meet": {"meet_create_event"},
+        "tasks": {
+            "tasks_create_task",
+            "tasks_complete_task",
+            "tasks_delete_task",
+        },
+        "docs": {
+            "docs_replace_text",
+            "docs_insert_text",
+            "docs_append_text",
+            "docs_create_document",
+        },
+        "sheets": {
+            "sheets_update_values",
+            "sheets_append_values",
+            "sheets_clear_values",
+            "sheets_add_sheet",
+            "sheets_delete_sheet",
+            "sheets_rename_sheet",
+            "sheets_delete_dimension",
+            "sheets_copy_sheet",
+            "sheets_create_spreadsheet",
+        },
+        "slides": {
+            "slides_create_presentation",
+            "slides_add_slide",
+            "slides_delete_slide",
+            "slides_replace_all_text",
+            "slides_insert_text",
+        },
+        "chat": {
+            "chat_send_message",
+            "chat_create_space",
+            "chat_delete_message",
+        },
+    }
+    for toolset, must_have in expected.items():
+        token = _toolsets.set(frozenset({toolset}))
+        try:
+            tools = await server.list_tools()
+            names = {t.name for t in tools}
+            missing = must_have - names
+            assert not missing, f"{toolset} missing {missing}"
+            for name in names:
+                assert name.startswith(f"{toolset}_"), name
+        finally:
+            _toolsets.reset(token)
+
+
+def test_google_sheets_scopes_include_write() -> None:
+    from app.services.integrations.catalog import get_catalog
+
+    sheets = get_catalog("google_sheets")
+    assert sheets is not None
+    assert any(s.endswith("/spreadsheets") for s in sheets.oauth_scopes)
+    assert not any(s.endswith("/spreadsheets.readonly") for s in sheets.oauth_scopes)
+
+    meet = get_catalog("google_meet")
+    assert meet is not None
+    assert any(s.endswith("/calendar") for s in meet.oauth_scopes)
+    assert not any(s.endswith("/calendar.readonly") for s in meet.oauth_scopes)
+
+    chat = get_catalog("google_chat")
+    assert chat is not None
+    assert any(s.endswith("/chat.spaces") for s in chat.oauth_scopes)
+    assert not any(s.endswith("/chat.spaces.readonly") for s in chat.oauth_scopes)
 
 
 @pytest.mark.asyncio

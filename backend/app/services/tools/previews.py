@@ -236,8 +236,6 @@ def tool_call_output_preview(name: str, output: dict[str, Any] | None = None) ->
             return f"page_count: {page_count}, extracted: {len(selected)} page(s)"
         return f"page_count: {page_count}"
     if name == "code_execution":
-        if output.get("requires_approval"):
-            return "requires approval"
         if output.get("timed_out"):
             return "timed out"
         if output.get("error"):

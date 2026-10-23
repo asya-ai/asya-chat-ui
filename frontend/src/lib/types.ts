@@ -25,7 +25,7 @@ export type OrgWebSettings = {
   web_grounding_openai: boolean
   web_grounding_gemini: boolean
   exec_network_enabled?: boolean
-  exec_policy: "off" | "prompt" | "always"
+  exec_policy: "off" | "always"
 }
 
 export type OrgAuthSettings = {
@@ -277,7 +277,6 @@ export type CodeExecutionToolEvent = {
     exit_code?: number | null
     timed_out?: boolean | null
     error?: string | null
-    requires_approval?: boolean | null
     outputs?: string[] | null
     output_files?: {
       file_name: string
@@ -375,6 +374,24 @@ export type ReasoningToolEvent = {
   content: string
 }
 
+export type WriteApprovalAction = {
+  id: string
+  tool_name: string
+  provider: string
+  catalog_id?: string
+  summary: string
+}
+
+export type WriteApprovalToolEvent = {
+  type: "write_approval"
+  id?: string
+  task_id?: string
+  request_id?: string
+  actions?: WriteApprovalAction[]
+  status?: "pending" | "resolved" | string
+  decision?: "once" | "session" | "always" | "deny" | string
+}
+
 export type SubagentToolEvent = {
   type: "subagent"
   id?: string
@@ -404,14 +421,18 @@ export type ToolEvent =
   | CoworkingToolEvent
   | ReasoningToolEvent
   | SubagentToolEvent
+  | WriteApprovalToolEvent
 
 export type GenerationStatus =
   | "queued"
   | "running"
   | "streaming"
+  | "awaiting_approval"
   | "completed"
   | "failed"
   | "cancelled"
+
+export type WriteApprovalDecision = "once" | "session" | "always" | "deny"
 
 export type ChatGenerationTask = {
   id: string
@@ -738,7 +759,7 @@ export type UserMemory = {
 export type AgentRole = "owner" | "editor" | "viewer"
 export type AgentVisibility = "private" | "shared"
 export type AgentSourceStatus = "queued" | "indexing" | "ready" | "failed"
-export type AgentSourceKind = "text" | "file" | "url"
+export type AgentSourceKind = "text" | "file" | "url" | "cloud"
 
 export type Agent = {
   id: string
@@ -768,8 +789,40 @@ export type AgentSource = {
   is_archive?: boolean
   is_image?: boolean
   content_url?: string | null
+  cloud_provider?: string | null
+  cloud_remote_kind?: string | null
+  cloud_checked_at?: string | null
   created_at: string
   updated_at: string
+}
+
+/** Drive / OneDrive / Docs / SharePoint share links for live project sources. */
+export const isCloudSourceUrl = (url: string | null | undefined): boolean => {
+  const text = url?.trim()
+  if (!text) return false
+  let parsed: URL
+  try {
+    parsed = new URL(text)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
+  const host = parsed.hostname.replace(/\.$/, "").toLowerCase()
+  if (
+    host === "drive.google.com" ||
+    host === "docs.google.com" ||
+    host === "sheets.google.com" ||
+    host === "slides.google.com" ||
+    host.endsWith(".google.com")
+  ) {
+    return /\/(?:file\/d|folders|document\/d|spreadsheets\/d|presentation\/d|drawings\/d)\//.test(
+      parsed.pathname
+    ) || parsed.searchParams.has("id")
+  }
+  if (host === "1drv.ms") return true
+  if (host === "onedrive.live.com" || host.endsWith(".onedrive.live.com")) return true
+  if (host.endsWith(".sharepoint.com") || host.endsWith(".sharepointonline.com")) return true
+  return false
 }
 
 export type AgentShareKind = "user" | "team" | "org"

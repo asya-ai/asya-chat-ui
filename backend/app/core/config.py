@@ -174,6 +174,15 @@ class Settings(BaseSettings):
     mcp_spill_get_max_chars: int = Field(
         default=12000, validation_alias="MCP_SPILL_GET_MAX_CHARS"
     )
+    cloud_source_check_cooldown_seconds: int = Field(
+        default=1800, validation_alias="CLOUD_SOURCE_CHECK_COOLDOWN_SECONDS"
+    )
+    cloud_source_max_folder_files: int = Field(
+        default=200, validation_alias="CLOUD_SOURCE_MAX_FOLDER_FILES"
+    )
+    cloud_source_max_folder_depth: int = Field(
+        default=2, validation_alias="CLOUD_SOURCE_MAX_FOLDER_DEPTH"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -22,6 +22,7 @@ import type {
   AgentSourceStatus,
   ChatModel,
 } from "@/lib/types"
+import { isCloudSourceUrl } from "@/lib/types"
 import { orgStore } from "@/lib/storage"
 import {
   groupModelsByDisplayName,
@@ -308,15 +309,16 @@ export const ProjectPage = () => {
         setError(t("project_url_required"))
         return
       }
+      const cloud = isCloudSourceUrl(url)
       await agentApi.createSource(project.id, {
-        kind: "url",
+        kind: cloud ? "cloud" : "url",
         title: sourceUrlTitle.trim() || null,
         url,
       })
       setSourceUrl("")
       setSourceUrlTitle("")
       await loadSources()
-      notify(t("project_url_added"))
+      notify(t(cloud ? "project_cloud_added" : "project_url_added"))
     })
 
   const handleReindex = (sourceId: string) =>
@@ -325,6 +327,14 @@ export const ProjectPage = () => {
       await agentApi.reindexSource(project.id, sourceId)
       await loadSources()
       notify(t("project_reindex_started"))
+    })
+
+  const handleSyncCloud = (sourceId: string) =>
+    withBusy(async () => {
+      if (!project) return
+      await agentApi.syncCloudSource(project.id, sourceId)
+      await loadSources()
+      notify(t("project_cloud_synced"))
     })
 
   const handleDeleteSource = async (sourceId: string) => {
@@ -671,6 +681,19 @@ export const ProjectPage = () => {
                 const { roots, childrenByParent } = groupSources(sources)
                 const renderSource = (source: AgentSource, nested = false) => {
                   const children = childrenByParent.get(source.id) ?? []
+                  const isCloud = source.kind === "cloud"
+                  const providerLabel =
+                    source.cloud_provider === "google_drive"
+                      ? t("project_cloud_drive")
+                      : source.cloud_provider === "onedrive"
+                        ? t("project_cloud_onedrive")
+                        : null
+                  const kindLabel =
+                    source.cloud_remote_kind === "folder"
+                      ? t("project_cloud_folder")
+                      : source.cloud_remote_kind === "file"
+                        ? t("project_cloud_file")
+                        : null
                   return (
                     <div key={source.id} className={nested ? "ml-4 space-y-2" : "space-y-2"}>
                       <Card className="gap-2 p-3">
@@ -682,8 +705,20 @@ export const ProjectPage = () => {
                             />
                             <div className="min-w-0">
                               <p className="font-medium truncate">{source.title}</p>
+                              {providerLabel || kindLabel ? (
+                                <p className="text-muted-foreground text-xs">
+                                  {[providerLabel, kindLabel].filter(Boolean).join(" · ")}
+                                </p>
+                              ) : null}
                               {source.url ? (
-                                <p className="text-muted-foreground text-xs truncate">{source.url}</p>
+                                <a
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-muted-foreground text-xs truncate block hover:underline"
+                                >
+                                  {source.url}
+                                </a>
                               ) : null}
                               {source.summary ? (
                                 <p className="text-muted-foreground text-xs line-clamp-2">
@@ -705,9 +740,17 @@ export const ProjectPage = () => {
                                   variant="ghost"
                                   size="icon"
                                   className="w-8 h-8"
-                                  aria-label={t("project_reindex_aria")}
+                                  aria-label={
+                                    isCloud
+                                      ? t("project_sync_cloud_aria")
+                                      : t("project_reindex_aria")
+                                  }
                                   disabled={busy}
-                                  onClick={() => handleReindex(source.id)}
+                                  onClick={() =>
+                                    isCloud
+                                      ? handleSyncCloud(source.id)
+                                      : handleReindex(source.id)
+                                  }
                                 >
                                   <RefreshCw className="w-4 h-4" aria-hidden="true" />
                                 </Button>

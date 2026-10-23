@@ -872,3 +872,100 @@ async def test_catalog_connection(
     )
     result = await test_server_connection(server, headers=headers, auth_type=auth_type)
     return IntegrationTestResult(**result)
+
+
+class WritePreferenceRead(BaseModel):
+    provider_id: str
+    always_allow: bool
+
+
+class WritePreferencesStatus(BaseModel):
+    always_allow: list[WritePreferenceRead]
+    session_chat_ids: list[str]
+
+
+@router.get(
+    "/integrations/orgs/{org_id}/write-preferences",
+    response_model=WritePreferencesStatus,
+)
+def get_write_preferences(
+    org_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> WritePreferencesStatus:
+    from app.services.integrations.write_approval import (
+        list_always_allow,
+        list_session_allows,
+    )
+
+    org_uuid = _parse_uuid(org_id, field="org_id")
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    rows = list_always_allow(session, user_id=current_user.id, org_id=org_uuid)
+    return WritePreferencesStatus(
+        always_allow=[
+            WritePreferenceRead(provider_id=r.provider_id, always_allow=r.always_allow)
+            for r in rows
+        ],
+        session_chat_ids=list_session_allows(
+            org_id=org_uuid, user_id=current_user.id
+        ),
+    )
+
+
+@router.delete(
+    "/integrations/orgs/{org_id}/write-preferences/{provider_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_write_preference(
+    org_id: str,
+    provider_id: str,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    from app.services.integrations.write_approval import revoke_always_allow
+
+    org_uuid = _parse_uuid(org_id, field="org_id")
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    if provider_id not in {"google", "microsoft"}:
+        raise HTTPException(status_code=400, detail="Unknown provider")
+    revoke_always_allow(
+        session,
+        user_id=current_user.id,
+        org_id=org_uuid,
+        provider_id=provider_id,
+    )
+
+
+@router.delete(
+    "/integrations/orgs/{org_id}/write-session/{chat_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def clear_write_session(
+    org_id: str,
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    from app.services.integrations.write_approval import clear_session_allow
+
+    org_uuid = _parse_uuid(org_id, field="org_id")
+    chat_uuid = _parse_uuid(chat_id, field="chat_id")
+    require_org_member(
+        session,
+        org_uuid,
+        current_user.id,
+        is_super_admin=current_user.is_super_admin,
+    )
+    clear_session_allow(
+        org_id=org_uuid, user_id=current_user.id, chat_id=chat_uuid
+    )

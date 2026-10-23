@@ -624,7 +624,25 @@ export const instanceProviderApi = {
     }),
 }
 
+export type WritePreferencesStatus = {
+  always_allow: { provider_id: string; always_allow: boolean }[]
+  session_chat_ids: string[]
+}
+
 export const integrationsApi = {
+  getWritePreferences: (orgId: string) =>
+    apiFetch<WritePreferencesStatus>(
+      `/integrations/orgs/${orgId}/write-preferences`
+    ),
+  revokeWritePreference: (orgId: string, providerId: string) =>
+    apiFetch(`/integrations/orgs/${orgId}/write-preferences/${providerId}`, {
+      method: "DELETE",
+    }),
+  clearWriteSession: (orgId: string, chatId: string) =>
+    apiFetch(`/integrations/orgs/${orgId}/write-session/${chatId}`, {
+      method: "DELETE",
+    }),
+
   listCatalog: (orgId?: string) => {
     const params = orgId ? `?org_id=${encodeURIComponent(orgId)}` : ""
     return apiFetch<CatalogIntegrationStatus[]>(`/integrations/catalog${params}`)
@@ -930,10 +948,13 @@ export const chatApi = {
     is_incognito?: boolean
   }) =>
     apiFetch<Chat>("/chats", { method: "POST", body: JSON.stringify(payload) }),
-  fork: (chatId: string, messageId?: string) =>
+  fork: (chatId: string, options?: { messageId?: string; orgId?: string | null }) =>
     apiFetch<Chat>(`/chats/${chatId}/fork`, {
       method: "POST",
-      body: JSON.stringify(messageId ? { message_id: messageId } : {}),
+      body: JSON.stringify({
+        ...(options?.messageId ? { message_id: options.messageId } : {}),
+        ...(options?.orgId ? { org_id: options.orgId } : {}),
+      }),
     }),
   uploadAttachment: (
     chatId: string,
@@ -1217,6 +1238,15 @@ export const chatApi = {
     apiFetch(`/chats/${chatId}/generation/${taskId}/cancel`, {
       method: "POST",
     }),
+  submitWriteApproval: (
+    chatId: string,
+    taskId: string,
+    decision: "once" | "session" | "always" | "deny"
+  ) =>
+    apiFetch(`/chats/${chatId}/generation/${taskId}/write-approval`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    }),
   subscribeGenerationTask: (
     chatId: string,
     taskId: string,
@@ -1260,7 +1290,7 @@ export const agentApi = {
   createSource: (
     agentId: string,
     payload: {
-      kind: "text" | "file" | "url"
+      kind: "text" | "file" | "url" | "cloud"
       title?: string | null
       url?: string | null
       file_name?: string | null
@@ -1291,6 +1321,10 @@ export const agentApi = {
     apiFetch(`/agents/${agentId}/sources/${sourceId}`, { method: "DELETE" }),
   reindexSource: (agentId: string, sourceId: string) =>
     apiFetch<AgentSource>(`/agents/${agentId}/sources/${sourceId}/reindex`, {
+      method: "POST",
+    }),
+  syncCloudSource: (agentId: string, sourceId: string) =>
+    apiFetch<AgentSource>(`/agents/${agentId}/sources/${sourceId}/sync`, {
       method: "POST",
     }),
   listShares: (agentId: string) => apiFetch<AgentShare[]>(`/agents/${agentId}/shares`),

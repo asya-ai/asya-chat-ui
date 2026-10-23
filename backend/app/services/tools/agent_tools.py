@@ -109,6 +109,9 @@ def _coerce_bool(value: object, default: bool = True) -> bool:
 async def list_project_sources(
     context: AgentToolContext, *, include_chats: bool = True
 ) -> ToolResult:
+    from app.services.agents.cloud_sources import maybe_sync_agent_cloud_roots
+
+    maybe_sync_agent_cloud_roots(context.session, context.agent_id, force=False)
     sources = context._all_sources(include_chats=include_chats)
     results = []
     for idx, source in enumerate(sources, start=1):
@@ -138,6 +141,12 @@ async def list_project_sources(
                 ),
                 "is_image": is_image,
                 "is_archive": is_archive,
+                "cloud_provider": (
+                    meta.get("provider") if source.kind == AgentSourceKind.cloud else None
+                ),
+                "cloud_remote_kind": (
+                    meta.get("remote_kind") if source.kind == AgentSourceKind.cloud else None
+                ),
                 "status": _status_str(source),
                 "readable": source.status == AgentSourceStatus.ready,
                 "summary": _source_summary(source),
@@ -153,13 +162,18 @@ async def list_project_sources(
                     if is_image and source.status == AgentSourceStatus.ready
                     else None
                 ),
+                "note": (
+                    "Live cloud file — edit via Drive/OneDrive tools; index refreshes on sync."
+                    if source.kind == AgentSourceKind.cloud
+                    else None
+                ),
             }
         )
     if not results:
         scope = (
-            "uploaded files/URLs"
+            "uploaded files/URLs/cloud links"
             if not include_chats
-            else "files, URLs, or prior chats"
+            else "files, URLs, cloud links, or prior chats"
         )
         return ToolResult(
             name="list_project_sources",

@@ -433,6 +433,11 @@ def prepare_source_content(session: Session, source: AgentSource) -> list[UUID]:
 
     Returns child source ids that should be enqueued for indexing (archives).
     """
+    if source.kind == AgentSourceKind.cloud:
+        from app.services.agents.cloud_sources import prepare_cloud_source_content
+
+        return prepare_cloud_source_content(session, source)
+
     meta = dict(source.metadata_json or {})
     data = maybe_read_file_bytes(source.file_path)
 

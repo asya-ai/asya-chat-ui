@@ -221,7 +221,13 @@ export const IntegrationsPage = () => {
         }
       }
     }
-    return [...scopes].sort((a, b) => a.localeCompare(b))
+    // Prefer full scopes when a module also contributes *.readonly.
+    return [...scopes]
+      .filter((scope) => {
+        if (!scope.endsWith(".readonly")) return true
+        return !scopes.has(scope.slice(0, -".readonly".length))
+      })
+      .sort((a, b) => a.localeCompare(b))
   }, [catalogApps])
 
   const canManageOrg = isSuperAdmin || isAdmin

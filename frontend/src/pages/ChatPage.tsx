@@ -240,6 +240,9 @@ const actionLabelMatchesToolEvent = (
       label.toLowerCase().includes("document")
     )
   }
+  if (toolEvent.type === "write_approval") {
+    return label === "Approval required" || label.toLowerCase().includes("approval")
+  }
   return false
 }
 
@@ -251,7 +254,8 @@ const isSpecializedToolEvent = (
   toolEvent.type === "context_summary" ||
   toolEvent.type === "coworking" ||
   toolEvent.type === "reasoning" ||
-  toolEvent.type === "subagent"
+  toolEvent.type === "subagent" ||
+  toolEvent.type === "write_approval"
 
 const resolveToolEventActionLabel = (
   toolEvent: NonNullable<ChatMessage["tool_event"]>
@@ -282,6 +286,7 @@ const resolveToolEventActionLabel = (
   }
   if (toolEvent.type === "url_attachments") return "Downloading attachments"
   if (toolEvent.type === "context_summary") return "Summarizing context"
+  if (toolEvent.type === "write_approval") return "Approval required"
   if (toolEvent.type === "coworking") {
     if (toolEvent.action === "open") return "Opening co-editing"
     if (toolEvent.action === "writing") return "Writing document"
@@ -763,7 +768,6 @@ export const ChatPage = () => {
               Boolean(output?.stdout) ||
               Boolean(output?.stderr) ||
               Boolean(output?.error) ||
-              Boolean(output?.requires_approval) ||
               Boolean(output?.timed_out) ||
               typeof output?.exit_code === "number" ||
               Boolean(output?.output_files?.length)
@@ -776,6 +780,9 @@ export const ChatPage = () => {
           if (msg.tool_event?.type === "coworking") {
             const status = msg.tool_event.output?.status
             return status !== "ok" && status !== "error"
+          }
+          if (msg.tool_event?.type === "write_approval") {
+            return msg.tool_event.status !== "resolved"
           }
           if (msg.tool_event?.type === "reasoning") {
             return true
@@ -2160,7 +2167,6 @@ export const ChatPage = () => {
     }
     const merged = mergeToolEvents(serverMessages, toolEvents).filter((msg) => {
       if (!msg.tool_event) return true
-      if (isSharedView || actionInfoLevel !== "detailed") return false
       const event = msg.tool_event
       if (event.id && nestedToolEventIds.has(event.id)) return false
       // Hide generic tool_call / specialized bubbles already nested under a timeline action.
@@ -2176,6 +2182,9 @@ export const ChatPage = () => {
           if (nestedActionKeys.has(key)) return false
         }
       }
+      // Write approvals must stay visible even when action details are hidden.
+      if (event.type === "write_approval") return !isSharedView
+      if (isSharedView || actionInfoLevel !== "detailed") return false
       return true
     })
     return collapseActivityEvents(merged)
@@ -2667,7 +2676,10 @@ export const ChatPage = () => {
       if (!chatId) return
       if (msg.id.startsWith("temp-")) return
       try {
-        const forked = await chatApi.fork(chatId, msg.id)
+        const forked = await chatApi.fork(chatId, {
+          messageId: msg.id,
+          orgId: orgId ?? undefined,
+        })
         queryClient.setQueryData<Chat[]>(["chats", orgId], (prev) =>
           prev ? [forked, ...prev.filter((item) => item.id !== forked.id)] : [forked]
         )
@@ -2680,6 +2692,21 @@ export const ChatPage = () => {
       }
     },
     [chatId, navigate, orgId, queryClient, t]
+  )
+
+  const handleWriteApprovalDecision = useCallback(
+    async (
+      decision: "once" | "session" | "always" | "deny",
+      toolEvent: Extract<NonNullable<ChatMessage["tool_event"]>, { type: "write_approval" }>
+    ) => {
+      if (!chatId || !toolEvent.task_id) return
+      try {
+        await chatApi.submitWriteApproval(chatId, toolEvent.task_id, decision)
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t("common_error"))
+      }
+    },
+    [chatId, t]
   )
 
   const sendMessage = async () => {
@@ -3711,8 +3738,8 @@ export const ChatPage = () => {
           onStartEdit={startEditMessage}
           onDeleteFromMessage={deleteFromMessage}
           onRetryMessage={retryFailedMessage}
-          onShareMessage={shareMessage}
-          onForkChat={isSharedView ? undefined : forkChat}
+          onShareMessage={isSharedView ? undefined : shareMessage}
+          onForkChat={forkChat}
           onSaveEditedMessage={saveEditedMessage}
           onCancelEdit={cancelEditMessage}
           onEditPasteAttachments={handleEditPasteAttachments}
@@ -3723,6 +3750,9 @@ export const ChatPage = () => {
           onEditDrop={handleEditDrop}
           onRemoveEditingAttachment={removeEditingAttachment}
           onPreviewAttachment={setPreviewAttachment}
+          onWriteApprovalDecision={
+            isSharedView ? undefined : handleWriteApprovalDecision
+          }
         />
       )
     },
@@ -3739,6 +3769,7 @@ export const ChatPage = () => {
       retryFailedMessage,
       shareMessage,
       forkChat,
+      handleWriteApprovalDecision,
       saveEditedMessage,
       cancelEditMessage,
       handleEditPasteAttachments,

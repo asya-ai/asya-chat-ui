@@ -1102,6 +1102,60 @@ async def _run_generation(task_id: UUID) -> None:
                     assistant_message=assistant_message,
                     chat=chat,
                 )
+                from app.services.integrations.write_approval import (
+                    get_always_allow_providers,
+                    upsert_always_allow,
+                )
+                from app.services.integrations.write_approval_context import (
+                    WriteApprovalContext,
+                )
+
+                def _get_always() -> set[str]:
+                    return get_always_allow_providers(
+                        session, user_id=chat.user_id, org_id=chat.org_id
+                    )
+
+                def _set_always(providers: set[str]) -> None:
+                    upsert_always_allow(
+                        session,
+                        user_id=chat.user_id,
+                        org_id=chat.org_id,
+                        provider_ids=providers,
+                    )
+
+                def _set_awaiting(payload: dict) -> None:
+                    task_row = session.get(ChatGenerationTask, task.id)
+                    if not task_row:
+                        return
+                    task_row.status = GenerationStatus.awaiting_approval
+                    meta = dict(task_row.metadata_json or {})
+                    meta["write_approval"] = payload
+                    task_row.metadata_json = meta
+                    session.add(task_row)
+                    session.commit()
+
+                def _set_streaming() -> None:
+                    task_row = session.get(ChatGenerationTask, task.id)
+                    if not task_row:
+                        return
+                    if task_row.status == GenerationStatus.awaiting_approval:
+                        task_row.status = GenerationStatus.streaming
+                    meta = dict(task_row.metadata_json or {})
+                    meta.pop("write_approval", None)
+                    task_row.metadata_json = meta
+                    session.add(task_row)
+                    session.commit()
+
+                write_ctx = WriteApprovalContext(
+                    task_id=task.id,
+                    chat_id=chat.id,
+                    org_id=chat.org_id,
+                    user_id=chat.user_id,
+                    get_always_providers=_get_always,
+                    set_always_providers=_set_always,
+                    set_task_awaiting=_set_awaiting,
+                    set_task_streaming=_set_streaming,
+                )
                 content, tool_attachments, tool_sources, image_usages, last_usage = (
                     await _run_agentic_loop(
                         provider=provider,
@@ -1112,6 +1166,7 @@ async def _run_generation(task_id: UUID) -> None:
                         activity_sender=activity_sender,
                         tool_event_sender=tool_event_sender,
                         delta_sender=delta_sender,
+                        write_approval=write_ctx,
                     )
                 )
                 _ensure_task_not_cancelled(session, task.id)
@@ -1629,6 +1684,7 @@ def cleanup_stale_generation_tasks() -> dict[str, int]:
             )
             failed_queued += 1
 
+        # awaiting_approval waits on the user (up to ~5m) — do not mark stale.
         stale_active = session.scalars(
             select(ChatGenerationTask).where(
                 ChatGenerationTask.status.in_(

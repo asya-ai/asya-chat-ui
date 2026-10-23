@@ -72,6 +72,7 @@ import type {
   Chat,
   Prompt,
 } from "@/lib/types"
+import { isCloudSourceUrl } from "@/lib/types"
 import { BrandLogo } from "@/components/BrandLogo"
 import { PromptFormDialog } from "@/components/PromptFormDialog"
 import {
@@ -722,8 +723,9 @@ export const ChatSidebar = ({
     if (!url) return
     try {
       setSourceBusy(true)
+      const cloud = isCloudSourceUrl(url)
       await agentApi.createSource(focusedAgentId, {
-        kind: "url",
+        kind: cloud ? "cloud" : "url",
         title: sourceUrlTitle.trim() || null,
         url,
       })
@@ -1543,6 +1545,13 @@ export const ChatSidebar = ({
                               const renderSource = (source: AgentSource, nested = false) => {
                                 const children = childrenByParent.get(source.id) ?? []
                                 const index = staggerIndex++
+                                const isCloud = source.kind === "cloud"
+                                const providerLabel =
+                                  source.cloud_provider === "google_drive"
+                                    ? t("project_cloud_drive")
+                                    : source.cloud_provider === "onedrive"
+                                      ? t("project_cloud_onedrive")
+                                      : null
                                 return (
                                   <div
                                     key={source.id}
@@ -1557,6 +1566,11 @@ export const ChatSidebar = ({
                                           {source.title || source.file_name || source.url || "—"}
                                         </p>
                                         <div className="flex items-center gap-1 shrink-0">
+                                          {providerLabel ? (
+                                            <span className="bg-secondary px-1.5 py-0.5 rounded-full font-medium text-xs">
+                                              {providerLabel}
+                                            </span>
+                                          ) : null}
                                           <span className="bg-secondary px-1.5 py-0.5 rounded-full font-medium text-xs">
                                             {sourceStatusLabel(source.status, t)}
                                           </span>
@@ -1565,11 +1579,23 @@ export const ChatSidebar = ({
                                             variant="ghost"
                                             size="icon-sm"
                                             className="size-7"
-                                            aria-label={t("project_reindex_aria")}
+                                            aria-label={
+                                              isCloud
+                                                ? t("project_sync_cloud_aria")
+                                                : t("project_reindex_aria")
+                                            }
                                             onClick={() => {
-                                              void agentApi
-                                                .reindexSource(focusedAgent.id, source.id)
-                                                .then(() => loadSources(focusedAgent.id))
+                                              void (
+                                                isCloud
+                                                  ? agentApi.syncCloudSource(
+                                                      focusedAgent.id,
+                                                      source.id
+                                                    )
+                                                  : agentApi.reindexSource(
+                                                      focusedAgent.id,
+                                                      source.id
+                                                    )
+                                              ).then(() => loadSources(focusedAgent.id))
                                             }}
                                           >
                                             <RefreshCw aria-hidden="true" className="size-4" />

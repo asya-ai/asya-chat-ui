@@ -419,6 +419,28 @@ class IntegrationUserInstall(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
+class IntegrationWritePreference(SQLModel, table=True):
+    """Per-user always-allow for external Google/Microsoft writes."""
+
+    __tablename__ = "integration_write_preferences"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "org_id",
+            "provider_id",
+            name="uq_integration_write_preferences_user_org_provider",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    provider_id: str = Field(index=True)  # google | microsoft
+    always_allow: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
 class McpOrgSettings(SQLModel, table=True):
     __tablename__ = "mcp_org_settings"
 
@@ -587,6 +609,7 @@ class GenerationStatus(str, Enum):
     queued = "queued"
     running = "running"
     streaming = "streaming"
+    awaiting_approval = "awaiting_approval"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -678,6 +701,7 @@ class AgentSourceKind(str, Enum):
     file = "file"
     url = "url"
     chat = "chat"
+    cloud = "cloud"
 
 
 class AgentSourceStatus(str, Enum):

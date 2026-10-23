@@ -173,6 +173,9 @@ class AgentSourceRead(BaseModel):
     is_archive: bool = False
     is_image: bool = False
     content_url: str | None = None
+    cloud_provider: str | None = None
+    cloud_remote_kind: str | None = None
+    cloud_checked_at: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -306,6 +309,9 @@ def _validate_org_team(session: Session, auth: AuthContext, team_id: UUID) -> Te
 
 
 def _decode_source_text(payload: AgentSourceCreateRequest) -> str:
+    if payload.kind == AgentSourceKind.cloud:
+        return ""
+
     if payload.kind == AgentSourceKind.url:
         target = (payload.url or "").strip()
         if not target:
@@ -460,6 +466,13 @@ def _to_source_read(source: AgentSource) -> AgentSourceRead:
     is_image = bool(metadata.get("is_image")) or is_image_file(
         file_name=source.file_name, content_type=source.content_type
     )
+    cloud_provider = metadata.get("provider") if source.kind == AgentSourceKind.cloud else None
+    cloud_remote_kind = (
+        metadata.get("remote_kind") if source.kind == AgentSourceKind.cloud else None
+    )
+    cloud_checked_at = (
+        metadata.get("checked_at") if source.kind == AgentSourceKind.cloud else None
+    )
     return AgentSourceRead(
         id=str(source.id),
         kind=source.kind,
@@ -474,6 +487,9 @@ def _to_source_read(source: AgentSource) -> AgentSourceRead:
         is_archive=is_archive,
         is_image=is_image,
         content_url=_source_content_url(source) if is_image else None,
+        cloud_provider=str(cloud_provider) if cloud_provider else None,
+        cloud_remote_kind=str(cloud_remote_kind) if cloud_remote_kind else None,
+        cloud_checked_at=str(cloud_checked_at) if cloud_checked_at else None,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
@@ -703,6 +719,9 @@ def list_sources(
     auth: AuthContext = Depends(get_auth_context),
 ) -> list[AgentSourceRead]:
     _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.viewer)
+    from app.services.agents.cloud_sources import maybe_sync_agent_cloud_roots
+
+    maybe_sync_agent_cloud_roots(session, agent_id, force=False)
     items = session.exec(
         select(AgentSource)
         .where(
@@ -727,6 +746,47 @@ def create_source(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Chat sources are managed automatically",
         )
+
+    # Auto-promote Drive/OneDrive paste links to cloud sources.
+    effective_kind = payload.kind
+    if payload.kind == AgentSourceKind.url and payload.url:
+        from app.services.agents.cloud_sources import parse_cloud_url
+
+        if parse_cloud_url(payload.url):
+            effective_kind = AgentSourceKind.cloud
+
+    if effective_kind == AgentSourceKind.cloud:
+        from app.services.agents.cloud_sources import (
+            CloudSourceError,
+            create_cloud_source_tree,
+        )
+
+        url = (payload.url or "").strip()
+        if not url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="url is required for cloud sources",
+            )
+        try:
+            root, enqueue_ids = create_cloud_source_tree(
+                session,
+                agent_id=agent_id,
+                url=url,
+                title=payload.title,
+                user_id=auth.user.id,
+                org_id=auth.org_id,
+            )
+        except CloudSourceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        session.commit()
+        session.refresh(root)
+        for child_id in enqueue_ids:
+            _enqueue_source_reindex_task(child_id)
+        return _to_source_read(root)
+
     now = datetime.utcnow()
     file_name = payload.file_name
     content_type = payload.content_type
@@ -921,6 +981,12 @@ def reindex_agent_source(
     ).first()
     if not source:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+    if source.kind == AgentSourceKind.cloud:
+        from app.services.agents.cloud_sources import maybe_sync_cloud_source
+
+        maybe_sync_cloud_source(session, source, force=True)
+        session.refresh(source)
+        return _to_source_read(source)
     source.status = AgentSourceStatus.queued
     source.error_message = None
     source.updated_at = datetime.utcnow()
@@ -928,6 +994,32 @@ def reindex_agent_source(
     session.commit()
     session.refresh(source)
     _enqueue_source_reindex_task(source.id)
+    return _to_source_read(source)
+
+
+@router.post("/{agent_id}/sources/{source_id}/sync", response_model=AgentSourceRead)
+def sync_cloud_agent_source(
+    agent_id: UUID,
+    source_id: UUID,
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> AgentSourceRead:
+    """Force cloud change-detection sync (past cooldown)."""
+    _require_agent_access(session, auth, agent_id, minimum_role=AgentAccessRole.editor)
+    source = session.exec(
+        select(AgentSource).where(AgentSource.id == source_id, AgentSource.agent_id == agent_id)
+    ).first()
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+    if source.kind != AgentSourceKind.cloud:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only cloud sources can be synced",
+        )
+    from app.services.agents.cloud_sources import maybe_sync_cloud_source
+
+    maybe_sync_cloud_source(session, source, force=True)
+    session.refresh(source)
     return _to_source_read(source)
 
 

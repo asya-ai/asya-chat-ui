@@ -99,21 +99,24 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "created_at and last_activity_at, ordered by most recent activity."
     ),
     "list_project_sources": (
-        "Use list_project_sources to see files and indexed chats in this project. "
-        "Pass include_chats=false to list uploaded documents only. "
-        "Image sources include presentation_ref (file_name) — embed that exact name in "
-        "Marp/cowork markdown as ![](file_name). Archive uploads list extracted sub-files."
+        "Use list_project_sources to see files, cloud Drive/OneDrive links, and indexed "
+        "chats in this project. Pass include_chats=false to list documents only. "
+        "Cloud sources are live — edit them with Drive/OneDrive tools; the index refreshes "
+        "on sync. Image sources include presentation_ref (file_name) — embed that exact "
+        "name in Marp/cowork markdown as ![](file_name). Archive uploads list extracted "
+        "sub-files."
     ),
     "search_project_sources": (
         "Use search_project_sources for semantic retrieval over this project's uploaded "
-        "files/URLs (including image descriptions and archive contents) and indexed prior "
-        "chats. When the user wants answers based only on uploaded sources/documents "
-        "(not prior chats), set include_chats=false."
+        "files/URLs/cloud docs (including image descriptions and archive contents) and "
+        "indexed prior chats. When the user wants answers based only on uploaded "
+        "sources/documents (not prior chats), set include_chats=false."
     ),
     "read_project_source": (
-        "Use read_project_source to read a project file or indexed chat by numeric id. "
-        "For images it returns the indexed description and attaches the original image "
-        "for vision — call it when you need to see the image, not only the summary."
+        "Use read_project_source to read a project file, cloud-cached doc, or indexed chat "
+        "by numeric id. For images it returns the indexed description and attaches the "
+        "original image for vision — call it when you need to see the image, not only "
+        "the summary."
     ),
 }
 

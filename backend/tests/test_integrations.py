@@ -403,7 +403,8 @@ def test_microsoft_connect_all_scopes_and_state() -> None:
         if e.oauth_provider_id == "microsoft" and e.connect_kind == "oauth"
     ]
     scopes = union_oauth_scopes(entries)
-    assert any(s.endswith("/Mail.Read") for s in scopes)
+    assert any(s.endswith("/Mail.ReadWrite") for s in scopes)
+    assert not any(s.endswith("/Mail.Read") for s in scopes)
     assert any(s.endswith("/Tasks.ReadWrite") for s in scopes)
     assert any(s.endswith("/User.Read") for s in scopes)
     assert len(scopes) == len(set(scopes))
@@ -449,6 +450,22 @@ def test_microsoft_connect_all_scopes_and_state() -> None:
     for catalog_id in catalog_ids:
         row = next(item for item in status if item["catalog_id"] == catalog_id)
         assert row["connected"] is True
+
+
+def test_google_connect_all_drops_redundant_readonly() -> None:
+    entries = [
+        e
+        for e in list_catalog()
+        if e.oauth_provider_id == "google" and e.connect_kind == "oauth"
+    ]
+    scopes = union_oauth_scopes(entries)
+    assert any(s.endswith("/drive") for s in scopes)
+    assert not any(s.endswith("/drive.readonly") for s in scopes)
+    assert any(s.endswith("/calendar") for s in scopes)
+    assert not any(s.endswith("/calendar.readonly") for s in scopes)
+    assert any(s.endswith("/spreadsheets") for s in scopes)
+    assert any(s.endswith("/documents") for s in scopes)
+    assert any(s.endswith("/presentations") for s in scopes)
 
 
 def test_outlook_oauth_connect_resolve_disconnect() -> None:

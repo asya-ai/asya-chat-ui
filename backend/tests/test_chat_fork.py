@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import chats as chats_api
-from app.models.entities import Chat, ChatMessage
+from app.models.entities import Chat, ChatMessage, ChatViewEvent
 
 
 class _ExecResult:
@@ -215,6 +215,7 @@ def test_fork_rejects_inaccessible(monkeypatch):
         user_id=uuid4(),
         is_deleted=False,
         agent_id=None,
+        share_token=None,
     )
     session = _ForkSession(source, [])
     current_user = SimpleNamespace(id=uuid4(), is_super_admin=False)
@@ -229,3 +230,71 @@ def test_fork_rejects_inaccessible(monkeypatch):
             current_user=current_user,  # type: ignore[arg-type]
         )
     assert exc.value.status_code == 403
+
+
+def test_fork_allows_shared_chat_for_viewer(monkeypatch):
+    owner_id = uuid4()
+    viewer_id = uuid4()
+    viewer_org = uuid4()
+    source = Chat(
+        id=uuid4(),
+        org_id=uuid4(),
+        user_id=owner_id,
+        agent_id=None,
+        share_token="public_share_tok",
+        title="Shared",
+        is_deleted=False,
+        is_incognito=False,
+        is_subagent=False,
+        created_at=datetime.utcnow(),
+        last_activity_at=datetime.utcnow(),
+    )
+    messages = [
+        ChatMessage(
+            id=uuid4(),
+            chat_id=source.id,
+            user_id=owner_id,
+            role="user",
+            content="Q",
+            is_current=True,
+            status="done",
+            created_at=datetime.utcnow(),
+        ),
+        ChatMessage(
+            id=uuid4(),
+            chat_id=source.id,
+            role="assistant",
+            content="A",
+            is_current=True,
+            status="done",
+            created_at=datetime.utcnow(),
+        ),
+    ]
+    session = _ForkSession(source, messages)
+    current_user = SimpleNamespace(
+        id=viewer_id,
+        is_super_admin=False,
+        display_name="Viewer",
+        username="viewer",
+        email="viewer@example.com",
+    )
+    monkeypatch.setattr(chats_api, "require_org_member", lambda *a, **k: None)
+    monkeypatch.setattr(chats_api, "can_access_chat", lambda *a, **k: False)
+    monkeypatch.setattr(chats_api, "copy_message_attachments", lambda *a, **k: [])
+
+    result = chats_api.fork_chat(
+        chat_id=str(source.id),
+        payload=chats_api.ChatForkRequest(org_id=str(viewer_org)),
+        session=session,  # type: ignore[arg-type]
+        current_user=current_user,  # type: ignore[arg-type]
+    )
+    assert result.owner_user_id == str(viewer_id)
+    forked = next(obj for obj in session.added if isinstance(obj, Chat))
+    assert forked.org_id == viewer_org
+    assert forked.user_id == viewer_id
+    assert len([obj for obj in session.added if isinstance(obj, ChatMessage)]) == 2
+    view_events = [obj for obj in session.added if isinstance(obj, ChatViewEvent)]
+    assert len(view_events) == 1
+    assert view_events[0].chat_id == source.id
+    assert view_events[0].viewer_user_id == viewer_id
+    assert view_events[0].viewer_label == "Viewer"

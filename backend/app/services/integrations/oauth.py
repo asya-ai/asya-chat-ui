@@ -113,8 +113,33 @@ def decode_oauth_state(state: str) -> dict[str, Any]:
     }
 
 
+def _drop_redundant_readonly(scopes: list[str]) -> list[str]:
+    """Drop Foo.readonly / Foo.Read when a broader write scope is already present."""
+    present = set(scopes)
+    out: list[str] = []
+    for scope in scopes:
+        if scope.endswith(".readonly"):
+            broader = scope[: -len(".readonly")]
+            if broader in present:
+                continue
+        if scope.endswith(".Read") and not scope.endswith(".ReadWrite"):
+            write = f"{scope}Write"
+            if write in present:
+                continue
+        if scope.endswith(".Read.All"):
+            write = scope[: -len(".Read.All")] + ".ReadWrite.All"
+            if write in present:
+                continue
+        out.append(scope)
+    return out
+
+
 def union_oauth_scopes(entries: list[CatalogIntegration]) -> list[str]:
-    """Deduped scopes across catalog cards (order preserved)."""
+    """Deduped scopes across catalog cards (order preserved).
+
+    Broader scopes win: e.g. drive drops drive.readonly; Calendars.ReadWrite
+    drops Calendars.Read when both appear from different catalog cards.
+    """
     seen: set[str] = set()
     out: list[str] = []
     for entry in entries:
@@ -123,7 +148,7 @@ def union_oauth_scopes(entries: list[CatalogIntegration]) -> list[str]:
                 continue
             seen.add(scope)
             out.append(scope)
-    return out
+    return _drop_redundant_readonly(out)
 
 
 def build_authorize_url(

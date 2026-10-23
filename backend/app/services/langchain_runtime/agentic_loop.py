@@ -270,6 +270,7 @@ async def run_agentic_loop_langchain(
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
     delta_sender: anyio.abc.ObjectSendStream | None = None,
     supports_image_input: bool = False,
+    write_approval: Any | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     executor = LangChainToolExecutor(tool_registry)
     tool_specs = executor.list_specs()
@@ -867,12 +868,138 @@ async def run_agentic_loop_langchain(
             None
         ] * len(tool_calls)
 
+        from app.services.integrations.write_approval import (
+            cancelled_write_output,
+            has_session_allow,
+            providers_covered,
+            set_session_allow,
+            wait_for_write_decision,
+        )
+        from app.services.integrations.write_safety import classify_external_write
+        from app.services.tools.previews import tool_call_action_summary as _summary_for_write
+
+        read_indices: list[int] = []
+        write_indices: list[int] = []
+        write_meta: list[dict[str, Any]] = []
+        for index, call in enumerate(tool_calls):
+            classified = classify_external_write(str(call.name or ""))
+            if classified is None:
+                read_indices.append(index)
+            else:
+                write_indices.append(index)
+                args = call.arguments if isinstance(call.arguments, dict) else {}
+                write_meta.append(
+                    {
+                        "id": str(call.id),
+                        "tool_name": call.name,
+                        "provider": classified.provider_id,
+                        "catalog_id": classified.catalog_id,
+                        "summary": _summary_for_write(call.name, args),
+                    }
+                )
+
         async def _store_tool_result(index: int, call: Any) -> None:
             call_results[index] = await _run_one_tool_call(call)
 
-        async with anyio.create_task_group() as tg:
-            for index, call in enumerate(tool_calls):
-                tg.start_soon(_store_tool_result, index, call)
+        async def _store_cancelled_write(index: int, call: Any, reason: str) -> None:
+            tool_output = cancelled_write_output(str(call.name or ""), reason=reason)
+            result = ToolResult(name=str(call.name or ""), output=tool_output)
+            call_arguments = call.arguments if isinstance(call.arguments, dict) else {}
+            input_preview = tool_call_input_preview(call.name, call_arguments)
+            action_summary = tool_call_action_summary(call.name, call_arguments)
+            async with emit_lock:
+                await _emit_activity(action_summary, "start")
+                await _emit_tool_event(
+                    {
+                        "type": "tool_call",
+                        "id": f"call:{call.id}",
+                        "tool_name": call.name,
+                        "state": "end",
+                        "input_preview": input_preview,
+                        "action_summary": action_summary,
+                        "output": {
+                            "status": "error",
+                            "result_preview": "cancelled",
+                            "raw_output": tool_output,
+                            "error": reason,
+                        },
+                    }
+                )
+                await _emit_activity(action_summary, "end")
+            call_results[index] = (call, result, tool_output, None, None)
+
+        if read_indices:
+            async with anyio.create_task_group() as tg:
+                for index in read_indices:
+                    tg.start_soon(_store_tool_result, index, tool_calls[index])
+
+        if write_indices and write_approval is not None:
+            providers = {str(item["provider"]) for item in write_meta}
+            always = set(write_approval.get_always_providers() or set())
+            session_ok = has_session_allow(
+                org_id=write_approval.org_id,
+                user_id=write_approval.user_id,
+                chat_id=write_approval.chat_id,
+            )
+            if not providers_covered(
+                providers=providers, always=always, session_ok=session_ok
+            ):
+                from uuid import uuid4
+
+                request_id = str(uuid4())
+                approval_payload = {
+                    "type": "write_approval",
+                    "id": f"write_approval:{write_approval.task_id}:{request_id}",
+                    "task_id": str(write_approval.task_id),
+                    "request_id": request_id,
+                    "actions": write_meta,
+                    "status": "pending",
+                }
+                if write_approval.set_task_awaiting:
+                    write_approval.set_task_awaiting(approval_payload)
+                await _emit_tool_event(approval_payload)
+                decision = await anyio.to_thread.run_sync(
+                    wait_for_write_decision,
+                    write_approval.task_id,
+                    request_id,
+                )
+                if write_approval.set_task_streaming:
+                    write_approval.set_task_streaming()
+                if decision == "deny":
+                    for index in write_indices:
+                        await _store_cancelled_write(
+                            index, tool_calls[index], "User denied write"
+                        )
+                else:
+                    if decision == "session":
+                        set_session_allow(
+                            org_id=write_approval.org_id,
+                            user_id=write_approval.user_id,
+                            chat_id=write_approval.chat_id,
+                        )
+                    elif decision == "always":
+                        write_approval.set_always_providers(providers)
+                    await _emit_tool_event(
+                        {
+                            **approval_payload,
+                            "status": "resolved",
+                            "decision": decision,
+                        }
+                    )
+                    async with anyio.create_task_group() as tg:
+                        for index in write_indices:
+                            tg.start_soon(
+                                _store_tool_result, index, tool_calls[index]
+                            )
+            else:
+                async with anyio.create_task_group() as tg:
+                    for index in write_indices:
+                        tg.start_soon(_store_tool_result, index, tool_calls[index])
+        elif write_indices:
+            # No approval context (tests / sync path): run writes immediately.
+            async with anyio.create_task_group() as tg:
+                for index in write_indices:
+                    tg.start_soon(_store_tool_result, index, tool_calls[index])
 
         for item in call_results:
             assert item is not None
