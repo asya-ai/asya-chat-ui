@@ -132,6 +132,10 @@ type MessageBubbleProps = {
     decision: "once" | "session" | "always" | "deny",
     toolEvent: Extract<NonNullable<ChatMessage["tool_event"]>, { type: "write_approval" }>
   ) => void
+  onSourceProposalDecision?: (
+    decision: "accept" | "dismiss",
+    toolEvent: Extract<NonNullable<ChatMessage["tool_event"]>, { type: "source_proposal" }>
+  ) => void
 }
 
 const formatDurationMs = (ms: number): string => {
@@ -691,12 +695,83 @@ const ToolEventDetails = ({
   toolEvent,
   t,
   onWriteApprovalDecision,
+  onSourceProposalDecision,
 }: {
   toolEvent: ToolEvent
   t: I18nContextValue["t"]
   onWriteApprovalDecision?: MessageBubbleProps["onWriteApprovalDecision"]
+  onSourceProposalDecision?: MessageBubbleProps["onSourceProposalDecision"]
 }) => {
   const navigate = useNavigate()
+  if (toolEvent.type === "source_proposal") {
+    const status = toolEvent.status ?? "pending"
+    const canDecide = status === "proposed" && Boolean(onSourceProposalDecision)
+    const kindLabel =
+      toolEvent.kind === "text"
+        ? t("chat_source_proposal_kind_text")
+        : t("chat_source_proposal_kind_url")
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1 text-xs">
+          <p className="text-foreground">
+            <span className="text-muted-foreground">{kindLabel}</span>
+            {toolEvent.title ? ` · ${toolEvent.title}` : ""}
+          </p>
+          {toolEvent.url ? (
+            <a
+              href={toolEvent.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block truncate text-foreground underline-offset-2 hover:underline"
+            >
+              {toolEvent.url}
+            </a>
+          ) : null}
+          {toolEvent.kind === "text" && toolEvent.content_text ? (
+            <pre className="bg-background/40 max-h-32 overflow-auto rounded p-2 whitespace-pre-wrap">
+              {toolEvent.content_text.slice(0, 800)}
+              {toolEvent.content_text.length > 800 ? "…" : ""}
+            </pre>
+          ) : null}
+          {toolEvent.reason ? (
+            <p className="text-muted-foreground">{toolEvent.reason}</p>
+          ) : null}
+        </div>
+        {canDecide ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => onSourceProposalDecision?.("accept", toolEvent)}
+            >
+              {t("chat_source_proposal_add")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onSourceProposalDecision?.("dismiss", toolEvent)}
+            >
+              {t("chat_source_proposal_dismiss")}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-xs">
+            {status === "accepted"
+              ? t("chat_source_proposal_added")
+              : status === "dismissed"
+                ? t("chat_source_proposal_dismissed")
+                : status === "already_indexed"
+                  ? t("chat_source_proposal_already")
+                  : status === "error"
+                    ? toolEvent.message || t("chat_source_proposal_failed")
+                    : status === "pending"
+                      ? t("chat_source_proposal_pending")
+                      : toolEvent.message || status}
+          </p>
+        )}
+      </div>
+    )
+  }
   if (toolEvent.type === "write_approval") {
     const pending = toolEvent.status !== "resolved"
     const actions = toolEvent.actions ?? []
@@ -1244,6 +1319,7 @@ const MessageBubbleComponent = ({
   onRemoveEditingAttachment,
   onPreviewAttachment,
   onWriteApprovalDecision,
+  onSourceProposalDecision,
 }: MessageBubbleProps) => {
   const editFileInputRef = useRef<HTMLInputElement | null>(null)
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -1264,6 +1340,8 @@ const MessageBubbleComponent = ({
   const codeEvent = msg.tool_event?.type === "code_execution" ? msg.tool_event : null
   const writeApprovalEvent =
     msg.tool_event?.type === "write_approval" ? msg.tool_event : null
+  const sourceProposalEvent =
+    msg.tool_event?.type === "source_proposal" ? msg.tool_event : null
   const toolCallEvent = msg.tool_event?.type === "tool_call" ? msg.tool_event : null
   const chatViewEvent = msg.activity_event?.type === "chat_view" ? msg.activity_event : null
   const urlAttachmentsEvent =
@@ -1291,13 +1369,35 @@ const MessageBubbleComponent = ({
     }
     return Array.from(byId.values())
   })()
+  const sourceProposalCards = (() => {
+    const byId = new Map<
+      string,
+      Extract<NonNullable<ChatMessage["tool_event"]>, { type: "source_proposal" }>
+    >()
+    const add = (
+      event: Extract<NonNullable<ChatMessage["tool_event"]>, { type: "source_proposal" }> | null
+    ) => {
+      if (!event) return
+      const key = event.id ?? `anon-${byId.size}`
+      const prev = byId.get(key)
+      if (!prev || (event.status && event.status !== "pending")) byId.set(key, event)
+    }
+    add(sourceProposalEvent)
+    for (const part of msg.stream_parts ?? []) {
+      if (part.type === "action" && part.tool_event?.type === "source_proposal") {
+        add(part.tool_event)
+      }
+    }
+    return Array.from(byId.values())
+  })()
   const hasEventHeader = Boolean(
     isCodeEvent ||
       toolCallEvent ||
       chatViewEvent ||
       urlAttachmentsEvent ||
       isContextSummaryEvent ||
-      writeApprovalEvent
+      writeApprovalEvent ||
+      sourceProposalEvent
   )
   const finalAnswerText = useMemo(() => getFinalAnswerText(msg), [msg])
   const canCopyMessage = Boolean(
@@ -1699,13 +1799,15 @@ const MessageBubbleComponent = ({
                   ? t("chat_executing_code")
                   : writeApprovalEvent
                     ? t("chat_write_approval")
-                    : toolCallEvent
-                      ? t("chat_tool_label", { name: toolCallEvent.tool_name })
-                      : chatViewEvent
-                        ? t("chat_activity")
-                        : urlAttachmentsEvent
-                          ? t("chat_downloading_attachments")
-                          : t("chat_context_summarized")}
+                    : sourceProposalEvent
+                      ? t("chat_source_proposal")
+                      : toolCallEvent
+                        ? t("chat_tool_label", { name: toolCallEvent.tool_name })
+                        : chatViewEvent
+                          ? t("chat_activity")
+                          : urlAttachmentsEvent
+                            ? t("chat_downloading_attachments")
+                            : t("chat_context_summarized")}
               </p>
             </div>
           ) : null}
@@ -1719,6 +1821,7 @@ const MessageBubbleComponent = ({
                   toolEvent={codeEvent}
                   t={t}
                   onWriteApprovalDecision={onWriteApprovalDecision}
+                  onSourceProposalDecision={onSourceProposalDecision}
                 />
               ) : null}
             </details>
@@ -1727,12 +1830,21 @@ const MessageBubbleComponent = ({
               toolEvent={writeApprovalEvent}
               t={t}
               onWriteApprovalDecision={onWriteApprovalDecision}
+              onSourceProposalDecision={onSourceProposalDecision}
+            />
+          ) : sourceProposalEvent ? (
+            <ToolEventDetails
+              toolEvent={sourceProposalEvent}
+              t={t}
+              onWriteApprovalDecision={onWriteApprovalDecision}
+              onSourceProposalDecision={onSourceProposalDecision}
             />
           ) : toolCallEvent ? (
             <ToolEventDetails
               toolEvent={toolCallEvent}
               t={t}
               onWriteApprovalDecision={onWriteApprovalDecision}
+              onSourceProposalDecision={onSourceProposalDecision}
             />
           ) : chatViewEvent ? (
             <div className="space-y-1 py-1 text-xs">
@@ -1763,6 +1875,7 @@ const MessageBubbleComponent = ({
                 toolEvent={urlAttachmentsEvent}
                 t={t}
                 onWriteApprovalDecision={onWriteApprovalDecision}
+                onSourceProposalDecision={onSourceProposalDecision}
               />
             </details>
           ) : isContextSummaryEvent ? (
@@ -1775,6 +1888,7 @@ const MessageBubbleComponent = ({
                   toolEvent={contextSummaryEvent}
                   t={t}
                   onWriteApprovalDecision={onWriteApprovalDecision}
+                  onSourceProposalDecision={onSourceProposalDecision}
                 />
               ) : null}
             </details>
@@ -2006,6 +2120,7 @@ const MessageBubbleComponent = ({
                                     toolEvent={toolEvent}
                                     t={t}
                                     onWriteApprovalDecision={onWriteApprovalDecision}
+                                    onSourceProposalDecision={onSourceProposalDecision}
                                   />
                                 </div>
                               </details>
@@ -2039,6 +2154,24 @@ const MessageBubbleComponent = ({
                           toolEvent={event}
                           t={t}
                           onWriteApprovalDecision={onWriteApprovalDecision}
+                          onSourceProposalDecision={onSourceProposalDecision}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {sourceProposalCards.length > 0 && !sourceProposalEvent ? (
+                  <div className="space-y-3">
+                    {sourceProposalCards.map((event) => (
+                      <div key={event.id ?? event.title ?? "proposal"} className="space-y-2">
+                        <p className="opacity-70 font-medium text-xs">
+                          {t("chat_source_proposal")}
+                        </p>
+                        <ToolEventDetails
+                          toolEvent={event}
+                          t={t}
+                          onWriteApprovalDecision={onWriteApprovalDecision}
+                          onSourceProposalDecision={onSourceProposalDecision}
                         />
                       </div>
                     ))}
@@ -2534,6 +2667,7 @@ export const MessageBubble = memo(
     if (prev.t !== next.t) return false
     if (prev.onOpenSources !== next.onOpenSources) return false
     if (prev.onWriteApprovalDecision !== next.onWriteApprovalDecision) return false
+    if (prev.onSourceProposalDecision !== next.onSourceProposalDecision) return false
     if (prev.thinkingLabels.length !== next.thinkingLabels.length) return false
     for (let i = 0; i < prev.thinkingLabels.length; i += 1) {
       if (prev.thinkingLabels[i] !== next.thinkingLabels[i]) return false

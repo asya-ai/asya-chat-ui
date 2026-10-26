@@ -243,6 +243,13 @@ const actionLabelMatchesToolEvent = (
   if (toolEvent.type === "write_approval") {
     return label === "Approval required" || label.toLowerCase().includes("approval")
   }
+  if (toolEvent.type === "source_proposal") {
+    return (
+      label === "Proposing project source" ||
+      label.startsWith("Proposing source:") ||
+      label.toLowerCase().includes("propos")
+    )
+  }
   return false
 }
 
@@ -255,7 +262,8 @@ const isSpecializedToolEvent = (
   toolEvent.type === "coworking" ||
   toolEvent.type === "reasoning" ||
   toolEvent.type === "subagent" ||
-  toolEvent.type === "write_approval"
+  toolEvent.type === "write_approval" ||
+  toolEvent.type === "source_proposal"
 
 const resolveToolEventActionLabel = (
   toolEvent: NonNullable<ChatMessage["tool_event"]>
@@ -287,6 +295,10 @@ const resolveToolEventActionLabel = (
   if (toolEvent.type === "url_attachments") return "Downloading attachments"
   if (toolEvent.type === "context_summary") return "Summarizing context"
   if (toolEvent.type === "write_approval") return "Approval required"
+  if (toolEvent.type === "source_proposal") {
+    const title = toolEvent.title?.trim()
+    return title ? `Proposing source: ${title}` : "Proposing project source"
+  }
   if (toolEvent.type === "coworking") {
     if (toolEvent.action === "open") return "Opening co-editing"
     if (toolEvent.action === "writing") return "Writing document"
@@ -783,6 +795,9 @@ export const ChatPage = () => {
           }
           if (msg.tool_event?.type === "write_approval") {
             return msg.tool_event.status !== "resolved"
+          }
+          if (msg.tool_event?.type === "source_proposal") {
+            return msg.tool_event.status === "pending"
           }
           if (msg.tool_event?.type === "reasoning") {
             return true
@@ -2182,8 +2197,10 @@ export const ChatPage = () => {
           if (nestedActionKeys.has(key)) return false
         }
       }
-      // Write approvals must stay visible even when action details are hidden.
-      if (event.type === "write_approval") return !isSharedView
+      // Write approvals / source proposals stay visible even when action details are hidden.
+      if (event.type === "write_approval" || event.type === "source_proposal") {
+        return !isSharedView
+      }
       if (isSharedView || actionInfoLevel !== "detailed") return false
       return true
     })
@@ -2707,6 +2724,77 @@ export const ChatPage = () => {
       }
     },
     [chatId, t]
+  )
+
+  const patchSourceProposalEvent = useCallback(
+    (
+      toolEvent: Extract<NonNullable<ChatMessage["tool_event"]>, { type: "source_proposal" }>,
+      status: "accepted" | "dismissed" | "error",
+      message?: string
+    ) => {
+      const nextEvent = { ...toolEvent, status, message: message ?? toolEvent.message }
+      const patchMsg = (msg: ChatMessage): ChatMessage => {
+        let changed = false
+        let next = msg
+        if (msg.tool_event?.type === "source_proposal" && msg.tool_event.id === toolEvent.id) {
+          next = { ...next, tool_event: nextEvent }
+          changed = true
+        }
+        if (msg.stream_parts?.length) {
+          const parts = msg.stream_parts.map((part) => {
+            if (
+              part.type === "action" &&
+              part.tool_event?.type === "source_proposal" &&
+              part.tool_event.id === toolEvent.id
+            ) {
+              changed = true
+              return { ...part, tool_event: nextEvent }
+            }
+            return part
+          })
+          if (changed) next = { ...next, stream_parts: parts }
+        }
+        return changed ? next : msg
+      }
+      setToolEvents((prev) => prev.map(patchMsg))
+      if (chatId) {
+        updateChatMessagesFor(chatId, (prev) => prev.map(patchMsg))
+      }
+    },
+    [chatId, updateChatMessagesFor]
+  )
+
+  const handleSourceProposalDecision = useCallback(
+    async (
+      decision: "accept" | "dismiss",
+      toolEvent: Extract<NonNullable<ChatMessage["tool_event"]>, { type: "source_proposal" }>
+    ) => {
+      if (decision === "dismiss") {
+        patchSourceProposalEvent(toolEvent, "dismissed")
+        return
+      }
+      const agentId = toolEvent.agent_id || activeAgentId
+      if (!agentId) {
+        toast.error(t("chat_source_proposal_failed"))
+        return
+      }
+      const kind = toolEvent.kind === "text" ? "text" : "url"
+      try {
+        await agentApi.createSource(agentId, {
+          kind,
+          title: toolEvent.title ?? undefined,
+          url: kind === "url" ? toolEvent.url ?? undefined : undefined,
+          content_text: kind === "text" ? toolEvent.content_text ?? undefined : undefined,
+        })
+        patchSourceProposalEvent(toolEvent, "accepted")
+        void agentApi.listSources(agentId).then(setProjectSources).catch(() => {})
+      } catch (err) {
+        const message = err instanceof Error ? err.message : t("chat_source_proposal_failed")
+        patchSourceProposalEvent(toolEvent, "error", message)
+        toast.error(message)
+      }
+    },
+    [activeAgentId, patchSourceProposalEvent, t]
   )
 
   const sendMessage = async () => {
@@ -3753,6 +3841,9 @@ export const ChatPage = () => {
           onWriteApprovalDecision={
             isSharedView ? undefined : handleWriteApprovalDecision
           }
+          onSourceProposalDecision={
+            isSharedView ? undefined : handleSourceProposalDecision
+          }
         />
       )
     },
@@ -3770,6 +3861,7 @@ export const ChatPage = () => {
       shareMessage,
       forkChat,
       handleWriteApprovalDecision,
+      handleSourceProposalDecision,
       saveEditedMessage,
       cancelEditMessage,
       handleEditPasteAttachments,

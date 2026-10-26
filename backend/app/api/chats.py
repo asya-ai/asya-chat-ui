@@ -122,6 +122,7 @@ from app.services.chat_filespace import (
 from app.services.tools.agent_tools import (
     AgentToolContext,
     list_project_sources,
+    propose_project_source,
     read_project_source,
     search_project_sources,
     _coerce_bool as _coerce_include_chats,
@@ -1043,6 +1044,57 @@ def _build_tool_registry(
                 },
             ),
             _read_project_source_handler,
+        )
+
+        async def _propose_project_source_handler(args: dict) -> object:
+            return await propose_project_source(
+                agent_ctx,
+                kind=args.get("kind", ""),
+                title=args.get("title"),
+                url=args.get("url"),
+                content_text=args.get("content_text"),
+                reason=args.get("reason"),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="propose_project_source",
+                description=(
+                    "Propose adding a URL or text snippet to this project's indexed source "
+                    "library. The user must approve in the UI before it is indexed. Use when "
+                    "a reference will help future chats in this project. Do not claim it was "
+                    "added until the user accepts. Prefer kind=url for web pages; kind=text "
+                    "for short notes or excerpts you and the user produced."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["url", "text"],
+                            "description": "url for a web page; text for a note/excerpt",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Short display title for the source",
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "Required when kind=url",
+                        },
+                        "content_text": {
+                            "type": "string",
+                            "description": "Required when kind=text",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Why this should be kept in the project library",
+                        },
+                    },
+                    "required": ["kind"],
+                },
+            ),
+            _propose_project_source_handler,
         )
 
     if chat_id and allow_cowork:
@@ -1990,6 +2042,8 @@ def _is_specialized_tool_event(payload: dict[str, Any]) -> bool:
         "coworking",
         "reasoning",
         "subagent",
+        "write_approval",
+        "source_proposal",
     }
 
 
@@ -2026,6 +2080,13 @@ def _tool_event_action_label(payload: dict[str, Any]) -> str:
         return "Downloading attachments"
     if event_type == "context_summary":
         return "Summarizing context"
+    if event_type == "source_proposal":
+        title = payload.get("title")
+        if isinstance(title, str) and title.strip():
+            return f"Proposing source: {title.strip()}"
+        return "Proposing project source"
+    if event_type == "write_approval":
+        return "Approval required"
     if event_type == "coworking":
         action = payload.get("action")
         if action == "open":
@@ -2069,6 +2130,14 @@ def _action_label_matches_tool_event(label: str, payload: dict[str, Any]) -> boo
         return label == "Downloading attachments"
     if event_type == "context_summary":
         return label == "Summarizing context" or "summar" in label.lower()
+    if event_type == "source_proposal":
+        return (
+            label == "Proposing project source"
+            or label.startswith("Proposing source:")
+            or "propos" in label.lower()
+        )
+    if event_type == "write_approval":
+        return label == "Approval required" or "approval" in label.lower()
     if event_type == "coworking":
         return (
             label in {"Opening co-editing", "Updating document", "Closing co-editing", "Co-editing"}
@@ -2518,6 +2587,11 @@ async def _run_agentic_loop(
             return ["Reading sources"]
         if name == "download_attachments":
             return ["Downloading attachments"]
+        if name == "propose_project_source":
+            title = arguments.get("title")
+            if isinstance(title, str) and title.strip():
+                return [f"Proposing source: {title.strip()}"]
+            return ["Proposing project source"]
         if name == "extract_pdf":
             return ["Extracting PDF pages"]
         if name == "generate_image":
@@ -2747,6 +2821,23 @@ async def _run_agentic_loop(
                     for label in labels:
                         await _emit(label, "start")
                     result = await tool_registry.execute(call.name, call.arguments)
+                elif call.name == "propose_project_source":
+                    await _emit_tool_event(
+                        {
+                            "type": "source_proposal",
+                            "id": call.id,
+                            "status": "pending",
+                            "kind": call.arguments.get("kind"),
+                            "title": call.arguments.get("title"),
+                            "url": call.arguments.get("url"),
+                            "reason": call.arguments.get("reason"),
+                            "output": {},
+                        }
+                    )
+                    labels = _labels_for_call(call.name, call.arguments)
+                    for label in labels:
+                        await _emit(label, "start")
+                    result = await tool_registry.execute(call.name, call.arguments)
                 else:
                     labels = _labels_for_call(call.name, call.arguments)
                     for label in labels:
@@ -2807,6 +2898,30 @@ async def _run_agentic_loop(
                             "urls": _ensure_list(call.arguments.get("urls"))
                             or _ensure_list(call.arguments.get("url")),
                             "output": result.output,
+                        }
+                    )
+                elif call.name == "propose_project_source":
+                    tool_output = result.output if isinstance(result.output, dict) else {}
+                    proposal_status = (
+                        "error"
+                        if tool_output.get("error")
+                        else str(tool_output.get("status") or "proposed")
+                    )
+                    await _emit_tool_event(
+                        {
+                            "type": "source_proposal",
+                            "id": call.id,
+                            "status": proposal_status,
+                            "agent_id": tool_output.get("agent_id"),
+                            "kind": tool_output.get("kind") or call.arguments.get("kind"),
+                            "title": tool_output.get("title") or call.arguments.get("title"),
+                            "url": tool_output.get("url") or call.arguments.get("url"),
+                            "content_text": tool_output.get("content_text"),
+                            "reason": tool_output.get("reason")
+                            or call.arguments.get("reason"),
+                            "source_id": tool_output.get("source_id"),
+                            "message": tool_output.get("message") or tool_output.get("error"),
+                            "output": tool_output,
                         }
                     )
                 if isinstance(result.output, dict) and result.output.get("error"):

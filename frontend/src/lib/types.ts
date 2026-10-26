@@ -392,6 +392,28 @@ export type WriteApprovalToolEvent = {
   decision?: "once" | "session" | "always" | "deny" | string
 }
 
+export type SourceProposalToolEvent = {
+  type: "source_proposal"
+  id?: string
+  status?:
+    | "pending"
+    | "proposed"
+    | "already_indexed"
+    | "accepted"
+    | "dismissed"
+    | "error"
+    | string
+  agent_id?: string | null
+  kind?: "url" | "text" | string | null
+  title?: string | null
+  url?: string | null
+  content_text?: string | null
+  reason?: string | null
+  source_id?: number | string | null
+  message?: string | null
+  output?: Record<string, unknown> | null
+}
+
 export type SubagentToolEvent = {
   type: "subagent"
   id?: string
@@ -422,6 +444,7 @@ export type ToolEvent =
   | ReasoningToolEvent
   | SubagentToolEvent
   | WriteApprovalToolEvent
+  | SourceProposalToolEvent
 
 export type GenerationStatus =
   | "queued"

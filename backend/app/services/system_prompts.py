@@ -101,22 +101,33 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     "list_project_sources": (
         "Use list_project_sources to see files, cloud Drive/OneDrive links, and indexed "
         "chats in this project. Pass include_chats=false to list documents only. "
+        "When the project has any sources, check them (list or search) before answering "
+        "questions that the library might cover — then still use general knowledge or "
+        "web tools for wider context the sources do not address. "
         "Cloud sources are live — edit them with Drive/OneDrive tools; the index refreshes "
         "on sync. Image sources include presentation_ref (file_name) — embed that exact "
         "name in Marp/cowork markdown as ![](file_name). Archive uploads list extracted "
         "sub-files."
     ),
     "search_project_sources": (
-        "Use search_project_sources for semantic retrieval over this project's uploaded "
-        "files/URLs/cloud docs (including image descriptions and archive contents) and "
-        "indexed prior chats. When the user wants answers based only on uploaded "
-        "sources/documents (not prior chats), set include_chats=false."
+        "Prefer search_project_sources when this project has indexed material and the "
+        "question may be answered from it. Search before guessing about project docs. "
+        "You may still answer from general knowledge or the web when sources do not "
+        "cover the topic. Set include_chats=false when the user wants answers based only "
+        "on uploaded sources/documents (not prior chats)."
     ),
     "read_project_source": (
         "Use read_project_source to read a project file, cloud-cached doc, or indexed chat "
         "by numeric id. For images it returns the indexed description and attaches the "
         "original image for vision — call it when you need to see the image, not only "
         "the summary."
+    ),
+    "propose_project_source": (
+        "Use propose_project_source to suggest adding a lasting URL or text note to this "
+        "project's library. The user must approve before indexing — never claim it was "
+        "added until they accept. Propose only when the material will help future chats "
+        "(key references, specs, decisions); skip one-off links. Prefer kind=url for "
+        "pages; kind=text for short excerpts or notes."
     ),
 }
 
@@ -134,6 +145,7 @@ TOOL_PROMPT_ORDER = (
     "list_project_sources",
     "search_project_sources",
     "read_project_source",
+    "propose_project_source",
 )
 
 

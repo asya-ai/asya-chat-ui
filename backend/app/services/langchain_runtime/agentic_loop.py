@@ -577,6 +577,19 @@ async def run_agentic_loop_langchain(
                             "output": {},
                         }
                     )
+                elif call.name == "propose_project_source":
+                    await _emit_tool_event(
+                        {
+                            "type": "source_proposal",
+                            "id": call.id,
+                            "status": "pending",
+                            "kind": call_arguments.get("kind"),
+                            "title": call_arguments.get("title"),
+                            "url": call_arguments.get("url"),
+                            "reason": call_arguments.get("reason"),
+                            "output": {},
+                        }
+                    )
                 elif call.name == "start_coworking":
                     await _emit_tool_event(
                         {
@@ -788,6 +801,27 @@ async def run_agentic_loop_langchain(
                             "type": "url_attachments",
                             "id": call.id,
                             "urls": urls if isinstance(urls, list) else [],
+                            "output": tool_output,
+                        }
+                    )
+                elif call.name == "propose_project_source":
+                    proposal_status = "error" if is_error else str(
+                        tool_output.get("status") or "proposed"
+                    )
+                    await _emit_tool_event(
+                        {
+                            "type": "source_proposal",
+                            "id": call.id,
+                            "status": proposal_status,
+                            "agent_id": tool_output.get("agent_id"),
+                            "kind": tool_output.get("kind") or call_arguments.get("kind"),
+                            "title": tool_output.get("title") or call_arguments.get("title"),
+                            "url": tool_output.get("url") or call_arguments.get("url"),
+                            "content_text": tool_output.get("content_text"),
+                            "reason": tool_output.get("reason")
+                            or call_arguments.get("reason"),
+                            "source_id": tool_output.get("source_id"),
+                            "message": tool_output.get("message") or tool_output.get("error"),
                             "output": tool_output,
                         }
                     )

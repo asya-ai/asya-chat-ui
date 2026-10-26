@@ -55,6 +55,16 @@ def test_action_summary_code_execution_falls_back_to_first_code_line():
     )
 
 
+def test_action_summary_propose_project_source():
+    assert (
+        tool_call_action_summary(
+            "propose_project_source",
+            {"kind": "url", "title": "API docs", "url": "https://example.com"},
+        )
+        == "Proposing source: API docs"
+    )
+
+
 def test_action_summary_unknown_tool():
     assert tool_call_action_summary("custom_tool", {}) == "Running custom tool"
 

@@ -112,6 +112,17 @@ def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None)
     if name == "search_past_chats":
         query = str(args.get("query") or "").strip()
         return f"Searching past chats: {query}" if query else "Searching past chats"
+    if name == "propose_project_source":
+        title = str(args.get("title") or "").strip()
+        url = str(args.get("url") or "").strip()
+        kind = str(args.get("kind") or "").strip().lower()
+        if title:
+            return f"Proposing source: {title}"
+        if url:
+            return f"Proposing source: {_display_url(url)}"
+        if kind == "text":
+            return "Proposing text source"
+        return "Proposing project source"
     if name == "start_coworking":
         title = str(args.get("title") or args.get("file_name") or "").strip()
         return f"Opening co-editing: {title}" if title else "Opening co-editing"
@@ -183,6 +194,16 @@ def tool_call_input_preview(name: str, arguments: dict[str, Any] | None = None) 
     if name == "search_past_chats":
         query = str(args.get("query") or "").strip()
         return f"query: {query}" if query else "query: (empty)"
+    if name == "propose_project_source":
+        kind = str(args.get("kind") or "").strip() or "url"
+        title = str(args.get("title") or "").strip()
+        url = str(args.get("url") or "").strip()
+        parts = [f"kind: {kind}"]
+        if title:
+            parts.append(f"title: {title}")
+        if url:
+            parts.append(f"url: {url}")
+        return "; ".join(parts)
     if not args:
         return "no args"
     try:
@@ -251,6 +272,12 @@ def tool_call_output_preview(name: str, output: dict[str, Any] | None = None) ->
         if isinstance(count, int):
             return f"images: {count}"
         return "image generated"
+    if name == "propose_project_source":
+        if output.get("error"):
+            return f"error: {str(output.get('error'))[:160]}"
+        status = str(output.get("status") or "proposed")
+        title = str(output.get("title") or "").strip()
+        return f"{status}: {title}" if title else status
     if name == "store_memory":
         return str(output.get("status", "completed"))
     if name == "remove_memory":

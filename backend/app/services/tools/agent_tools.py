@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
 from sqlmodel import Session, select
@@ -18,6 +19,8 @@ from app.services.tools.registry import ToolResult
 logger = logging.getLogger(__name__)
 
 READ_MAX_CHARS = 8000
+PROPOSE_TEXT_MAX_CHARS = 100_000
+PROPOSE_KINDS = frozenset({"url", "text"})
 
 
 @dataclass
@@ -329,4 +332,159 @@ async def read_project_source(
         name="read_project_source",
         output=output,
         attachments=attachments,
+    )
+
+
+def _normalize_source_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return raw.rstrip("/").lower()
+    scheme = (parsed.scheme or "https").lower()
+    netloc = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/") or ""
+    return urlunparse((scheme, netloc, path, "", parsed.query, ""))
+
+
+def _title_from_url(url: str) -> str:
+    try:
+        host = urlparse(url).netloc or ""
+    except Exception:
+        host = ""
+    return host.strip() or "Web source"
+
+
+def _find_duplicate_source(
+    context: AgentToolContext,
+    *,
+    kind: str,
+    url: str | None,
+    content_text: str | None,
+) -> AgentSource | None:
+    sources = context._all_sources(include_chats=False)
+    if kind == "url":
+        target = _normalize_source_url(url or "")
+        if not target:
+            return None
+        for source in sources:
+            if source.kind not in {AgentSourceKind.url, AgentSourceKind.cloud}:
+                continue
+            if _normalize_source_url(source.url or "") == target:
+                return source
+        return None
+    needle = (content_text or "").strip()
+    if not needle:
+        return None
+    for source in sources:
+        if source.kind != AgentSourceKind.text:
+            continue
+        if (source.content_text or "").strip() == needle:
+            return source
+    return None
+
+
+async def propose_project_source(
+    context: AgentToolContext,
+    *,
+    kind: str,
+    title: str | None = None,
+    url: str | None = None,
+    content_text: str | None = None,
+    reason: str | None = None,
+) -> ToolResult:
+    """Propose indexing a URL or text snippet; user must approve in the UI."""
+    kind_norm = str(kind or "").strip().lower()
+    if kind_norm not in PROPOSE_KINDS:
+        return ToolResult(
+            name="propose_project_source",
+            output={
+                "error": "kind must be 'url' or 'text'.",
+                "status": "error",
+            },
+        )
+
+    clean_title = (title or "").strip() or None
+    clean_reason = (reason or "").strip() or None
+    clean_url = (url or "").strip() or None
+    clean_text = (content_text or "").strip() or None
+
+    if kind_norm == "url":
+        if not clean_url:
+            return ToolResult(
+                name="propose_project_source",
+                output={"error": "url is required when kind is 'url'.", "status": "error"},
+            )
+        parsed = urlparse(clean_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ToolResult(
+                name="propose_project_source",
+                output={
+                    "error": "url must be an http(s) link.",
+                    "status": "error",
+                },
+            )
+        clean_text = None
+        if not clean_title:
+            clean_title = _title_from_url(clean_url)
+    else:
+        if not clean_text:
+            return ToolResult(
+                name="propose_project_source",
+                output={
+                    "error": "content_text is required when kind is 'text'.",
+                    "status": "error",
+                },
+            )
+        if len(clean_text) > PROPOSE_TEXT_MAX_CHARS:
+            return ToolResult(
+                name="propose_project_source",
+                output={
+                    "error": (
+                        f"content_text exceeds {PROPOSE_TEXT_MAX_CHARS} characters; "
+                        "shorten it or propose a URL instead."
+                    ),
+                    "status": "error",
+                },
+            )
+        clean_url = None
+        if not clean_title:
+            clean_title = "Suggested note"
+
+    duplicate = _find_duplicate_source(
+        context, kind=kind_norm, url=clean_url, content_text=clean_text
+    )
+    if duplicate is not None:
+        return ToolResult(
+            name="propose_project_source",
+            output={
+                "status": "already_indexed",
+                "agent_id": str(context.agent_id),
+                "kind": kind_norm,
+                "title": duplicate.title,
+                "url": duplicate.url,
+                "source_id": context.number_for(duplicate.id, include_chats=False),
+                "message": (
+                    "This source is already in the project library; no approval needed."
+                ),
+            },
+        )
+
+    return ToolResult(
+        name="propose_project_source",
+        output={
+            "status": "proposed",
+            "agent_id": str(context.agent_id),
+            "kind": kind_norm,
+            "title": clean_title,
+            "url": clean_url,
+            "content_text": clean_text,
+            "reason": clean_reason,
+            "message": (
+                "Proposed to the user for approval. It is not indexed until they accept. "
+                "Continue the conversation; do not claim it was added yet."
+            ),
+        },
     )
