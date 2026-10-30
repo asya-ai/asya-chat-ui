@@ -37,6 +37,41 @@ describe("splitAssistantStreamParts", () => {
       finalTextParts: parts,
     })
   })
+
+  it("keeps answer visible when a tool row is appended after final text", () => {
+    const parts = [
+      { type: "action" as const, label: "Search" },
+      { type: "text" as const, text: "Here is the answer." },
+      {
+        type: "action" as const,
+        label: "Running get_subagent_result",
+        tool_event: {
+          type: "tool_call" as const,
+          id: "call:late",
+          tool_name: "get_subagent_result",
+          state: "end",
+        },
+      },
+    ]
+    const split = splitAssistantStreamParts(parts, false)
+    expect(split.finalTextParts).toEqual([{ type: "text", text: "Here is the answer." }])
+    expect(split.thoughtParts).toEqual([parts[0]])
+  })
+
+  it("ignores trailing agent_step_timing when splitting final answer", () => {
+    const parts = [
+      { type: "action" as const, label: "Running code" },
+      { type: "text" as const, text: "Full answer body." },
+      {
+        type: "action" as const,
+        label: "Running tool",
+        tool_event: { type: "agent_step_timing" as const, id: "agent_step_timing_0" },
+      },
+    ]
+    const split = splitAssistantStreamParts(parts, false)
+    expect(split.thoughtParts).toEqual([parts[0]])
+    expect(split.finalTextParts).toEqual([{ type: "text", text: "Full answer body." }])
+  })
 })
 
 describe("getFinalAnswerText", () => {

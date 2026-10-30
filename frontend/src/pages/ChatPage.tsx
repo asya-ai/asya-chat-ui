@@ -4,7 +4,7 @@ import { flushSync } from "react-dom"
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { agentApi, ApiError, chatApi, configApi, mcpApi } from "@/lib/api"
+import { agentApi, ApiError, chatApi, configApi, mcpApi, ttsApi } from "@/lib/api"
 import { chatGenerationIndicatorsStore, useChatGenerationIndicators } from "@/lib/chat-generation-indicators"
 import { composerDraftStore } from "@/lib/composer-drafts"
 import {
@@ -28,6 +28,7 @@ import type {
   McpPrompt,
   Prompt,
   SourceItem,
+  TtsStatus,
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { useBranding } from "@/lib/branding"
@@ -698,6 +699,7 @@ export const ChatPage = () => {
   const [actionInfoLevel, setActionInfoLevel] = useState<ActionInfoLevel>(() =>
     actionInfoLevelStore.get()
   )
+  const [ttsStatus, setTtsStatus] = useState<TtsStatus | null>(null)
   const [previewAttachment, setPreviewAttachment] =
     useState<ChatMessageAttachmentInput | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -1160,10 +1162,13 @@ export const ChatPage = () => {
                 }
               }
               // Keep a chronological action log (allow repeats for distinct runs).
+              const timelineAction =
+                !isTerminalStatus(msg.generation_status ?? null) &&
+                isTimelineActionLabel(activity.label)
               return {
                 ...msg,
                 thinking_steps: [...current, activity.label],
-                stream_parts: isTimelineActionLabel(activity.label)
+                stream_parts: timelineAction
                   ? appendStreamAction(msg.stream_parts, activity.label)
                   : msg.stream_parts,
               }
@@ -1189,22 +1194,30 @@ export const ChatPage = () => {
       if ("tool_event" in event) {
         const toolEvent = event.tool_event as ChatMessage["tool_event"]
         if (toolEvent) {
+          if (toolEvent.type === "agent_step_timing") {
+            return
+          }
           if (toolEvent.type === "coworking") {
             coworkHandleRef.current?.(toolEvent)
+            // Snapshot pushed after the answer so the editor can refresh.
+            // It is not a timeline step; attaching it folds the reply into thoughts.
+            if (!toolEvent.id && toolEvent.output?.synced && !toolEvent.output?.tool_name) {
+              return
+            }
           }
           appendToolEvent(
             toolEvent,
             typeof event.task_id === "string" ? event.task_id : null
           )
           updateChatMessagesFor(targetChatId, (prev) =>
-            prev.map((msg) =>
-              matchesAssistant(msg)
-                ? {
-                    ...msg,
-                    stream_parts: attachStreamActionToolEvent(msg.stream_parts, toolEvent),
-                  }
-                : msg
-            )
+            prev.map((msg) => {
+              if (!matchesAssistant(msg)) return msg
+              if (isTerminalStatus(msg.generation_status ?? null)) return msg
+              return {
+                ...msg,
+                stream_parts: attachStreamActionToolEvent(msg.stream_parts, toolEvent),
+              }
+            })
           )
           if (
             toolEvent.type === "tool_call" &&
@@ -1215,26 +1228,34 @@ export const ChatPage = () => {
             const attachments = toolEvent.output.attachments
             const label = resolveToolEventActionLabel(toolEvent)
             updateChatMessagesFor(targetChatId, (prev) =>
-              prev.map((msg) =>
-                matchesAssistant(msg)
-                  ? {
-                      ...msg,
-                      stream_parts: attachStreamActionAttachments(
-                        msg.stream_parts,
-                        label,
-                        attachments
-                      ),
-                      attachments: mergeMessageAttachments(msg.attachments, attachments),
-                    }
-                  : msg
-              )
+              prev.map((msg) => {
+                if (!matchesAssistant(msg)) return msg
+                if (isTerminalStatus(msg.generation_status ?? null)) return msg
+                return {
+                  ...msg,
+                  stream_parts: attachStreamActionAttachments(
+                    msg.stream_parts,
+                    label,
+                    attachments
+                  ),
+                  attachments: mergeMessageAttachments(msg.attachments, attachments),
+                }
+              })
             )
           }
         }
         return
       }
     },
-    [appendToolEvent, orgId, queryClient, t, updateChatMessagesFor, setChatGenerating]
+    [
+      appendToolEvent,
+      isTerminalStatus,
+      orgId,
+      queryClient,
+      t,
+      updateChatMessagesFor,
+      setChatGenerating,
+    ]
   )
 
   const normalizeTaskEvent = useCallback(
@@ -1987,6 +2008,17 @@ export const ChatPage = () => {
       window.removeEventListener("focus", onFocus)
     }
   }, [])
+
+  useEffect(() => {
+    if (isSharedView) {
+      setTtsStatus(null)
+      return
+    }
+    ttsApi
+      .status()
+      .then(setTtsStatus)
+      .catch(() => setTtsStatus(null))
+  }, [isSharedView])
 
   useEffect(() => {
     if (!chatId) return
@@ -3815,6 +3847,7 @@ export const ChatPage = () => {
           currentToolLabel={isSharedView ? null : currentToolLabel}
           actionInfoLevel={isSharedView ? "none" : actionInfoLevel}
           actionsEnabled={!isSharedView}
+          ttsStatus={isSharedView ? null : ttsStatus}
           isEditing={isEditing}
           isEditDragActive={isEditing && isEditDragActive}
           editingAttachments={isEditing ? editingAttachments : []}
@@ -3873,7 +3906,7 @@ export const ChatPage = () => {
       removeEditingAttachment,
       actionInfoLevel,
       isSharedView,
-      actionInfoLevel,
+      ttsStatus,
       visibleMessages,
     ]
   )

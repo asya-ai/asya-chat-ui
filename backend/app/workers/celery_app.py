@@ -74,5 +74,6 @@ celery_app.conf.update(
 
 celery_app.autodiscover_tasks(["app.workers"])
 
-# Register worker_process_init hooks (scraper DNS probe, etc.).
+# Register worker lifecycle hooks (scraper DNS probe, interrupted-gen resume).
+from app.workers import generation_resume as _generation_resume  # noqa: E402,F401
 from app.workers import scraper_dns as _scraper_dns  # noqa: E402,F401

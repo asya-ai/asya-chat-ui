@@ -50,15 +50,20 @@ import {
   MERMAID_DIAGRAM_START,
 } from "@/lib/sanitizeMermaid"
 import { MermaidDiagram } from "@/pages/chat/MermaidDiagram"
-import type { ActionInfoLevel } from "@/lib/storage"
+import { plainTextForTts } from "@/lib/plainTextForTts"
+import { compactThinkingActivity } from "@/lib/thinkingActivityHint"
+import { canUseTtsPlayback } from "@/lib/ttsPlayback"
+import { type ActionInfoLevel } from "@/lib/storage"
 import type {
   ChatMessage,
   ChatMessageAttachmentInput,
   MessageUsage,
   SourceItem,
   ToolEvent,
+  TtsStatus,
 } from "@/lib/types"
-import { dedupeSources } from "@/lib/types"
+import { SpeakMessageButton } from "@/pages/chat/SpeakMessageButton"
+import { dedupeSources, isInternalToolEvent } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -105,6 +110,7 @@ type MessageBubbleProps = {
   currentToolLabel: string | null
   actionInfoLevel: ActionInfoLevel
   actionsEnabled: boolean
+  ttsStatus?: TtsStatus | null
   isEditing: boolean
   isEditDragActive: boolean
   editingAttachments: ChatMessageAttachmentInput[]
@@ -267,6 +273,23 @@ const delimiterRow = (columnCount: number, source?: string): string => {
   const cells = source ? splitPipeCells(source) : []
   while (cells.length < columnCount) cells.push(" --- ")
   return pipeRow(cells.slice(0, Math.max(columnCount, cells.length)).map(formatDelimiterCell))
+}
+
+/**
+ * Markdown collapses 3+ newlines into one paragraph break. Keep extras as
+ * empty paragraphs (nbsp) so user-typed blank lines stay visible.
+ */
+const preserveMarkdownBlankLines = (markdown: string): string => {
+  const parts = markdown.split(/(```[\s\S]*?```)/g)
+  return parts
+    .map((part) => {
+      if (part.startsWith("```")) return part
+      return part.replace(/\n{3,}/g, (run) => {
+        const extra = run.length - 2
+        return `\n\n${"\u00A0\n\n".repeat(extra)}`
+      })
+    })
+    .join("")
 }
 
 /** Close a trailing GFM table so remark-gfm can render it while the model is still streaming. */
@@ -508,9 +531,24 @@ export const splitAssistantStreamParts = (
   if (parts.length === 0) return { thoughtParts: [], finalTextParts: [] }
   if (isThinking) return { thoughtParts: parts, finalTextParts: [] }
 
+  // Trailing tool/activity rows after the answer (e.g. post-turn sync) must not
+  // hide the reply — anchor the split on the last non-empty text chunk.
+  let lastTextIndex = -1
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i]
+    if (part?.type === "text" && part.text.trim()) {
+      lastTextIndex = i
+      break
+    }
+  }
+
   let lastActionIndex = -1
-  for (let i = 0; i < parts.length; i += 1) {
-    if (parts[i]?.type === "action") lastActionIndex = i
+  const actionSearchEnd = lastTextIndex >= 0 ? lastTextIndex : parts.length
+  for (let i = 0; i < actionSearchEnd; i += 1) {
+    const part = parts[i]
+    if (part?.type !== "action") continue
+    if (part.tool_event && isInternalToolEvent(part.tool_event)) continue
+    lastActionIndex = i
   }
   if (lastActionIndex < 0) {
     return {
@@ -1224,7 +1262,7 @@ const DeferredMarkdown = ({
   return (
     <div className="chat-markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
         rehypePlugins={[rehypeKatex]}
         components={components}
       >
@@ -1295,6 +1333,7 @@ const MessageBubbleComponent = ({
   currentToolLabel,
   actionInfoLevel,
   actionsEnabled,
+  ttsStatus = null,
   isEditing,
   isEditDragActive,
   editingAttachments,
@@ -1331,7 +1370,6 @@ const MessageBubbleComponent = ({
   const { appTitle: brandingTitle, logoUrl } = useBranding()
   const { data: currentUser } = useMe()
   const currentUserId = currentUser?.id
-
   useEffect(() => {
     if (!isEditing) return
     setHasEditText(Boolean(msg.content.trim()))
@@ -1400,8 +1438,9 @@ const MessageBubbleComponent = ({
       sourceProposalEvent
   )
   const finalAnswerText = useMemo(() => getFinalAnswerText(msg), [msg])
+  const speakText = useMemo(() => plainTextForTts(finalAnswerText), [finalAnswerText])
   const canCopyMessage = Boolean(
-    isUser ? msg.content.trim() : finalAnswerText
+    isUser ? msg.content.trim() : !isThinking && finalAnswerText
   )
   const uniqueSources = msg.sources?.length ? dedupeSources(msg.sources) : []
   const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
@@ -1472,16 +1511,35 @@ const MessageBubbleComponent = ({
     if (hasFinalAnswerText) setThinkingOpen(false)
   }, [isThinking, hasFinalAnswerText])
 
+  const thinkingActivityHint = useMemo(() => {
+    const raw =
+      currentToolLabel ??
+      (thinkingLabels.length > 0 ? thinkingLabels[thinkingLabels.length - 1] : null)
+    return compactThinkingActivity(raw)
+  }, [currentToolLabel, thinkingLabels])
+
   const thinkingTrailTitle = (() => {
+    const timeRunning = formatThinkingClock(thinkingElapsedMs)
     if (isThoughtClockRunning) {
-      return t("chat_thinking_timer", { time: formatThinkingClock(thinkingElapsedMs) })
+      return thinkingActivityHint
+        ? t("chat_thinking_timer_activity", {
+            time: timeRunning,
+            activity: thinkingActivityHint,
+          })
+        : t("chat_thinking_timer", { time: timeRunning })
     }
     const doneMs =
       thoughtDurationMs ??
       (thinkingElapsedMs > 0 ? thinkingElapsedMs : null) ??
       resolvePersistedThoughtMs(msg)
     if (doneMs != null && doneMs > 0) {
-      return t("chat_thought_for", { time: formatThinkingClock(doneMs) })
+      const timeDone = formatThinkingClock(doneMs)
+      return thinkingActivityHint
+        ? t("chat_thought_for_activity", {
+            time: timeDone,
+            activity: thinkingActivityHint,
+          })
+        : t("chat_thought_for", { time: timeDone })
     }
     return t("chat_thinking")
   })()
@@ -1491,7 +1549,14 @@ const MessageBubbleComponent = ({
       p({ children, node, ...rest }: any) {
         void node
         return (
-          <p className={isUser ? "m-0 leading-6" : "my-3 leading-7"} {...rest}>
+          <p
+            className={
+              isUser
+                ? "my-2 first:mt-0 last:mb-0 leading-6"
+                : "my-3 leading-7"
+            }
+            {...rest}
+          >
             {children}
           </p>
         )
@@ -1715,7 +1780,7 @@ const MessageBubbleComponent = ({
   const renderMarkdown = (markdown: string, key?: string) => (
     <DeferredMarkdown
       key={key}
-      markdown={markdown}
+      markdown={isUser ? preserveMarkdownBlankLines(markdown) : markdown}
       urgent={isLiveGeneration}
       components={markdownComponents}
     />
@@ -1753,16 +1818,24 @@ const MessageBubbleComponent = ({
   }
   const showUserSideActions =
     isUser && !isEditing && (canCopyMessage || actionsEnabled)
+  const canSpeakMessage =
+    canUseTtsPlayback(ttsStatus) &&
+    Boolean(speakText) &&
+    !isUser &&
+    !isEditing &&
+    !isThinking
+  const showAssistantAnswerActions = !isThinking
   const showAssistantFooter =
     !isUser &&
     !isEditing &&
     (canCopyMessage ||
+      canSpeakMessage ||
       uniqueSources.length > 0 ||
       Boolean(msg.model_name) ||
       (actionInfoLevel === "detailed" &&
         ((msg.usage?.total_tokens ?? 0) > 0 ||
           resolveTotalTimeMs(msg.usage) != null)) ||
-      Boolean(onForkChat) ||
+      (!isThinking && Boolean(onForkChat)) ||
       (actionsEnabled && msg.generation_status === "failed"))
 
   const authorLabel =
@@ -2401,6 +2474,7 @@ const MessageBubbleComponent = ({
         {showAssistantFooter ? (
           <div className="flex flex-wrap justify-between items-center gap-2 mt-2 transition">
             <div className="flex justify-start items-center gap-1">
+              {showAssistantAnswerActions ? (
               <TooltipProvider delayDuration={300}>
                 <div className="flex items-center gap-1">
                   {canCopyMessage ? (
@@ -2418,6 +2492,9 @@ const MessageBubbleComponent = ({
                       </TooltipTrigger>
                       <TooltipContent>{t("chat_copy_message")}</TooltipContent>
                     </Tooltip>
+                  ) : null}
+                  {canSpeakMessage ? (
+                    <SpeakMessageButton text={speakText} ttsStatus={ttsStatus} />
                   ) : null}
                   {canCopyMessage ? (
                     <DropdownMenu>
@@ -2515,6 +2592,7 @@ const MessageBubbleComponent = ({
                   ) : null}
                 </div>
               </TooltipProvider>
+              ) : null}
               {uniqueSources.length > 0 ||
               ((msg.usage?.total_tokens ?? 0) > 0) ||
               (actionInfoLevel === "detailed" &&
@@ -2662,6 +2740,7 @@ export const MessageBubble = memo(
     if (prev.currentToolLabel !== next.currentToolLabel) return false
     if (prev.actionInfoLevel !== next.actionInfoLevel) return false
     if (prev.actionsEnabled !== next.actionsEnabled) return false
+    if (prev.ttsStatus !== next.ttsStatus) return false
     if (prev.isEditing !== next.isEditing) return false
     if (prev.codeTheme !== next.codeTheme) return false
     if (prev.t !== next.t) return false

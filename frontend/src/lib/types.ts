@@ -435,6 +435,19 @@ export type SubagentToolEvent = {
   } | null
 }
 
+/** Diagnostics replay only — excluded from the visible timeline. */
+export type AgentStepTimingToolEvent = {
+  type: "agent_step_timing"
+  id: string
+  step?: number
+  max_steps?: number
+  model_ms?: number
+  tools_ms?: number
+  tool_names?: string[]
+  finish_reason?: string | null
+  output?: Record<string, unknown>
+}
+
 export type ToolEvent =
   | CodeExecutionToolEvent
   | ContextSummaryToolEvent
@@ -445,6 +458,10 @@ export type ToolEvent =
   | SubagentToolEvent
   | WriteApprovalToolEvent
   | SourceProposalToolEvent
+  | AgentStepTimingToolEvent
+
+export const isInternalToolEvent = (event: ToolEvent): boolean =>
+  event.type === "agent_step_timing"
 
 export type GenerationStatus =
   | "queued"
@@ -564,6 +581,56 @@ export type UsageLimits = {
   month: string
   user: UsageLimitInfo
   org?: UsageLimitInfo | null
+}
+
+export type AnalyticsOverview = {
+  month: string
+  seats: number
+  active_users: number
+  mau: number
+  wau: number
+  dau_avg: number
+  chats_created: number
+  user_messages: number
+  assistant_messages: number
+  dormant_users: number
+}
+
+export type AnalyticsDailyPoint = {
+  date: string
+  active_users: number
+  chats_created: number
+  messages: number
+}
+
+export type AnalyticsUserRow = {
+  user_id: string
+  name: string
+  last_active_at?: string | null
+  chats: number
+  messages: number
+  dormant: boolean
+}
+
+export type AnalyticsFeatureRow = {
+  feature: string
+  label: string
+  unique_users: number
+  event_count: number
+  forward_looking?: boolean
+}
+
+export type AnalyticsOrgRow = {
+  org_id: string
+  name: string
+  active_users: number
+  chats_created: number
+  top_feature?: string | null
+}
+
+export type AnalyticsFeaturesResponse = {
+  features: AnalyticsFeatureRow[]
+  by_org: AnalyticsOrgRow[]
 }
 
 export type EnvKeyDiagnosis = {
@@ -760,6 +827,56 @@ export type InstanceProviderUpdate = {
   base_url?: string | null
   endpoint?: string | null
   config_json?: string | null
+}
+
+export type TtsProviderId =
+  | "asya"
+  | "openai"
+  | "google"
+  | "elevenlabs"
+  | "azure"
+  | "browser"
+
+export type TtsVoice = {
+  id: string
+  name: string
+  language?: string | null
+}
+
+export type TtsSettings = {
+  provider: TtsProviderId | string
+  is_enabled: boolean
+  api_key_set: boolean
+  base_url?: string | null
+  voice_id?: string | null
+  voice_label?: string | null
+  region?: string | null
+  model?: string | null
+  language?: string | null
+  speed?: number | null
+  providers: string[]
+}
+
+export type TtsSettingsUpdate = {
+  provider?: string | null
+  is_enabled?: boolean | null
+  api_key?: string | null
+  clear_api_key?: boolean
+  base_url?: string | null
+  voice_id?: string | null
+  voice_label?: string | null
+  region?: string | null
+  model?: string | null
+  language?: string | null
+  model_id?: string | null
+  speed?: number | null
+}
+
+export type TtsStatus = {
+  enabled: boolean
+  provider: TtsProviderId | string
+  voice_id?: string | null
+  voice_label?: string | null
 }
 
 export type Invite = {

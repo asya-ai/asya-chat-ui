@@ -50,7 +50,8 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "When working in a project, project source files are also available under "
         "/inputs/project/. "
         "If image metadata (width/height/exif) is already present in context, do not call "
-        "code_execution only to re-read those same basics."
+        "code_execution only to re-read those same basics. "
+        "If code_execution fails, retry with a simpler read/list script; do not ask the user to paste files already attached."
     ),
     "extract_pdf": (
         "Use extract_pdf for PDF files in chat attachments. "
@@ -118,9 +119,9 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     ),
     "read_project_source": (
         "Use read_project_source to read a project file, cloud-cached doc, or indexed chat "
-        "by numeric id. For images it returns the indexed description and attaches the "
-        "original image for vision — call it when you need to see the image, not only "
-        "the summary."
+        "by numeric id. When content is empty or you need the full code file, use "
+        "code_execution on code_execution_path from the tool result. For images it returns "
+        "the indexed description and attaches the original image for vision."
     ),
     "propose_project_source": (
         "Use propose_project_source to suggest adding a lasting URL or text note to this "

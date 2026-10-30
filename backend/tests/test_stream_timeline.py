@@ -316,3 +316,35 @@ def test_build_stream_parts_maps_duplicate_generated_png_uniquely():
         "https://example.test/2.png",
         "https://example.test/3.png",
     ]
+
+
+def test_build_stream_parts_ignores_trailing_cowork_sync_snapshot():
+    """The post-answer document sync must not become the last timeline action."""
+    events = [
+        _event(
+            "tool_event",
+            {"type": "reasoning", "id": "reasoning_0", "content": "Check the image."},
+            1,
+        ),
+        _event("delta", {"delta": "The write finished."}, 2),
+        _event(
+            "tool_event",
+            {
+                "type": "coworking",
+                "action": "update",
+                "document_id": "doc-1",
+                "title": "Notes",
+                "output": {"status": "ok", "synced": True},
+            },
+            3,
+        ),
+    ]
+
+    parts, _thinking_steps = _build_stream_parts_from_events(
+        events,
+        message_content="The write finished.",
+    )
+
+    assert parts is not None
+    assert [part.get("label") for part in parts if part.get("type") == "action"] == ["Thoughts"]
+    assert parts[-1] == {"type": "text", "text": "The write finished."}

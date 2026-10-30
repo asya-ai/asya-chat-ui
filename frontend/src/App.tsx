@@ -31,6 +31,10 @@ const App = () => {
       document.title = t("app_title_usage", { app: appTitle })
       return
     }
+    if (path === "/analytics") {
+      document.title = t("app_title_analytics", { app: appTitle })
+      return
+    }
     if (path === "/login") {
       document.title = t("app_title_login", { app: appTitle })
       return

@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, JSON, String, UniqueConstraint, event, inspect, update
+from sqlalchemy import Column, Index, JSON, String, UniqueConstraint, event, inspect, update
 from sqlmodel import Field, Relationship, SQLModel, Session
 
 
@@ -319,6 +319,20 @@ class WhitelabelSettings(SQLModel, table=True):
     app_title: Optional[str] = Field(default=None)
     logo_path: Optional[str] = Field(default=None)
     logo_content_type: Optional[str] = Field(default=None)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+
+class InstanceTtsSettings(SQLModel, table=True):
+    __tablename__ = "instance_tts_settings"
+
+    id: int = Field(default=1, primary_key=True)
+    provider: str = Field(default="asya", index=True)
+    is_enabled: bool = Field(default=False)
+    api_key: Optional[str] = Field(default=None)
+    base_url: Optional[str] = Field(default=None)
+    voice_id: Optional[str] = Field(default=None)
+    voice_label: Optional[str] = Field(default=None)
+    config_json: Optional[str] = Field(default=None)
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
@@ -672,6 +686,23 @@ class UsageEvent(SQLModel, table=True):
     org: Optional[Org] = Relationship(back_populates="usage_events")
     user: Optional[User] = Relationship(back_populates="usage_events")
     model: Optional[ChatModel] = Relationship(back_populates="usage_events")
+
+
+class FeatureEvent(SQLModel, table=True):
+    """Forward-looking tool/feature usage for analytics (not cost)."""
+
+    __tablename__ = "feature_events"
+    __table_args__ = (
+        Index("ix_feature_events_org_created", "org_id", "created_at"),
+        Index("ix_feature_events_feature_created", "feature", "created_at"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    org_id: UUID = Field(foreign_key="orgs.id", index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True)
+    chat_id: Optional[UUID] = Field(default=None, foreign_key="chats.id", index=True)
+    feature: str = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
 
 class UserMemory(SQLModel, table=True):

@@ -25,6 +25,10 @@ import type {
   InstanceProvider,
   InstanceProviderCreate,
   InstanceProviderUpdate,
+  TtsSettings,
+  TtsSettingsUpdate,
+  TtsStatus,
+  TtsVoice,
   Branding,
   WhitelabelSettings,
   OrgAuthSettings,
@@ -33,6 +37,10 @@ import type {
   UsageDailyPoint,
   UsageUserOption,
   UsageLimits,
+  AnalyticsOverview,
+  AnalyticsDailyPoint,
+  AnalyticsUserRow,
+  AnalyticsFeaturesResponse,
   SystemDiagnosis,
   ApiKey,
   UserMemory,
@@ -602,6 +610,36 @@ export const usageApi = {
   },
 }
 
+const analyticsParams = (orgId: string | null, month?: string) => {
+  const params = new URLSearchParams()
+  if (orgId) params.set("org_id", orgId)
+  if (month) params.set("month", month)
+  return params.toString()
+}
+
+export const analyticsApi = {
+  overview: (orgId: string | null, month?: string) => {
+    const query = analyticsParams(orgId, month)
+    return apiFetch<AnalyticsOverview>(`/analytics/overview${query ? `?${query}` : ""}`)
+  },
+  daily: (orgId: string | null, month?: string) => {
+    const query = analyticsParams(orgId, month)
+    return apiFetch<AnalyticsDailyPoint[]>(
+      `/analytics/engagement/daily${query ? `?${query}` : ""}`
+    )
+  },
+  users: (orgId: string | null, month?: string) => {
+    const query = analyticsParams(orgId, month)
+    return apiFetch<AnalyticsUserRow[]>(`/analytics/users${query ? `?${query}` : ""}`)
+  },
+  features: (orgId: string | null, month?: string) => {
+    const query = analyticsParams(orgId, month)
+    return apiFetch<AnalyticsFeaturesResponse>(
+      `/analytics/features${query ? `?${query}` : ""}`
+    )
+  },
+}
+
 export const systemDiagnosisApi = {
   get: () => apiFetch<SystemDiagnosis>("/admin/system-diagnosis"),
 }
@@ -622,6 +660,57 @@ export const instanceProviderApi = {
     apiFetch<void>(`/admin/instance-providers/${encodeURIComponent(provider)}`, {
       method: "DELETE",
     }),
+}
+
+export const ttsApi = {
+  status: () => apiFetch<TtsStatus>("/tts/status"),
+  getSettings: () => apiFetch<TtsSettings>("/tts/settings"),
+  updateSettings: (payload: TtsSettingsUpdate) =>
+    apiFetch<TtsSettings>("/tts/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  listVoices: (preview?: {
+    provider?: string
+    api_key?: string
+    base_url?: string | null
+    region?: string | null
+    model?: string | null
+    language?: string | null
+    model_id?: string | null
+  }) =>
+    preview
+      ? apiFetch<TtsVoice[]>("/tts/voices", {
+          method: "POST",
+          body: JSON.stringify(preview),
+        })
+      : apiFetch<TtsVoice[]>("/tts/voices"),
+  synthesize: async (text: string) => {
+    const headers = new Headers({ "Content-Type": "application/json" })
+    const token = tokenStore.get()
+    if (token) headers.set("Authorization", `Bearer ${token}`)
+    const response = await fetch(`${API_BASE}/tts/synthesize`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text }),
+    })
+    if (!response.ok) {
+      let detail = "TTS failed"
+      try {
+        const data = (await response.json()) as { detail?: string }
+        if (data.detail) detail = String(data.detail)
+      } catch {
+        // keep default
+      }
+      throw new ApiError(detail, response.status)
+    }
+    const buffer = await response.arrayBuffer()
+    if (!buffer.byteLength) {
+      throw new ApiError("TTS returned empty audio", response.status)
+    }
+    const mediaType = (response.headers.get("Content-Type") ?? "audio/mpeg").split(";")[0]
+    return new Blob([buffer], { type: mediaType.trim() || "audio/mpeg" })
+  },
 }
 
 export type WritePreferencesStatus = {

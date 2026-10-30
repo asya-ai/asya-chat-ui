@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     exec_timeout_seconds: int = Field(
         default=120, validation_alias="EXEC_TIMEOUT_SECONDS"
     )
+    exec_session_container_seconds: int = Field(
+        default=180,
+        validation_alias="EXEC_SESSION_CONTAINER_SECONDS",
+        description="Max lifetime of an idle exec session holder container (bounded sleep).",
+    )
     exec_max_output_bytes: int = Field(
         default=20000, validation_alias="EXEC_MAX_OUTPUT_BYTES"
     )

@@ -152,6 +152,8 @@ class CodeExecutionContext:
     agent_id: str | None = None
     filespace_chat_id: str | None = None
     family_chat_ids: list[str] | None = None
+    generation_task_id: str | None = None
+    exec_session_id: str | None = None
 
 
 def _collect_imports(code: str) -> set[str]:
@@ -886,17 +888,29 @@ async def run_code_execution(
             )
         ).all()
 
+    from app.services.tools.exec_session import (
+        exec_session_key,
+        prepare_session_paths,
+        refresh_inputs_dir,
+        run_in_exec_session,
+    )
+
+    exec_session_id = context.exec_session_id
+    if not context.generation_task_id and not exec_session_id:
+        exec_session_id = f"chat-{context.chat_id}"
     try:
-        (
-            inputs_dir,
-            work_dir,
-            outputs_dir,
-            host_inputs_dir,
-            host_work_dir,
-            host_outputs_dir,
-        ) = _prepare_run_dirs(filespace_id)
+        session_key = exec_session_key(
+            generation_task_id=context.generation_task_id,
+            exec_session_id=exec_session_id,
+        )
+        paths = prepare_session_paths(filespace_id, session_key)
     except ValueError as exc:
         return ToolResult(name="code_execution", output={"error": str(exc)})
+
+    inputs_dir = paths.inputs_dir
+    work_dir = paths.work_dir
+    outputs_dir = paths.outputs_dir
+    refresh_inputs_dir(inputs_dir)
     inputs = _write_inputs(attachments, inputs_dir)
     if context.agent_id:
         try:
@@ -937,15 +951,32 @@ async def run_code_execution(
     code_path = work_dir / "main.py"
     code_path.write_text(_auto_display_last_expr(code), encoding="utf-8")
     (work_dir / "_sandbox_bootstrap.py").write_text(_EXEC_BOOTSTRAP, encoding="utf-8")
-    def _runner():
-        return _run_container(
-            host_inputs_dir=host_inputs_dir,
-            host_work_dir=host_work_dir,
-            host_outputs_dir=host_outputs_dir,
-            timeout_seconds=settings.exec_timeout_seconds,
-        )
+    exec_timing: dict[str, int] = {}
     try:
-        stdout, stderr, exit_code, timed_out = await anyio.to_thread.run_sync(_runner)
+        try:
+            stdout, stderr, exit_code, timed_out, exec_timing = await run_in_exec_session(
+                session_key=session_key,
+                paths=paths,
+                timeout_seconds=settings.exec_timeout_seconds,
+                build_image_if_missing=_build_executor_image,
+            )
+        except Exception as session_exc:
+            logger.warning(
+                "Session sandbox failed key=%s: %s; falling back to one-shot container",
+                session_key,
+                session_exc,
+                exc_info=True,
+            )
+
+            def _one_shot() -> tuple[str, str, int | None, bool]:
+                return _run_container(
+                    host_inputs_dir=paths.host_inputs_dir,
+                    host_work_dir=paths.host_work_dir,
+                    host_outputs_dir=paths.host_outputs_dir,
+                    timeout_seconds=settings.exec_timeout_seconds,
+                )
+
+            stdout, stderr, exit_code, timed_out = await anyio.to_thread.run_sync(_one_shot)
     except ImageNotFound:
         return ToolResult(
             name="code_execution",
@@ -966,7 +997,14 @@ async def run_code_execution(
     except Exception as exc:
         return ToolResult(
             name="code_execution",
-            output={"error": f"Execution failed: {exc}"},
+            output={
+                "error": f"Execution failed: {exc}",
+                "inputs": inputs or None,
+                "hint": (
+                    "Chat attachments are staged under /inputs (see inputs). "
+                    "Retry code_execution to list or read them; do not ask the user to paste files."
+                ),
+            },
         )
 
     combined = (stdout + stderr).encode("utf-8")
@@ -1012,6 +1050,7 @@ async def run_code_execution(
             ],
             "outputs": [item["file_name"] for item in attachments_out],
             "output_files": output_items,
+            "_exec_timing_ms": exec_timing,
             # Full payloads for UI stream (not needed in model-facing summary if huge —
             # kept for agentic_loop coworking events).
             "_cowork_updated_payloads": cowork_updated,

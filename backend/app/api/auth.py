@@ -596,7 +596,7 @@ async def _post_oidc_token(
         supported_methods=supported_methods,
     )
     token_payload: dict[str, Any] | None = None
-    last_exc: httpx.HTTPStatusError | None = None
+    last_exc: httpx.HTTPError | None = None
     async with httpx.AsyncClient(timeout=10) as client:
         for label, extra in auth_methods:
             try:
@@ -617,6 +617,14 @@ async def _post_oidc_token(
                     "OIDC token request failed (%s): %s",
                     label,
                     exc.response.text,
+                    exc_info=True,
+                )
+            except httpx.RequestError as exc:
+                last_exc = exc
+                logger.error(
+                    "OIDC token request failed (%s): %s",
+                    label,
+                    exc,
                     exc_info=True,
                 )
     if token_payload is None:

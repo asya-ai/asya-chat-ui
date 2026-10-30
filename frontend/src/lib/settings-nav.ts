@@ -19,6 +19,7 @@ export type SettingsNavGroup = {
 const isPathActive = (pathname: string, href: string) => {
   if (href === "/settings/me") return pathname.startsWith("/settings/me")
   if (href === "/usage") return pathname.startsWith("/usage")
+  if (href === "/analytics") return pathname.startsWith("/analytics")
   return pathname.startsWith(href)
 }
 
@@ -72,6 +73,7 @@ export const useSettingsNav = (options: { isAdmin: boolean; isSuperAdmin: boolea
           item(t("org_section_orgs"), "/settings/organisation", options.isSuperAdmin),
           item(t("org_section_models"), "/settings/models", options.isSuperAdmin),
           item(t("usage_title"), "/usage", options.isAdmin || options.isSuperAdmin),
+          item(t("analytics_title"), "/analytics", options.isAdmin || options.isSuperAdmin),
         ],
       },
       {

@@ -146,6 +146,9 @@ services:
       scraper:
         condition: service_healthy
     command: ["uv", "run", "celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "-Q", "generation,celery,embedding", "--concurrency=${WORKER_CONCURRENCY:-2}", "--prefetch-multiplier=1"]
+    # Warm-shutdown window so short gens finish; longer ones requeue on boot.
+    stop_signal: SIGTERM
+    stop_grace_period: 3m
     deploy:
       replicas: ${WORKER_REPLICAS:-1}
       restart_policy:

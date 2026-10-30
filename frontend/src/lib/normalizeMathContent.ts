@@ -1,10 +1,18 @@
 /**
- * remark-math only understands `$` / `$$`. Models often emit LaTeX with
- * `\[...\]` / `\(...\)`. CommonMark treats `\[` as an escaped `[`, so those
- * blocks render as literal "[ ... ]" with raw TeX — exactly the broken chat UI.
+ * remark-math understands `$` / `$$`. Chat renders with
+ * `singleDollarTextMath: false` so currency like `$20` stays prose; we normalize
+ * model delimiters (`\[…\]`, `\(...\)`, math-looking `$…$`) to `$$…$$`.
+ * CommonMark treats `\[` as an escaped `[`, so without this those blocks
+ * render as literal "[ ... ]" with raw TeX.
  */
 
 const INLINE_CODE_RE = /(?<!\\)(`+)([\s\S]*?)\1/g
+
+/** Interior of `$…$` that is clearly LaTeX (not currency). */
+const LOOKS_LIKE_MATH_RE = /\\[A-Za-z]|[=^_]|[<>≤≥≠∈∉⊂⊃∪∩±∞∑∫√]/
+
+/** Shell / prose between dollars — never promote (quotes, pipes, paths). */
+const SHELL_OR_PROSE_RE = /["'`|;]|\/[A-Za-z]/
 
 const mapOutsideFences = (content: string, map: (segment: string) => string): string => {
   const lines = content.split(/\r?\n/)
@@ -63,10 +71,12 @@ const convertLatexDelimiters = (text: string): string => {
     // Keep display math on its own lines when the model used a multiline block.
     return body.includes("\n") ? `$$\n${trimmed}\n$$` : `$$${trimmed}$$`
   })
-  // Inline math: \( ... \) → $ ... $
-  next = next.replace(/\\\(([\s\S]*?)\\\)/g, (_, body: string) => `$${body.trim()}$`)
+  // Inline math: \( ... \) → $$ ... $$ (works with singleDollarTextMath: false)
+  next = next.replace(/\\\(([\s\S]*?)\\\)/g, (_, body: string) => `$$${body.trim()}$$`)
   return next
 }
+
+const looksLikeLatex = (body: string): boolean => /\\[A-Za-z]/.test(body)
 
 /** Models sometimes drop the backslash and emit bare [ ... ] block math. */
 const convertBareBracketMathBlocks = (text: string): string => {
@@ -81,7 +91,12 @@ const convertBareBracketMathBlocks = (text: string): string => {
       continue
     }
     if (trimmed === "]" && mathLines) {
-      output.push("$$", mathLines.join("\n").trim(), "$$")
+      const body = mathLines.join("\n").trim()
+      if (looksLikeLatex(body)) {
+        output.push("$$", body, "$$")
+      } else {
+        output.push("[", ...mathLines, "]")
+      }
       mathLines = null
       continue
     }
@@ -99,13 +114,68 @@ const convertBareBracketMathBlocks = (text: string): string => {
   return output.join("\n")
 }
 
+const isMathLookingSingleDollar = (body: string): boolean => {
+  const trimmed = body.trim()
+  if (!trimmed || trimmed.includes("\n")) return false
+  // Currency / plain amounts: $20, $8/month, $1,000.50
+  if (/^\d[\d,]*(?:\.\d+)?(?:\/[A-Za-z]+)?$/.test(trimmed)) return false
+  // Shell / paths between paired dollars (e.g. "$IMAGE" … "$DISK")
+  if (SHELL_OR_PROSE_RE.test(trimmed)) return false
+  // Env-style identifiers: $IMAGE$, $DISK$, $HOME$ — keep as prose
+  if (/^[A-Z][A-Z0-9_]*$/.test(trimmed) && trimmed.length >= 2) return false
+  if (LOOKS_LIKE_MATH_RE.test(trimmed)) return true
+  // Short alphabetic token: $x$, $alpha$, $E$ (not SCREAMING_SNAKE)
+  return /^[A-Za-z][A-Za-z0-9]{0,11}$/.test(trimmed)
+}
+
+/**
+ * With singleDollarTextMath off, promote clearly-math `$…$` to `$$…$$`.
+ * Leave currency and unpaired `$` alone. Skip existing `$$` spans.
+ */
+const promoteSingleDollarMath = (text: string): string => {
+  let result = ""
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === "\\" && text[i + 1] === "$") {
+      result += "\\$"
+      i += 2
+      continue
+    }
+    if (ch === "$" && text[i + 1] === "$") {
+      const close = text.indexOf("$$", i + 2)
+      if (close === -1) {
+        result += text.slice(i)
+        break
+      }
+      result += text.slice(i, close + 2)
+      i = close + 2
+      continue
+    }
+    if (ch === "$") {
+      const close = text.indexOf("$", i + 1)
+      if (close !== -1 && text[close + 1] !== "$") {
+        const body = text.slice(i + 1, close)
+        if (isMathLookingSingleDollar(body)) {
+          result += `$$${body.trim()}$$`
+          i = close + 1
+          continue
+        }
+      }
+    }
+    result += ch
+    i += 1
+  }
+  return result
+}
+
 export const normalizeMathContent = (content: string): string =>
   mapOutsideFences(content, (segment) =>
     mapOutsideInlineCode(segment, (body) => {
       const withDelimiters = convertLatexDelimiters(body)
       const withBrackets = convertBareBracketMathBlocks(withDelimiters)
       // KaTeX rejects some arrow glyphs inside \text{...}; unwrap those.
-      return withBrackets.replace(/\\text\{([→\-–—]+)\}/g, (_match, value: string) => value)
+      const cleaned = withBrackets.replace(/\\text\{([→\-–—]+)\}/g, (_match, value: string) => value)
+      return promoteSingleDollarMath(cleaned)
     })
   )
-

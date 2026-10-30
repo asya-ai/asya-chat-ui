@@ -15,6 +15,7 @@ from app.api.auth import (
     _mint_oidc_app_token,
     _oidc_access_expires_at,
     _persist_oidc_session,
+    _post_oidc_token,
     refresh_token,
 )
 from app.core.security import create_access_token, decode_access_token_claims
@@ -237,6 +238,28 @@ async def test_refresh_invalid_grant_deletes_session() -> None:
             assert exc.value.status_code == 401
 
         assert session.get(OidcSession, sid) is None
+
+
+@pytest.mark.asyncio
+async def test_post_oidc_token_connect_timeout_raises_client_error() -> None:
+    with patch("app.api.auth.httpx.AsyncClient") as client_cls:
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
+        client.post.side_effect = httpx.ConnectTimeout("timed out")
+        client_cls.return_value = client
+
+        with pytest.raises(HTTPException) as exc:
+            await _post_oidc_token(
+                token_endpoint="https://idp.example.com/token",
+                form_data={"grant_type": "refresh_token", "refresh_token": "x"},
+                oidc_client_id="client",
+                oidc_client_secret="secret",
+                supported_methods=["client_secret_post"],
+            )
+        assert exc.value.status_code == 400
+        assert exc.value.detail == "SSO token exchange failed"
+        assert isinstance(exc.value.__cause__, httpx.ConnectTimeout)
 
 
 @pytest.mark.asyncio

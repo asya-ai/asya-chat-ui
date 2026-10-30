@@ -156,6 +156,7 @@ from app.services.marp_export import (
 from app.services.mcp import register_mcp_tools
 from app.services.generation_event_bus import iter_generation_notifications
 from app.services.model_pricing import estimate_token_cost_usd
+from app.services.feature_events import persist_feature_events
 from app.services.tool_usage import persist_tool_model_usage_events
 from app.services.usage_limits import enforce_chat_usage_limits
 from app.workers.celery_app import celery_app
@@ -512,6 +513,8 @@ def _build_tool_registry(
     parent_task_id: UUID | None = None,
     parent_metadata: dict[str, Any] | None = None,
     allow_cowork: bool = True,
+    generation_task_id: UUID | None = None,
+    exec_session_id: str | None = None,
 ) -> ToolRegistry:
     image_model = get_image_model(
         session,
@@ -760,6 +763,10 @@ def _build_tool_registry(
                     agent_id=str(agent_id) if agent_id else None,
                     filespace_chat_id=str(filespace_id),
                     family_chat_ids=family_ids,
+                    generation_task_id=(
+                        str(generation_task_id) if generation_task_id else None
+                    ),
+                    exec_session_id=exec_session_id,
                 ),
                 code=code,
                 language=args.get("language", "python"),
@@ -792,8 +799,9 @@ def _build_tool_registry(
                     "Write any output files to /outputs to return them to the user (images, resulting csv etc.)."
                     "YOu dont need to tell user where the file was created, it will be sent together with your response to them."
                     "You can call this tool multiple times. Chat attachment filenames are <attachment_id>_<sanitized_name>."
-                    "Calls do not reuse same sandbox, so any created files will be lost after the call "
-                    "(except cowork files you overwrite under /workspace/cowork/, which sync back)."
+                    "Calls reuse one sandbox for this generation; files under /workspace/ persist "
+                    "between calls (except /outputs, cleared each run). Cowork files you overwrite "
+                    "under /workspace/cowork/ sync back to the editor."
                     f"Allowed third-party imports: {ALLOWED_IMPORTS_HINT}."
                 ),
                 parameters={
@@ -2250,6 +2258,16 @@ def _normalize_timeline_attachments(
     return normalized
 
 
+def _is_cowork_assistant_sync_event(payload: dict[str, Any]) -> bool:
+    """End-of-turn document snapshot. Not a step in the answer timeline."""
+    if payload.get("type") != "coworking" or payload.get("id"):
+        return False
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        return False
+    return output.get("synced") is True and not output.get("tool_name")
+
+
 def _build_stream_parts_from_events(
     events: list[ChatGenerationEvent],
     *,
@@ -2285,6 +2303,8 @@ def _build_stream_parts_from_events(
                         parts.append({"type": "action", "label": label})
             continue
         if event.event_type != "tool_event":
+            continue
+        if _is_cowork_assistant_sync_event(payload):
             continue
         _attach_stream_action_tool_event(parts, payload)
         if payload.get("type") != "tool_call" or payload.get("state") != "end":
@@ -2538,6 +2558,9 @@ async def _run_agentic_loop(
     tool_event_sender: anyio.abc.ObjectSendStream | None = None,
     delta_sender: anyio.abc.ObjectSendStream | None = None,
     write_approval: Any | None = None,
+    feature_events: list[str] | None = None,
+    resume_state: dict[str, Any] | None = None,
+    on_step_checkpoint: Any | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     from app.services.langchain_runtime import run_agentic_loop_langchain
 
@@ -2553,6 +2576,9 @@ async def _run_agentic_loop(
         delta_sender=delta_sender,
         supports_image_input=supports_image_input(model),
         write_approval=write_approval,
+        feature_events=feature_events,
+        resume_state=resume_state,
+        on_step_checkpoint=on_step_checkpoint,
     )
 
     tool_specs = tool_registry.list_specs()
@@ -4537,7 +4563,7 @@ def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRe
                 deduped[key] = event
             for event in sorted(deduped.values(), key=lambda item: item.sequence):
                 payload = event.payload_json if isinstance(event.payload_json, dict) else None
-                if payload is None:
+                if payload is None or _is_cowork_assistant_sync_event(payload):
                     continue
                 results.append(
                     ChatMessageRead(
@@ -5150,6 +5176,23 @@ def cancel_generation_task(
     session.add(task)
 
     assistant_message = session.get(ChatMessage, task.assistant_message_id)
+    if assistant_message and chat.model_id:
+        from app.workers.generation_checkpoint import persist_partial_generation_usage
+
+        persist_partial_generation_usage(
+            session,
+            task_id=task.id,
+            org_id=chat.org_id,
+            user_id=chat.user_id,
+            chat_id=chat.id,
+            message_id=assistant_message.id,
+            model_id=chat.model_id,
+            runtime_usage=None,
+            image_usages=None,
+            metadata_json=task.metadata_json if isinstance(task.metadata_json, dict) else None,
+        )
+        task = session.get(ChatGenerationTask, task.id) or task
+        assistant_message = session.get(ChatMessage, task.assistant_message_id) or assistant_message
     if assistant_message:
         assistant_message.status = "cancelled"
         assistant_message.completed_at = datetime.utcnow()
@@ -5158,6 +5201,16 @@ def cancel_generation_task(
         assistant_message.error_message = "Generation cancelled by user"
         session.add(assistant_message)
     session.commit()
+    try:
+        from app.services.chat_filespace import filespace_chat_id
+        from app.services.tools.exec_session import close_exec_session, exec_session_key
+
+        close_exec_session(
+            exec_session_key(generation_task_id=str(task_uuid), exec_session_id=None),
+            filespace_id=str(filespace_chat_id(chat, chat_id=chat.id)),
+        )
+    except Exception:
+        logger.debug("Exec session cleanup on cancel failed task=%s", task_id, exc_info=True)
 
 
 @router.get(
@@ -5897,6 +5950,7 @@ async def create_message(
                 return
 
             if tool_registry and hasattr(provider, "chat_with_tools"):
+                feature_events: list[str] = []
                 content, tool_attachments, tool_sources, image_usages, last_usage = (
                     await _run_agentic_loop(
                         provider=provider,
@@ -5904,6 +5958,7 @@ async def create_message(
                         messages=messages,
                         tool_registry=tool_registry,
                         pending_attachments=pending_tool_attachments,
+                        feature_events=feature_events,
                     )
                 )
                 assistant_message = ChatMessage(
@@ -5951,6 +6006,15 @@ async def create_message(
                         chat_id=chat.id,
                         message_id=assistant_message.id,
                         items=image_usages,
+                    )
+                    session.commit()
+                if feature_events:
+                    persist_feature_events(
+                        session,
+                        org_id=chat.org_id,
+                        user_id=current_user.id,
+                        chat_id=chat.id,
+                        features=feature_events,
                     )
                     session.commit()
                 await _maybe_update_chat_title(
@@ -6008,6 +6072,8 @@ async def create_message(
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     tool_attachments: list[dict] | None = None
+    image_usages: list[dict] = []
+    feature_events: list[str] = []
     if grounding_enabled and hasattr(provider, "chat_grounded"):
         response = await provider.chat_grounded(model.model_name, messages)
         response.sources = await _normalize_sources(response.sources or [])
@@ -6019,6 +6085,7 @@ async def create_message(
                 messages=messages,
                 tool_registry=tool_registry,
                 pending_attachments=pending_tool_attachments,
+                feature_events=feature_events,
             )
         )
         response = ChatResponse(
@@ -6075,6 +6142,15 @@ async def create_message(
             chat_id=chat.id,
             message_id=assistant_message.id,
             items=image_usages,
+        )
+        session.commit()
+    if feature_events:
+        persist_feature_events(
+            session,
+            org_id=chat.org_id,
+            user_id=current_user.id,
+            chat_id=chat.id,
+            features=feature_events,
         )
         session.commit()
     persist_responses_api_discovery(session, model, provider)
@@ -6647,6 +6723,8 @@ async def edit_message(
         )
 
     tool_attachments: list[dict] | None = None
+    image_usages: list[dict] = []
+    feature_events: list[str] = []
     if grounding_enabled and hasattr(provider, "chat_grounded"):
         response = await provider.chat_grounded(model.model_name, messages)
         response.sources = await _normalize_sources(response.sources or [])
@@ -6658,6 +6736,7 @@ async def edit_message(
                 messages=messages,
                 tool_registry=tool_registry,
                 pending_attachments=pending_tool_attachments,
+                feature_events=feature_events,
             )
         )
         response = ChatResponse(
@@ -6715,6 +6794,15 @@ async def edit_message(
             chat_id=chat.id,
             message_id=assistant_message.id,
             items=image_usages,
+        )
+        session.commit()
+    if feature_events:
+        persist_feature_events(
+            session,
+            org_id=chat.org_id,
+            user_id=current_user.id,
+            chat_id=chat.id,
+            features=feature_events,
         )
         session.commit()
 

@@ -147,6 +147,14 @@ const usageRoute = createRoute({
   ),
 })
 
+const analyticsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/analytics",
+  component: lazyRouteComponent(() =>
+    import("@/pages/AnalyticsPage").then((mod) => ({ default: mod.AnalyticsPage }))
+  ),
+})
+
 const settingsOrganisationsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/settings/organisations",
@@ -269,6 +277,7 @@ export const routeTree = rootRoute.addChildren([
     projectsRoute,
     projectRoute,
     usageRoute,
+    analyticsRoute,
     settingsOrganisationsRoute,
     settingsOrganisationRoute,
     settingsUsersRoute,

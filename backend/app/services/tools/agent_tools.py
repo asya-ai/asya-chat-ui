@@ -19,7 +19,44 @@ from app.services.tools.registry import ToolResult
 logger = logging.getLogger(__name__)
 
 READ_MAX_CHARS = 8000
+READ_FILE_MAX_BYTES = 512_000
 PROPOSE_TEXT_MAX_CHARS = 100_000
+_TEXT_SOURCE_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".txt",
+        ".md",
+        ".markdown",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+        ".csv",
+        ".tsv",
+        ".html",
+        ".htm",
+        ".xml",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".sh",
+        ".rb",
+        ".go",
+        ".rs",
+        ".java",
+        ".kt",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".sql",
+        ".r",
+        ".m",
+    }
+)
 PROPOSE_KINDS = frozenset({"url", "text"})
 
 
@@ -283,6 +320,25 @@ async def read_project_source(
         file_name=source.file_name, content_type=source.content_type
     )
     text = source.content_text or ""
+    if not text.strip() and source.file_path and not is_image:
+        name = (source.file_name or source.title or "").lower()
+        suffix = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+        if suffix in _TEXT_SOURCE_SUFFIXES:
+            payload = maybe_read_file_bytes(source.file_path)
+            if payload and len(payload) <= READ_FILE_MAX_BYTES:
+                text = payload.decode("utf-8", errors="replace")
+            elif payload:
+                text = payload[:READ_FILE_MAX_BYTES].decode("utf-8", errors="replace")
+                output_note = (
+                    "File truncated for read_project_source; use code_execution on "
+                    f"{project_source_exec_path(source)} for the full file."
+                )
+            else:
+                output_note = None
+        else:
+            output_note = None
+    else:
+        output_note = None
     start = max(0, int(offset or 0))
     cap = max(1, min(int(max_chars or READ_MAX_CHARS), READ_MAX_CHARS))
     slice_ = text[start : start + cap]
@@ -302,6 +358,15 @@ async def read_project_source(
         "total_length_chars": len(text),
         "content": slice_,
     }
+    if output_note:
+        output["message"] = output_note
+    if not text.strip() and not is_image:
+        exec_path = project_source_exec_path(source)
+        output["code_execution_path"] = exec_path
+        output.setdefault(
+            "message",
+            f"No indexed text. Use code_execution on {exec_path}.",
+        )
 
     attachments: list[dict] | None = None
     if is_image and start == 0:

@@ -80,7 +80,16 @@ from app.services.langchain_runtime import (
 from app.services.generation_event_bus import publish_generation_event
 from app.services.providers.base import ChatUsage
 from app.services.instance_providers import get_provider_for_org
+from app.services.feature_events import persist_feature_events
 from app.services.tool_usage import persist_tool_model_usage_events
+from app.workers.generation_checkpoint import (
+    build_checkpoint_payload,
+    clear_agent_checkpoint,
+    load_agent_checkpoint,
+    mark_generation_usage_persisted,
+    persist_agent_checkpoint,
+    persist_partial_generation_usage,
+)
 from app.services.tools.image_tool import (
     ImageToolContext,
     edit_image,
@@ -197,8 +206,9 @@ class _DbDeltaSender:
         self._sequence_ref = sequence_ref
         self._assistant_message = assistant_message
         self._chat = chat
-        self._content = ""
-        self.emitted = False
+        existing = (assistant_message.content or "") if assistant_message is not None else ""
+        self._content = existing
+        self.emitted = bool(existing.strip())
 
     async def send(self, payload: dict) -> None:
         delta = payload.get("delta") if isinstance(payload, dict) else None
@@ -579,6 +589,37 @@ async def _summarize_context_if_needed(
     return summarized_messages
 
 
+
+def _persist_generation_usage_on_abort(
+    session: Session,
+    *,
+    task_id: UUID,
+    runtime_usage: ChatUsage | None,
+    image_usages: list[dict[str, Any]] | None,
+) -> None:
+    task = session.get(ChatGenerationTask, task_id)
+    if task is None:
+        return
+    chat = session.get(Chat, task.chat_id)
+    if chat is None or chat.model_id is None:
+        return
+    assistant = session.get(ChatMessage, task.assistant_message_id)
+    if assistant is None:
+        return
+    persist_partial_generation_usage(
+        session,
+        task_id=task.id,
+        org_id=chat.org_id,
+        user_id=chat.user_id,
+        chat_id=chat.id,
+        message_id=assistant.id,
+        model_id=chat.model_id,
+        runtime_usage=runtime_usage,
+        image_usages=image_usages,
+        metadata_json=task.metadata_json if isinstance(task.metadata_json, dict) else None,
+    )
+
+
 async def _run_generation(task_id: UUID) -> None:
     with Session(engine) as session:
         task = session.get(ChatGenerationTask, task_id)
@@ -752,6 +793,7 @@ async def _run_generation(task_id: UUID) -> None:
             parent_task_id=task.id,
             parent_metadata=task.metadata_json if isinstance(task.metadata_json, dict) else None,
             allow_cowork=not is_subagent_chat,
+            generation_task_id=task.id,
         )
         user_memories = None
         if (
@@ -768,6 +810,8 @@ async def _run_generation(task_id: UUID) -> None:
             if mem_rows:
                 user_memories = [{"id": str(m.id), "content": m.content} for m in mem_rows]
         title_task: asyncio.Task[None] | None = None
+        usage: ChatUsage | None = None
+        image_usages: list[dict[str, Any]] = []
         try:
             if not is_subagent_chat:
                 title_task = asyncio.create_task(
@@ -948,7 +992,8 @@ async def _run_generation(task_id: UUID) -> None:
             usage = ChatUsage(0, 0, 0, 0, 0, 0, 0)
             tool_attachments: list[dict] | None = None
             tool_sources: list[dict] | None = None
-            image_usages: list[dict] = []
+            image_usages = []
+            feature_events: list[str] = []
 
             _ensure_task_not_cancelled(session, task.id)
             if _is_image_output_model(model):
@@ -1028,6 +1073,7 @@ async def _run_generation(task_id: UUID) -> None:
                 )
                 session.add(usage_event)
                 session.commit()
+                mark_generation_usage_persisted(session, task.id)
                 # Do not await title before done — that leaves the stop button
                 # stuck after the answer is already on screen. finally awaits it.
                 if image_result.attachments:
@@ -1156,6 +1202,43 @@ async def _run_generation(task_id: UUID) -> None:
                     set_task_awaiting=_set_awaiting,
                     set_task_streaming=_set_streaming,
                 )
+                task_meta = (
+                    task.metadata_json if isinstance(task.metadata_json, dict) else None
+                )
+                agent_checkpoint = load_agent_checkpoint(task_meta)
+                resume_state = agent_checkpoint
+                if agent_checkpoint:
+                    from app.services.chat_filespace import filespace_chat_id
+                    from app.services.tools.exec_session import (
+                        close_exec_session,
+                        exec_session_key,
+                    )
+
+                    close_exec_session(
+                        exec_session_key(generation_task_id=str(task.id), exec_session_id=None),
+                        filespace_id=str(filespace_chat_id(chat, chat_id=chat.id)),
+                    )
+                    pending_tool_attachments = list(
+                        agent_checkpoint.get("attachments") or pending_tool_attachments
+                    )
+
+                async def _on_step_checkpoint(state: dict[str, Any]) -> None:
+                    persist_agent_checkpoint(
+                        session,
+                        task.id,
+                        build_checkpoint_payload(
+                            next_step=int(state["next_step"]),
+                            messages=state["messages"],
+                            attachments=state["attachments"],
+                            scrape_sources=state["scrape_sources"],
+                            other_sources=state["other_sources"],
+                            image_usages=state["image_usages"],
+                            usage=state.get("usage"),
+                            consecutive_empty=int(state.get("consecutive_empty") or 0),
+                            consecutive_length=int(state.get("consecutive_length") or 0),
+                        ),
+                    )
+
                 content, tool_attachments, tool_sources, image_usages, last_usage = (
                     await _run_agentic_loop(
                         provider=provider,
@@ -1167,6 +1250,9 @@ async def _run_generation(task_id: UUID) -> None:
                         tool_event_sender=tool_event_sender,
                         delta_sender=delta_sender,
                         write_approval=write_ctx,
+                        feature_events=feature_events,
+                        resume_state=resume_state,
+                        on_step_checkpoint=_on_step_checkpoint,
                     )
                 )
                 _ensure_task_not_cancelled(session, task.id)
@@ -1326,6 +1412,7 @@ async def _run_generation(task_id: UUID) -> None:
             )
             session.add(usage_event)
             session.commit()
+            mark_generation_usage_persisted(session, task.id)
             if image_usages:
                 persist_tool_model_usage_events(
                     session,
@@ -1334,6 +1421,15 @@ async def _run_generation(task_id: UUID) -> None:
                     chat_id=chat.id,
                     message_id=assistant_message.id,
                     items=image_usages,
+                )
+                session.commit()
+            if feature_events:
+                persist_feature_events(
+                    session,
+                    org_id=chat.org_id,
+                    user_id=chat.user_id,
+                    chat_id=chat.id,
+                    features=feature_events,
                 )
                 session.commit()
 
@@ -1347,6 +1443,7 @@ async def _run_generation(task_id: UUID) -> None:
             task.status = GenerationStatus.completed
             task.completed_at = completed_at
             session.commit()
+            clear_agent_checkpoint(session, task.id)
             _append_event(
                 session,
                 task.id,
@@ -1396,6 +1493,16 @@ async def _run_generation(task_id: UUID) -> None:
             _queue_project_chat_index(session, chat)
         except GenerationCancelledError:
             logger.info("Generation cancelled for task=%s", task_id)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            _persist_generation_usage_on_abort(
+                session,
+                task_id=task_id,
+                runtime_usage=usage,
+                image_usages=image_usages,
+            )
             return
         except Exception as exc:  # noqa: BLE001
             exc_name = type(exc).__name__
@@ -1409,6 +1516,14 @@ async def _run_generation(task_id: UUID) -> None:
                 session.rollback()
             except Exception:
                 pass
+            _persist_generation_usage_on_abort(
+                session,
+                task_id=task_id,
+                runtime_usage=usage,
+                image_usages=image_usages,
+            )
+            task = session.get(ChatGenerationTask, task_id) or task
+            assistant_message = session.get(ChatMessage, task.assistant_message_id) or assistant_message
             error_text = str(exc) or "Generation failed"
             assistant_message.status = "failed"
             assistant_message.completed_at = datetime.utcnow()
@@ -1434,6 +1549,19 @@ async def _run_generation(task_id: UUID) -> None:
                 {"error": error_text},
             )
         finally:
+            try:
+                from app.services.chat_filespace import filespace_chat_id
+                from app.services.tools.exec_session import (
+                    close_exec_session,
+                    exec_session_key,
+                )
+
+                close_exec_session(
+                    exec_session_key(generation_task_id=str(task_id), exec_session_id=None),
+                    filespace_id=str(filespace_chat_id(chat, chat_id=chat.id)),
+                )
+            except Exception:
+                logger.debug("Exec session cleanup failed task=%s", task_id, exc_info=True)
             if title_task is not None and not title_task.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(title_task), timeout=30.0)
@@ -1638,6 +1766,10 @@ def cleanup_incognito_chats() -> None:
 # a worker is killed before it writes a terminal status.
 STALE_QUEUED_AFTER = timedelta(days=1)
 STALE_ACTIVE_AFTER = timedelta(days=1)
+# No generation event / started_at newer than this → treat as orphaned by a
+# worker kill (compose rebuild). Keeps multi-replica peers from racing.
+INTERRUPTED_IDLE_AFTER = timedelta(seconds=60)
+RESUME_ACTIVITY_LABEL = "Resuming after worker restart"
 
 
 def _fail_stale_generation_task(
@@ -1664,6 +1796,14 @@ def _fail_stale_generation_task(
 @celery_app.task(name="chatui.cleanup_stale_generation_tasks")
 def cleanup_stale_generation_tasks() -> dict[str, int]:
     """Mark orphaned generation tasks as failed so they stop blocking diagnostics/UI."""
+    from app.services.tools.exec_session import purge_leaked_exec_containers
+
+    purged_exec = 0
+    try:
+        purged_exec = purge_leaked_exec_containers()
+    except Exception:
+        logger.debug("Exec container purge during stale-gen cleanup failed", exc_info=True)
+
     now = datetime.utcnow()
     queued_cutoff = now - STALE_QUEUED_AFTER
     active_cutoff = now - STALE_ACTIVE_AFTER
@@ -1718,7 +1858,112 @@ def cleanup_stale_generation_tasks() -> dict[str, int]:
                 failed_queued,
                 failed_active,
             )
-    return {"queued": failed_queued, "active": failed_active}
+    return {"queued": failed_queued, "active": failed_active, "exec_purged": purged_exec}
+
+
+def _task_last_activity_at(session: Session, task: ChatGenerationTask) -> datetime:
+    last_event_at = session.scalar(
+        select(func.max(ChatGenerationEvent.created_at)).where(
+            ChatGenerationEvent.task_id == task.id
+        )
+    )
+    return last_event_at or task.started_at or task.created_at
+
+
+def _enqueue_generation_task_id(task_id: UUID) -> None:
+    celery_app.send_task(
+        "chatui.generate_chat_response",
+        args=[str(task_id)],
+        task_id=str(task_id),
+    )
+
+
+def requeue_interrupted_generation_tasks(
+    *,
+    idle_after: timedelta = INTERRUPTED_IDLE_AFTER,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Reset orphaned running/streaming gens to queued and re-enqueue them.
+
+    Called on worker boot after a SIGKILL (compose rebuild past grace). Skips
+    ``awaiting_approval`` and anything with recent activity (still alive).
+    """
+    clock = now or datetime.utcnow()
+    idle_cutoff = clock - idle_after
+    requeued_ids: list[UUID] = []
+    with Session(engine) as session:
+        candidates = session.scalars(
+            select(ChatGenerationTask).where(
+                ChatGenerationTask.status.in_(
+                    [GenerationStatus.running, GenerationStatus.streaming]
+                )
+            )
+        ).all()
+        for task in candidates:
+            last_activity = _task_last_activity_at(session, task)
+            if last_activity is None or last_activity >= idle_cutoff:
+                continue
+
+            claimed = session.exec(
+                update(ChatGenerationTask)
+                .where(
+                    ChatGenerationTask.id == task.id,
+                    ChatGenerationTask.status.in_(
+                        [GenerationStatus.running, GenerationStatus.streaming]
+                    ),
+                )
+                .values(
+                    status=GenerationStatus.queued,
+                    error=None,
+                    completed_at=None,
+                    started_at=None,
+                )
+            )
+            if (claimed.rowcount or 0) == 0:
+                continue
+
+            assistant = session.get(ChatMessage, task.assistant_message_id)
+            if assistant is not None and assistant.status not in {
+                "completed",
+                "failed",
+                "cancelled",
+                "done",
+            }:
+                assistant.error_message = None
+                assistant.status = "generating"
+                assistant.completed_at = None
+                session.add(assistant)
+
+            max_sequence = session.exec(
+                select(func.max(ChatGenerationEvent.sequence)).where(
+                    ChatGenerationEvent.task_id == task.id
+                )
+            ).one_or_none()
+            sequence_ref = [_to_int_scalar(max_sequence, default=0)]
+            _persist_generation_event(
+                session,
+                task.id,
+                sequence_ref,
+                "activity",
+                {"label": RESUME_ACTIVITY_LABEL, "state": "start"},
+            )
+            requeued_ids.append(task.id)
+
+        if requeued_ids:
+            session.commit()
+            logger.info(
+                "Requeued interrupted generation tasks count=%s",
+                len(requeued_ids),
+            )
+
+    for task_id in requeued_ids:
+        try:
+            _enqueue_generation_task_id(task_id)
+        except Exception:
+            logger.exception(
+                "Failed to enqueue resumed generation task_id=%s", task_id
+            )
+    return {"requeued": len(requeued_ids)}
 
 
 @celery_app.task(name="chatui.cleanup_retained_data")

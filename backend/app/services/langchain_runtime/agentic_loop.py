@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
@@ -271,6 +272,9 @@ async def run_agentic_loop_langchain(
     delta_sender: anyio.abc.ObjectSendStream | None = None,
     supports_image_input: bool = False,
     write_approval: Any | None = None,
+    feature_events: list[str] | None = None,
+    resume_state: dict[str, Any] | None = None,
+    on_step_checkpoint: Any | None = None,
 ) -> tuple[str, list[dict], list[dict], list[dict], ChatUsage | None]:
     executor = LangChainToolExecutor(tool_registry)
     tool_specs = executor.list_specs()
@@ -280,7 +284,13 @@ async def run_agentic_loop_langchain(
     image_usages: list[dict] = []
     usage: ChatUsage | None = None
 
-    from app.api.chats import _dedupe_sources, _limit_sources, _source_item
+    from app.api.chats import (
+        _dedupe_sources,
+        _limit_sources,
+        _sanitize_tool_output_for_context,
+        _source_item,
+    )
+    from app.workers.generation_checkpoint import usage_from_dict
 
     # Scraped pages first when truncating — they were deliberately visited.
     scrape_sources: list[dict] = []
@@ -431,14 +441,97 @@ async def run_agentic_loop_langchain(
 
     consecutive_empty = 0
     consecutive_length = 0
-    for step in range(max_steps):
+    resume_from_step = 0
+    if resume_state:
+        attachments = list(resume_state.get("attachments") or attachments)
+        scrape_sources = list(resume_state.get("scrape_sources") or [])
+        other_sources = list(resume_state.get("other_sources") or [])
+        image_usages = list(resume_state.get("image_usages") or image_usages)
+        restored_usage = usage_from_dict(resume_state.get("usage"))
+        if restored_usage is not None:
+            usage = restored_usage
+        consecutive_empty = int(resume_state.get("consecutive_empty") or 0)
+        consecutive_length = int(resume_state.get("consecutive_length") or 0)
+        restored_messages = resume_state.get("messages")
+        if isinstance(restored_messages, list) and restored_messages:
+            messages.clear()
+            messages.extend(restored_messages)
+        resume_from_step = max(0, int(resume_state.get("next_step") or 0))
+
+    async def _save_step_checkpoint(next_step: int) -> None:
+        if on_step_checkpoint is None:
+            return
+        await on_step_checkpoint(
+            {
+                "next_step": next_step,
+                "messages": messages,
+                "attachments": attachments,
+                "scrape_sources": scrape_sources,
+                "other_sources": other_sources,
+                "image_usages": image_usages,
+                "usage": usage,
+                "consecutive_empty": consecutive_empty,
+                "consecutive_length": consecutive_length,
+            }
+        )
+
+    async def _publish_step_timing(
+        step_index: int,
+        *,
+        model_ms: int,
+        tools_ms: int,
+        tool_names: list[str],
+        usage_snapshot: ChatUsage | None,
+        finish: str | None,
+        exec_runs: list[dict[str, int]],
+    ) -> None:
+        row: dict[str, Any] = {
+            "type": "agent_step_timing",
+            "id": f"agent_step_timing_{step_index}",
+            "step": step_index + 1,
+            "max_steps": max_steps,
+            "model_ms": model_ms,
+            "tools_ms": tools_ms,
+            "tool_names": tool_names,
+            "finish_reason": finish,
+            "output": {},
+        }
+        if usage_snapshot is not None:
+            row["input_tokens"] = int(
+                usage_snapshot.input_tokens or usage_snapshot.prompt_tokens or 0
+            )
+            row["cached_tokens"] = int(usage_snapshot.cached_tokens or 0)
+            row["output_tokens"] = int(
+                usage_snapshot.output_tokens or usage_snapshot.completion_tokens or 0
+            )
+            row["thinking_tokens"] = int(usage_snapshot.thinking_tokens or 0)
+        if exec_runs:
+            row["code_exec_ms"] = exec_runs
+        logger.info(
+            "Agentic step timing step=%s/%s model_ms=%s tools_ms=%s tools=%s "
+            "input_tokens=%s cached=%s finish=%s payload=%s",
+            step_index + 1,
+            max_steps,
+            model_ms,
+            tools_ms,
+            tool_names,
+            row.get("input_tokens"),
+            row.get("cached_tokens"),
+            finish,
+            row,
+        )
+
+    for step in range(resume_from_step, max_steps):
         await _emit_activity(f"Step {step + 1}/{max_steps}", "start")
         thinking_label = "Thinking"
         await _emit_activity(thinking_label, "start")
+        model_t0 = time.perf_counter()
         content, reasoning_content, tool_calls, step_usage, finish_reason = await _call_model(
             step
         )
+        model_ms = int((time.perf_counter() - model_t0) * 1000)
         usage = _merge_chat_usage(usage, step_usage)
+        step_exec_timings: list[dict[str, int]] = []
         if not tool_calls:
             step_text = (content or "").strip()
             truncated = _is_length_truncated(finish_reason)
@@ -479,6 +572,16 @@ async def run_agentic_loop_langchain(
                     }
                 )
                 await _emit_activity(thinking_label, "end")
+                await _publish_step_timing(
+                    step,
+                    model_ms=model_ms,
+                    tools_ms=0,
+                    tool_names=[],
+                    usage_snapshot=step_usage,
+                    finish=finish_reason,
+                    exec_runs=[],
+                )
+                await _save_step_checkpoint(step + 1)
                 continue
 
             # Some models (esp. local/vLLM) end a tool round with empty content.
@@ -508,17 +611,38 @@ async def run_agentic_loop_langchain(
                     }
                 )
                 await _emit_activity(thinking_label, "end")
+                await _publish_step_timing(
+                    step,
+                    model_ms=model_ms,
+                    tools_ms=0,
+                    tool_names=[],
+                    usage_snapshot=step_usage,
+                    finish=finish_reason,
+                    exec_runs=[],
+                )
+                await _save_step_checkpoint(step + 1)
                 continue
 
             consecutive_empty = 0
             consecutive_length = 0
             await _emit_activity(thinking_label, "end")
+            await _publish_step_timing(
+                step,
+                model_ms=model_ms,
+                tools_ms=0,
+                tool_names=[],
+                usage_snapshot=step_usage,
+                finish=finish_reason,
+                exec_runs=[],
+            )
             await _emit_activity("Answering", "start")
             return _visible_content(content), attachments, _finalize_sources(), image_usages, usage
 
         consecutive_empty = 0
         consecutive_length = 0
         await _emit_activity(thinking_label, "end")
+        step_tool_names = [str(call.name or "") for call in tool_calls]
+        tools_t0 = time.perf_counter()
         messages.append(
             {
                 "role": "assistant",
@@ -1039,6 +1163,15 @@ async def run_agentic_loop_langchain(
             assert item is not None
             call, result, tool_output, answer_usage, extra_model_usage = item
             usage = _merge_chat_usage(usage, answer_usage)
+            if feature_events is not None and isinstance(tool_output, dict):
+                err = tool_output.get("error")
+                is_err = err is not None or bool(tool_output.get("is_error"))
+                if not is_err:
+                    from app.services.feature_events import feature_key_for_tool
+
+                    key = feature_key_for_tool(str(call.name or ""))
+                    if key:
+                        feature_events.append(key)
             # Project-image vision bytes are injected into messages only — do not
             # persist them as new chat attachments.
             if result.attachments and not (
@@ -1099,12 +1232,19 @@ async def run_agentic_loop_langchain(
             else:
                 for source in mcp_source_items_from_tool_result(call.name, result.output):
                     other_sources.append(source)
+            if isinstance(tool_output, dict):
+                raw_exec = tool_output.pop("_exec_timing_ms", None)
+                if isinstance(raw_exec, dict):
+                    step_exec_timings.append(raw_exec)
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": call.id,
                     "name": call.name,
-                    "content": json.dumps(tool_output, ensure_ascii=False),
+                    "content": json.dumps(
+                        _sanitize_tool_output_for_context(tool_output),
+                        ensure_ascii=False,
+                    ),
                 }
             )
             # Project image reads: attach bytes as vision input for the next turn.
@@ -1117,6 +1257,18 @@ async def run_agentic_loop_langchain(
                 vision_parts = _vision_parts_from_tool_attachments(result.attachments)
                 if vision_parts:
                     messages.append({"role": "user", "content": vision_parts})
+
+        tools_ms = int((time.perf_counter() - tools_t0) * 1000)
+        await _publish_step_timing(
+            step,
+            model_ms=model_ms,
+            tools_ms=tools_ms,
+            tool_names=step_tool_names,
+            usage_snapshot=step_usage,
+            finish=finish_reason,
+            exec_runs=step_exec_timings,
+        )
+        await _save_step_checkpoint(step + 1)
 
     return (
         "I reached the tool step limit before finishing. Please refine your request and try again.",
