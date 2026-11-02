@@ -2,10 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import type { ReactNode } from "react"
 
 import { tokenStore } from "@/lib/storage"
-import {
-  scheduleTokenRefresh,
-  stopTokenRefreshScheduler,
-} from "@/lib/token-refresh"
+import { stopTokenRefreshScheduler } from "@/lib/token-refresh"
 
 type AuthContextValue = {
   token: string | null
@@ -28,17 +25,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     tokenStore.clear()
     setTokenState(null)
   }
-
-  useEffect(() => {
-    if (!token) {
-      stopTokenRefreshScheduler()
-      return
-    }
-    scheduleTokenRefresh(token, (next) => {
-      setTokenState(next)
-    })
-    return () => stopTokenRefreshScheduler()
-  }, [token])
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {

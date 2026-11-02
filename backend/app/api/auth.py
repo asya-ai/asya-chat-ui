@@ -39,6 +39,7 @@ from app.models import (
     UserMemory,
 )
 from app.services.email_service import send_invite_email, send_password_reset_email
+from app.services.oidc_session_service import ensure_oidc_session_fresh
 from app.services.org_service import (
     ensure_default_roles,
     get_org_by_login_domain,
@@ -441,7 +442,7 @@ async def _get_oidc_jwks(jwks_uri: str) -> dict[str, Any]:
 
 
 def _encode_oidc_state(*, org_id: UUID, nonce: str, redirect_base: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=10)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=60)
     payload = {
         "org_id": str(org_id),
         "nonce": nonce,
@@ -680,13 +681,10 @@ def _persist_oidc_session(
 
 
 def _mint_oidc_app_token(user: User, oidc_session: OidcSession) -> str:
-    expires_at = oidc_session.access_expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    """Long-lived browser JWT; IdP tokens live in OidcSession and refresh on the server."""
     return create_access_token(
         str(user.id),
         token_version=user.token_version,
-        expires_at=expires_at,
         extra_claims={"sid": str(oidc_session.id)},
     )
 
@@ -942,6 +940,7 @@ async def oidc_callback(
     try:
         state_payload = _decode_oidc_state(state)
     except InvalidTokenError as exc:
+        logger.warning("OIDC callback rejected SSO state: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO state") from exc
 
     org_id = state_payload.get("org_id")
@@ -1218,81 +1217,13 @@ async def refresh_token(
             detail="Invalid authentication credentials",
         )
 
-    refresh = decrypt_secret(oidc_session.refresh_token)
-    if not refresh:
-        session.delete(oidc_session)
-        session.commit()
+    ensure_oidc_session_fresh(session, oidc_session)
+    oidc_session = session.get(OidcSession, sid_uuid)
+    if not oidc_session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         )
-
-    org = session.get(Org, oidc_session.org_id)
-    if not org or not org.oidc_enabled:
-        session.delete(oidc_session)
-        session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-
-    oidc_issuer = (org.oidc_issuer or "").strip()
-    oidc_client_id = (org.oidc_client_id or "").strip()
-    oidc_client_secret = (decrypt_secret(org.oidc_client_secret) or "").strip()
-    config = await _get_oidc_config(oidc_issuer)
-    token_endpoint = config.get("token_endpoint")
-    if not token_endpoint:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    supported_methods = config.get("token_endpoint_auth_methods_supported") or []
-    if isinstance(supported_methods, list):
-        supported_methods = [str(method) for method in supported_methods]
-    else:
-        supported_methods = []
-
-    used_refresh_enc = oidc_session.refresh_token
-    try:
-        token_payload = await _post_oidc_token(
-            token_endpoint=token_endpoint,
-            form_data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh,
-            },
-            oidc_client_id=oidc_client_id,
-            oidc_client_secret=oidc_client_secret,
-            supported_methods=supported_methods,
-        )
-    except HTTPException as exc:
-        # Another tab/request may have already rotated the refresh token.
-        session.expire(oidc_session)
-        latest = session.get(OidcSession, sid_uuid)
-        if (
-            latest
-            and latest.user_id == user.id
-            and latest.refresh_token
-            and latest.refresh_token != used_refresh_enc
-        ):
-            return TokenResponse(access_token=_mint_oidc_app_token(user, latest))
-        err = _oidc_token_error_code(exc.__cause__)
-        # Only destroy the session when the IdP confirms the grant is dead.
-        # Transient / auth-method failures must not force re-login.
-        if latest and err in {"invalid_grant", "invalid_token"}:
-            session.delete(latest)
-            session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        ) from exc
-
-    oidc_session = _persist_oidc_session(
-        session,
-        user_id=user.id,
-        org_id=org.id,
-        token_payload=token_payload,
-        existing=oidc_session,
-    )
     return TokenResponse(access_token=_mint_oidc_app_token(user, oidc_session))
 
 

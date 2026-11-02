@@ -273,7 +273,6 @@ export const lv = {
   model_cost_moderate: "Vidējs",
   model_cost_expensive: "Dārgs",
   model_cost_really_expensive: "Ļoti dārgs",
-  chat_best_available_model: "Labākais pieejamais modelis",
   chat_thinking_level: "Spriešana",
   chat_thinking_level_auto: "Automātiski",
   chat_add_files: "Pievienot failus",

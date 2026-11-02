@@ -9,6 +9,7 @@ from app.core.security import decode_access_token_claims, oauth2_scheme
 from app.db.session import get_session
 from app.models import OidcSession, OrgMembership, User
 from app.services.api_keys import API_KEY_PREFIX, authenticate_api_key
+from app.services.oidc_session_service import ensure_oidc_session_fresh
 
 
 def _resolve_user_from_token_claims(
@@ -66,6 +67,7 @@ def _resolve_user_from_token_claims(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
             )
+        ensure_oidc_session_fresh(session, oidc_session)
     return user
 
 

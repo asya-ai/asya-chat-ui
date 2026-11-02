@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -18,6 +18,7 @@ from app.api.auth import (
     _post_oidc_token,
     refresh_token,
 )
+from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token_claims
 from app.models import OidcSession, Org, User
 from starlette.requests import Request
@@ -92,7 +93,7 @@ def test_oidc_access_expires_at_prefers_access_expires_in() -> None:
     assert timedelta(seconds=1790) <= delta_id <= timedelta(seconds=1810)
 
 
-def test_mint_oidc_app_token_matches_session_lifetime() -> None:
+def test_mint_oidc_app_token_uses_app_session_lifetime() -> None:
     with _session() as session:
         user, org = _seed_user_org(session)
         access_expires = datetime.utcnow() + timedelta(seconds=180)
@@ -106,13 +107,15 @@ def test_mint_oidc_app_token_matches_session_lifetime() -> None:
         session.commit()
         session.refresh(oidc_session)
 
+        before = datetime.now(timezone.utc)
         token = _mint_oidc_app_token(user, oidc_session)
         claims = decode_access_token_claims(token)
         assert claims["sid"] == str(oidc_session.id)
         assert claims["sub"] == str(user.id)
         exp = datetime.fromtimestamp(int(claims["exp"]), tz=timezone.utc)
-        expected = access_expires.replace(tzinfo=timezone.utc)
-        assert abs((exp - expected).total_seconds()) < 2
+        expected_min = before + timedelta(minutes=settings.access_token_expire_minutes - 1)
+        expected_max = before + timedelta(minutes=settings.access_token_expire_minutes + 1)
+        assert expected_min <= exp <= expected_max
 
 
 @pytest.mark.asyncio
@@ -151,18 +154,16 @@ async def test_refresh_succeeds_and_rotates_tokens() -> None:
         }
 
         with patch(
-            "app.api.auth._get_oidc_config",
-            new=AsyncMock(
-                return_value={
-                    "token_endpoint": "https://idp.example.com/token",
-                    "token_endpoint_auth_methods_supported": ["client_secret_post"],
-                }
-            ),
+            "app.services.oidc_session_service._get_oidc_config_sync",
+            return_value={
+                "token_endpoint": "https://idp.example.com/token",
+                "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            },
         ), patch(
-            "app.api.auth._post_oidc_token",
-            new=AsyncMock(return_value=new_payload),
+            "app.services.oidc_session_service._post_oidc_token_sync",
+            return_value=new_payload,
         ), patch(
-            "app.api.auth.decrypt_secret",
+            "app.services.oidc_session_service.decrypt_secret",
             side_effect=lambda value: (
                 "old-refresh"
                 if value == oidc_session.refresh_token
@@ -211,22 +212,23 @@ async def test_refresh_invalid_grant_deletes_session() -> None:
                 request=httpx.Request("POST", "https://idp.example.com/token"),
             ),
         )
-        wrapped = HTTPException(status_code=400, detail="SSO token exchange failed")
+        wrapped = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
         wrapped.__cause__ = idp_error
 
         with patch(
-            "app.api.auth._get_oidc_config",
-            new=AsyncMock(
-                return_value={
-                    "token_endpoint": "https://idp.example.com/token",
-                    "token_endpoint_auth_methods_supported": ["client_secret_post"],
-                }
-            ),
+            "app.services.oidc_session_service._get_oidc_config_sync",
+            return_value={
+                "token_endpoint": "https://idp.example.com/token",
+                "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            },
         ), patch(
-            "app.api.auth._post_oidc_token",
-            new=AsyncMock(side_effect=wrapped),
+            "app.services.oidc_session_service._post_oidc_token_sync",
+            side_effect=wrapped,
         ), patch(
-            "app.api.auth.decrypt_secret",
+            "app.services.oidc_session_service.decrypt_secret",
             side_effect=lambda value: (
                 "old-refresh"
                 if value == oidc_session.refresh_token
@@ -280,20 +282,18 @@ async def test_refresh_transient_failure_keeps_session() -> None:
         app_token = _mint_oidc_app_token(user, oidc_session)
 
         with patch(
-            "app.api.auth._get_oidc_config",
-            new=AsyncMock(
-                return_value={
-                    "token_endpoint": "https://idp.example.com/token",
-                    "token_endpoint_auth_methods_supported": ["client_secret_post"],
-                }
+            "app.services.oidc_session_service._get_oidc_config_sync",
+            return_value={
+                "token_endpoint": "https://idp.example.com/token",
+                "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            },
+        ), patch(
+            "app.services.oidc_session_service._post_oidc_token_sync",
+            side_effect=HTTPException(
+                status_code=401, detail="Invalid authentication credentials"
             ),
         ), patch(
-            "app.api.auth._post_oidc_token",
-            new=AsyncMock(
-                side_effect=HTTPException(status_code=400, detail="SSO token exchange failed")
-            ),
-        ), patch(
-            "app.api.auth.decrypt_secret",
+            "app.services.oidc_session_service.decrypt_secret",
             side_effect=lambda value: (
                 "old-refresh"
                 if value == oidc_session.refresh_token
@@ -324,27 +324,27 @@ async def test_refresh_concurrent_rotation_reuses_session() -> None:
         app_token = _mint_oidc_app_token(user, oidc_session)
         original_enc = oidc_session.refresh_token
 
-        async def _fail_then_rotated(*_args, **_kwargs):
+        def _fail_then_rotated(*_args, **_kwargs):
             # Simulate another request rotating the refresh token first.
             oidc_session.refresh_token = "enc-rotated"
             oidc_session.access_expires_at = datetime.utcnow() + timedelta(seconds=600)
             session.add(oidc_session)
             session.commit()
-            raise HTTPException(status_code=400, detail="SSO token exchange failed")
+            raise HTTPException(
+                status_code=401, detail="Invalid authentication credentials"
+            )
 
         with patch(
-            "app.api.auth._get_oidc_config",
-            new=AsyncMock(
-                return_value={
-                    "token_endpoint": "https://idp.example.com/token",
-                    "token_endpoint_auth_methods_supported": ["client_secret_post"],
-                }
-            ),
+            "app.services.oidc_session_service._get_oidc_config_sync",
+            return_value={
+                "token_endpoint": "https://idp.example.com/token",
+                "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            },
         ), patch(
-            "app.api.auth._post_oidc_token",
-            new=AsyncMock(side_effect=_fail_then_rotated),
+            "app.services.oidc_session_service._post_oidc_token_sync",
+            side_effect=_fail_then_rotated,
         ), patch(
-            "app.api.auth.decrypt_secret",
+            "app.services.oidc_session_service.decrypt_secret",
             side_effect=lambda value: (
                 "old-refresh"
                 if value == original_enc

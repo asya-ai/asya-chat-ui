@@ -14,6 +14,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { loginOrgStore, tokenStore } from "@/lib/storage"
 
+const API_BASE = import.meta.env.VITE_API_URL || "/api"
+
 type Stage = "org" | "sso" | "credentials"
 
 type LoginResolveResult = {
@@ -30,7 +32,6 @@ export const LoginPage = () => {
   const [identifier, setIdentifier] = useState("")
   const [password, setPassword] = useState("")
   const [org, setOrg] = useState("")
-  const [ssoRedirectUrl, setSsoRedirectUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [resolving, setResolving] = useState(true)
@@ -76,8 +77,7 @@ export const LoginPage = () => {
         setOrg(resolvedOrg)
         loginOrgStore.set(resolvedOrg)
       }
-      if (resolve.action === "sso" && resolve.redirect_url && !directLogin) {
-        setSsoRedirectUrl(resolve.redirect_url)
+      if (resolve.action === "sso" && !directLogin) {
         setStage("sso")
         return
       }
@@ -146,7 +146,6 @@ export const LoginPage = () => {
   const resetToOrg = () => {
     if (!orgSelectionRequired) return
     setStage("org")
-    setSsoRedirectUrl(null)
     setIdentifier("")
     setPassword("")
     setError(null)
@@ -167,8 +166,7 @@ export const LoginPage = () => {
       if (stage === "org" && orgSelectionRequired) {
         const resolve = await authApi.loginResolve("", orgValue, clientHost)
         applySubmitResolve(resolve)
-        if (resolve.action === "sso" && resolve.redirect_url && !directLogin) {
-          setSsoRedirectUrl(resolve.redirect_url)
+        if (resolve.action === "sso" && !directLogin) {
           setStage("sso")
           return
         }
@@ -263,12 +261,13 @@ export const LoginPage = () => {
                 ) : null}
                 <Button
                   className="w-full"
-                  disabled={loading || !ssoRedirectUrl}
+                  disabled={loading || !org.trim()}
                   onClick={() => {
-                    if (ssoRedirectUrl) {
-                      setLoading(true)
-                      window.location.href = ssoRedirectUrl
-                    }
+                    const slug = org.trim().toLowerCase()
+                    if (!slug) return
+                    setLoading(true)
+                    // Fresh OAuth state on each attempt (resolve caches authorize URL).
+                    window.location.href = `${API_BASE}/auth/oidc/start?org=${encodeURIComponent(slug)}`
                   }}
                 >
                   {loading ? t("auth_sign_in_loading") : t("auth_continue_sso")}

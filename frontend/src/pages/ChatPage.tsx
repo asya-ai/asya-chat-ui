@@ -4354,7 +4354,6 @@ export const ChatPage = () => {
                     onOpenChange={setModelMenuOpen}
                     onSelect={setSelectedModel}
                     selectLabel={t("chat_select_model")}
-                    emptyLabel={t("chat_best_available_model")}
                     disabled={isSharedView}
                     footer={
                       <>

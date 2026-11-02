@@ -30,7 +30,6 @@ type ChatModelSelectProps = {
   onOpenChange: (open: boolean) => void
   onSelect: (modelId: string) => void
   selectLabel: string
-  emptyLabel: string
   disabled?: boolean
   footer?: ReactNode
 }
@@ -61,7 +60,6 @@ export const ChatModelSelect = ({
   onOpenChange,
   onSelect,
   selectLabel,
-  emptyLabel,
   disabled = false,
   footer,
 }: ChatModelSelectProps) => {
@@ -107,7 +105,7 @@ export const ChatModelSelect = ({
               </span>
             </>
           ) : (
-            <span className="min-w-0 truncate text-muted-foreground">{emptyLabel}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{selectLabel}</span>
           )}
           <ChevronDown aria-hidden="true" className="size-4 shrink-0 opacity-50" />
         </Button>

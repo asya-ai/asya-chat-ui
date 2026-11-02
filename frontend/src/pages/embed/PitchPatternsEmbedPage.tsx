@@ -1038,7 +1038,6 @@ export const PitchPatternsEmbedPage = () => {
         modelStore.set(modelId)
       }}
       selectLabel={t("chat_select_model")}
-      emptyLabel={t("chat_best_available_model")}
     />
   )
 

@@ -273,7 +273,6 @@ export const ja = {
   model_cost_moderate: "普通",
   model_cost_expensive: "高い",
   model_cost_really_expensive: "とても高い",
-  chat_best_available_model: "利用可能な最良のモデル",
   chat_thinking_level: "推論",
   chat_thinking_level_auto: "自動",
   chat_add_files: "ファイルを追加",

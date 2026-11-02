@@ -271,7 +271,6 @@ export const en = {
   model_cost_moderate: "Moderate",
   model_cost_expensive: "Expensive",
   model_cost_really_expensive: "Really expensive",
-  chat_best_available_model: "Best available model",
   chat_thinking_level: "Reasoning",
   chat_thinking_level_auto: "Auto",
   chat_add_files: "Add files",

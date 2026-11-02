@@ -184,6 +184,19 @@ const apiWebSocket = (
     }
     socket.onclose = (event) => {
       if (event.code === 4401 || event.code === 4403) {
+        if (event.code === 4401 && tokenHasOidcSession(tokenStore.get())) {
+          void refreshAccessToken().then((next) => {
+            if (next) {
+              if (!settled) {
+                settled = true
+                reject(new Error("WebSocket auth expired"))
+              }
+              return
+            }
+            redirectToLogin()
+          })
+          return
+        }
         redirectToLogin()
         return
       }
