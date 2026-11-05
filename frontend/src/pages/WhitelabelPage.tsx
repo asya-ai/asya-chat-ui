@@ -118,7 +118,7 @@ export const WhitelabelPage = () => {
   if (!authChecked || !isSuperAdmin) {
     return (
       <SettingsShell title={t("whitelabel_title")}>
-        <SettingsPage>
+        <SettingsPage narrow>
           <p className="text-muted-foreground text-sm">{t("common_loading")}</p>
         </SettingsPage>
       </SettingsShell>
@@ -127,7 +127,7 @@ export const WhitelabelPage = () => {
 
   return (
     <SettingsShell title={t("whitelabel_title")}>
-      <SettingsPage>
+      <SettingsPage narrow>
         <SettingsPageHeader title={t("whitelabel_title")} />
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
         {loading && !settings ? (

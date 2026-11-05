@@ -4213,9 +4213,11 @@ export const ChatPage = () => {
           <div className="flex flex-col flex-1 min-w-0 min-h-0">
             <div className="flex flex-1 min-w-0 min-h-0">
             <div
-              className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
-                isMobile && cowork.open && cowork.mobileTab === "document" ? "hidden" : ""
-              }`}
+              className={cn(
+                "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+                isMobile && cowork.open && cowork.mobileTab === "document" && "hidden",
+                isMobile && sourcesPanelSources && "hidden"
+              )}
             >
               <h1 className="sr-only">{activeChatTitle}</h1>
               <div
@@ -4519,6 +4521,9 @@ export const ChatPage = () => {
                 title={t("chat_sources")}
                 emptyLabel={t("chat_sources_empty")}
                 closeLabel={t("common_close")}
+                className={
+                  isMobile ? "min-w-0 max-w-none flex-1 border-l-0" : undefined
+                }
                 onClose={() => setSourcesPanelSources(null)}
                 onNavigateInternal={(path) => {
                   setSourcesPanelSources(null)

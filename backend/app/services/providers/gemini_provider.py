@@ -1,6 +1,7 @@
 import anyio
 import hashlib
 import json
+from typing import Any
 import time
 from dataclasses import dataclass
 from google import genai
@@ -235,6 +236,36 @@ class GeminiProvider:
         return None
 
     @staticmethod
+    def _normalize_tool_call_dict(call: object) -> dict[str, Any]:
+        if not isinstance(call, dict):
+            return {}
+        if isinstance(call.get("function"), dict):
+            function = call["function"]
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments)
+                    arguments = parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    arguments = {}
+            elif not isinstance(arguments, dict):
+                arguments = {}
+            return {
+                "id": call.get("id"),
+                "name": function.get("name"),
+                "arguments": arguments,
+                "thought_signature": call.get("thought_signature")
+                or call.get("thoughtSignature"),
+            }
+        return {
+            "id": call.get("id"),
+            "name": call.get("name"),
+            "arguments": call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+            "thought_signature": call.get("thought_signature")
+            or call.get("thoughtSignature"),
+        }
+
+    @staticmethod
     def _build_function_call_part(call: dict) -> dict:
         thought_signature = call.get("thought_signature") or call.get("thoughtSignature")
         arguments = call.get("arguments", {})
@@ -269,8 +300,9 @@ class GeminiProvider:
                 if text:
                     parts.append({"text": text})
         for call in message.get("tool_calls") or []:
-            if isinstance(call, dict):
-                parts.append(GeminiProvider._build_function_call_part(call))
+            normalized = GeminiProvider._normalize_tool_call_dict(call)
+            if normalized.get("name"):
+                parts.append(GeminiProvider._build_function_call_part(normalized))
         return parts
 
     @staticmethod
@@ -377,6 +409,7 @@ class GeminiProvider:
 
     def _contents_from_messages(self, messages: list[dict]) -> list[dict]:
         contents: list[dict] = []
+        pending_tool_call_names: dict[str, str] = {}
         for message in messages:
             role = message.get("role")
             if role == "system":
@@ -385,16 +418,24 @@ class GeminiProvider:
                 role = "model"
             tool_calls = message.get("tool_calls")
             if tool_calls:
+                for call in tool_calls:
+                    normalized = self._normalize_tool_call_dict(call)
+                    call_id = str(normalized.get("id") or "").strip()
+                    call_name = str(normalized.get("name") or "").strip()
+                    if call_id and call_name:
+                        pending_tool_call_names[call_id] = call_name
                 parts = self._model_parts_for_assistant_tool_message(message)
                 if parts:
                     contents.append({"role": "model", "parts": parts})
                 continue
             if role == "tool":
+                tool_call_id = str(message.get("tool_call_id") or "").strip()
+                tool_name = message.get("name") or pending_tool_call_names.get(tool_call_id)
                 fn_response_part = {
                     "function_response": {
-                        "name": message.get("name"),
+                        "name": tool_name,
                         "response": {"content": message.get("content", "")},
-                        "id": message.get("tool_call_id"),
+                        "id": tool_call_id or message.get("tool_call_id"),
                     }
                 }
                 if (

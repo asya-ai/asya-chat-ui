@@ -7,7 +7,7 @@ import { AuthProvider } from "@/lib/auth-context"
 import { BrandingProvider } from "@/lib/branding"
 import { installStaleAssetRecovery } from "@/lib/deploy-reload"
 import { I18nProvider } from "@/lib/i18n-context"
-import { applyTheme, getTheme } from "@/lib/theme"
+import { initTheme } from "@/lib/theme"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { router } from "@/router"
 import "katex/dist/katex.min.css"
@@ -23,7 +23,7 @@ const queryClient = new QueryClient({
   },
 })
 
-applyTheme(getTheme())
+initTheme()
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

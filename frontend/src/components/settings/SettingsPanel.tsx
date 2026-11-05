@@ -4,19 +4,26 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
 
-const settingsControlClass = "w-full sm:w-40"
+const settingsControlClass = "w-full sm:w-44 sm:shrink-0"
 
 type SettingsPageProps = {
   children: ReactNode
   className?: string
   wide?: boolean
+  /** Personal / simple settings (profile, whitelabel). */
+  narrow?: boolean
 }
 
-export const SettingsPage = ({ children, className, wide = false }: SettingsPageProps) => (
+export const SettingsPage = ({
+  children,
+  className,
+  wide = false,
+  narrow = false,
+}: SettingsPageProps) => (
   <div
     className={cn(
-      "mx-auto flex h-full w-full flex-col gap-5 overflow-y-auto p-4 sm:p-6",
-      wide ? "max-w-6xl" : "max-w-3xl",
+      "mx-auto flex h-full w-full flex-col gap-6 overflow-y-auto px-4 py-5 sm:px-6 sm:py-8",
+      wide ? "max-w-6xl" : narrow ? "max-w-lg" : "max-w-2xl",
       className
     )}
   >
@@ -64,21 +71,33 @@ export const SettingsSection = ({
   children,
   className,
 }: SettingsSectionProps) => (
-  <section className={cn("space-y-1", className)}>
+  <section className={cn("space-y-2", className)}>
     {title ? (
-      <div className="px-1">
-        <h2 className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
+      <div className="px-0.5">
+        <h2 className="text-muted-foreground text-[11px] font-semibold uppercase tracking-wider">
           {title}
         </h2>
         {description ? (
-          <p className="text-muted-foreground mt-0.5 text-xs leading-5">{description}</p>
+          <p className="text-muted-foreground mt-1 text-xs leading-5">{description}</p>
         ) : null}
       </div>
     ) : null}
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-card divide-y divide-border">
+    <div className="overflow-hidden rounded-[var(--radius-card)] border border-border/80 bg-card shadow-sm divide-y divide-border/80">
       {children}
     </div>
   </section>
+)
+
+export const SettingsSectionMessage = ({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
+}) => (
+  <p className={cn("text-muted-foreground px-4 py-3.5 text-sm leading-5 sm:px-5", className)}>
+    {children}
+  </p>
 )
 
 type SettingsRowProps = {
@@ -98,22 +117,22 @@ export const SettingsRow = ({
   htmlFor,
   footer,
 }: SettingsRowProps) => (
-  <div className={cn("px-4 py-2.5 sm:px-5", className)}>
-    <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-[minmax(0,1fr)_10rem] sm:gap-6">
-      <div className="min-w-0">
+  <div className={cn("px-4 py-3 sm:px-5", className)}>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+      <div className="min-w-0 flex-1">
         {htmlFor ? (
-          <label htmlFor={htmlFor} className="block text-sm leading-5">
+          <label htmlFor={htmlFor} className="block text-sm leading-snug">
             {label}
           </label>
         ) : (
-          <p className="text-sm leading-5">{label}</p>
+          <p className="text-sm leading-snug">{label}</p>
         )}
         {description ? (
           <p className="text-muted-foreground mt-0.5 text-xs leading-5">{description}</p>
         ) : null}
         {footer ? <div className="mt-2">{footer}</div> : null}
       </div>
-      <div className="flex items-center justify-start sm:justify-end">{children}</div>
+      <div className="flex shrink-0 items-center sm:justify-end">{children}</div>
     </div>
   </div>
 )
@@ -142,18 +161,13 @@ export const SettingsActionRow = ({
   <button
     type="button"
     className={cn(
-      "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/50 sm:px-5",
+      "flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 sm:px-5",
       className
     )}
     {...props}
   >
     <div className="min-w-0 flex-1">
-      <p
-        className={cn(
-          "text-sm font-medium leading-5",
-          destructive && "text-destructive"
-        )}
-      >
+      <p className={cn("text-sm leading-snug", destructive && "text-destructive")}>
         {label}
       </p>
       {description ? (

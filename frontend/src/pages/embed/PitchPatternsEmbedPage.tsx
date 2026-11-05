@@ -41,7 +41,14 @@ import {
   tokenStore,
   type ActionInfoLevel,
 } from "@/lib/storage"
-import type { Chat, ChatMessage, ChatMessageAttachmentInput, ChatModel } from "@/lib/types"
+import type {
+  Chat,
+  ChatMessage,
+  ChatMessageAttachmentInput,
+  ChatModel,
+  SourceItem,
+} from "@/lib/types"
+import { cn } from "@/lib/utils"
 import {
   originAllowedByEmbedList,
   parseEmbedOrigins,
@@ -52,6 +59,7 @@ import { ChatModelSelect } from "@/pages/chat/ChatModelSelect"
 import { ChatSidebar } from "@/pages/chat/ChatSidebar"
 import { MessageBubble } from "@/pages/chat/MessageBubble"
 import { MessageList } from "@/pages/chat/MessageList"
+import { SourcesPanel } from "@/pages/chat/SourcesPanel"
 
 const isTerminalStatus = (status?: string | null) =>
   status === "completed" || status === "failed" || status === "cancelled"
@@ -175,6 +183,9 @@ export const PitchPatternsEmbedPage = () => {
     ChatMessageAttachmentInput[]
   >([])
   const [deleteConfirmMessage, setDeleteConfirmMessage] = useState<ChatMessage | null>(
+    null
+  )
+  const [sourcesPanelSources, setSourcesPanelSources] = useState<SourceItem[] | null>(
     null
   )
   const pageContextRef = useRef<unknown>(null)
@@ -586,6 +597,10 @@ export const PitchPatternsEmbedPage = () => {
     void bootChat()
   }, [token, ready, bootChat])
 
+  useEffect(() => {
+    setSourcesPanelSources(null)
+  }, [chatId])
+
   const startSignIn = () => {
     setLoginError(null)
     setBootError(null)
@@ -987,7 +1002,9 @@ export const PitchPatternsEmbedPage = () => {
           editAttachmentError={null}
           codeTheme={codeTheme}
           t={t}
+          preferMobileLayout
           exportQuestion={exportQuestion}
+          onOpenSources={setSourcesPanelSources}
           onStartEdit={startEditMessage}
           onDeleteFromMessage={deleteFromMessage}
           onRetryMessage={(failed) => void retryFailedMessage(failed)}
@@ -1154,44 +1171,53 @@ export const PitchPatternsEmbedPage = () => {
         </div>
       ) : null}
 
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {!isEmptyChat ? (
-          <MessageList
-            messages={visibleMessages}
-            onScroll={() => undefined}
-            containerRef={messagesContainerRef}
-            endRef={messagesEndRef}
-            renderMessage={renderMessage}
-          />
-        ) : null}
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <div
+          className={cn(
+            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+            sourcesPanelSources && "hidden"
+          )}
+        >
+          {!isEmptyChat ? (
+            <MessageList
+              messages={visibleMessages}
+              onScroll={() => undefined}
+              containerRef={messagesContainerRef}
+              endRef={messagesEndRef}
+              renderMessage={renderMessage}
+              className="gap-4 px-3 pt-4 md:px-3"
+            />
+          ) : null}
 
-        {bootError ? (
-          <p className="relative z-10 px-4 text-center text-sm text-destructive">{bootError}</p>
-        ) : null}
+          {bootError ? (
+            <p className="relative z-10 px-4 text-center text-sm text-destructive">
+              {bootError}
+            </p>
+          ) : null}
 
-        <ChatComposer
-          ref={composerRef}
-          placeholder={t("chat_message_placeholder")}
-          loading={sending}
-          isDragActive={false}
-          pendingAttachments={emptyAttachments}
-          showModelSelect
-          modelSelect={modelSelect}
-          onSend={() => void send()}
-          onStop={() => undefined}
-          onFilesSelected={() => undefined}
-          onRemoveAttachment={() => undefined}
-          onPreviewAttachment={() => undefined}
-          onPasteAttachments={() => undefined}
-          onDragEnter={ignoreDrag}
-          onDragOver={ignoreDrag}
-          onDragLeave={ignoreDrag}
-          onDrop={ignoreDrag}
-          sendLabel={t("common_send")}
-          stopLabel={t("common_stop")}
-          welcomeTitle={t("embed_welcome_title")}
-          centered={isEmptyChat}
-          pinCentered={isEmptyChat}
+          <ChatComposer
+            ref={composerRef}
+            placeholder={t("chat_message_placeholder")}
+            loading={sending}
+            isDragActive={false}
+            pendingAttachments={emptyAttachments}
+            showModelSelect
+            modelSelect={modelSelect}
+            onSend={() => void send()}
+            onStop={() => undefined}
+            onFilesSelected={() => undefined}
+            onRemoveAttachment={() => undefined}
+            onPreviewAttachment={() => undefined}
+            onPasteAttachments={() => undefined}
+            onDragEnter={ignoreDrag}
+            onDragOver={ignoreDrag}
+            onDragLeave={ignoreDrag}
+            onDrop={ignoreDrag}
+            sendLabel={t("common_send")}
+            stopLabel={t("common_stop")}
+            welcomeTitle={t("embed_welcome_title")}
+            centered={isEmptyChat}
+            pinCentered={isEmptyChat}
             centeredLeading={
               isEmptyChat ? (
                 <EldigenTreeRive className="aspect-[157/175] h-[min(32svh,20rem)] w-auto max-h-full" />
@@ -1199,6 +1225,21 @@ export const PitchPatternsEmbedPage = () => {
             }
             centeredExtras={null}
           />
+        </div>
+        {sourcesPanelSources ? (
+          <SourcesPanel
+            sources={sourcesPanelSources}
+            title={t("chat_sources")}
+            emptyLabel={t("chat_sources_empty")}
+            closeLabel={t("common_close")}
+            className="min-w-0 max-w-none flex-1 border-l-0"
+            onClose={() => setSourcesPanelSources(null)}
+            onNavigateInternal={(path) => {
+              setSourcesPanelSources(null)
+              openMainApp(path)
+            }}
+          />
+        ) : null}
       </div>
       </div>
       <Dialog

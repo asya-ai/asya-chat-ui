@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState, type RefObject } from "react"
-import { Maximize2, RotateCcw, ZoomIn, ZoomOut } from "lucide-react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
+import { Maximize2, RotateCcw, XIcon, ZoomIn, ZoomOut } from "lucide-react"
 import {
   TransformComponent,
   TransformWrapper,
@@ -9,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -62,6 +68,20 @@ const toolbarStickyClassName =
 
 const toolbarButtonClassName =
   "pointer-events-auto h-7 px-2 bg-background/80 border border-muted-foreground/30 text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wide"
+
+const explorerCloseClassName =
+  "ring-offset-background focus:ring-ring rounded-full bg-muted/80 border border-muted-foreground/30 p-1.5 text-foreground opacity-80 shadow-sm transition-opacity hover:bg-muted hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+
+const cloneInlineMermaidInto = (
+  target: HTMLElement,
+  source: HTMLElement | null
+): boolean => {
+  if (!source || source.childElementCount === 0) return false
+  target.replaceChildren(
+    ...Array.from(source.childNodes).map((node) => node.cloneNode(true))
+  )
+  return true
+}
 
 const renderMermaidInto = async (
   container: HTMLElement,
@@ -195,31 +215,33 @@ const ExplorerZoomControls = ({
 /** Recenter after async Mermaid SVG lands in the transform content. */
 const FitWhenReady = ({
   ready,
-  targetRef,
+  target,
 }: {
   ready: boolean
-  targetRef: RefObject<HTMLDivElement | null>
+  target: HTMLDivElement | null
 }) => {
   const { zoomToElement, centerView } = useControls()
   useEffect(() => {
     if (!ready) return
     const id = window.requestAnimationFrame(() => {
-      const el = targetRef.current
-      if (el && el.childElementCount > 0) {
-        void zoomToElement(el, 1, 0)
+      if (target && target.childElementCount > 0) {
+        void zoomToElement(target, 1, 0)
         return
       }
       void centerView(1, 0)
     })
     return () => window.cancelAnimationFrame(id)
-  }, [ready, centerView, zoomToElement, targetRef])
+  }, [ready, centerView, zoomToElement, target])
   return null
 }
 
 export const MermaidDiagram = ({ chart }: { chart: string }) => {
   const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const explorerRef = useRef<HTMLDivElement | null>(null)
+  const [explorerHost, setExplorerHost] = useState<HTMLDivElement | null>(null)
+  const handleExplorerHostRef = useCallback((node: HTMLDivElement | null) => {
+    setExplorerHost(node)
+  }, [])
   const [renderError, setRenderError] = useState<string | null>(null)
   const [explorerOpen, setExplorerOpen] = useState(false)
   const [explorerError, setExplorerError] = useState<string | null>(null)
@@ -267,28 +289,28 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
       setExplorerError(null)
       return
     }
+    if (!explorerHost) return
     let cancelled = false
     const run = async () => {
       setExplorerReady(false)
-      // Dialog portals + TransformComponent mount after open; wait for the host.
-      let container: HTMLDivElement | null = null
-      for (let i = 0; i < 30; i++) {
-        container = explorerRef.current
-        if (container) break
-        await new Promise<void>((resolve) => {
-          window.requestAnimationFrame(() => resolve())
-        })
-        if (cancelled) return
-      }
-      if (!container || cancelled) return
       setExplorerError(null)
+      const container = explorerHost
       try {
+        if (cloneInlineMermaidInto(container, containerRef.current)) {
+          if (!cancelled) setExplorerReady(true)
+          return
+        }
         await renderMermaidInto(container, chart, {
           cancelled: () => cancelled,
           wrapClassName:
             "[&_svg]:max-w-none [&_svg]:h-auto [&_svg]:w-auto select-none",
         })
-        if (!cancelled) setExplorerReady(true)
+        if (cancelled) return
+        if (container.childElementCount === 0) {
+          setExplorerError(renderFailedLabel)
+          return
+        }
+        setExplorerReady(true)
       } catch (error) {
         if (cancelled) return
         const maidMsg = await diagnoseMermaidChart(chart)
@@ -303,7 +325,7 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
     return () => {
       cancelled = true
     }
-  }, [explorerOpen, chart, renderFailedLabel])
+  }, [explorerOpen, explorerHost, chart, renderFailedLabel])
 
   return (
     <>
@@ -341,18 +363,23 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
 
       <Dialog open={explorerOpen} onOpenChange={setExplorerOpen}>
         <DialogContent
-          showCloseButton
+          showCloseButton={false}
           className="flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[calc(100vw-2rem)]"
         >
           <DialogTitle className="sr-only">{expandLabel}</DialogTitle>
-          <div className="absolute top-3 left-3 z-10 flex items-center gap-1">
+          <div className="relative z-30 flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
             <MermaidCopyButton
               text={chart}
               label={copyLabel}
               copiedLabel={copiedLabel}
             />
+            <div className="flex-1" />
+            <DialogClose className={explorerCloseClassName}>
+              <XIcon />
+              <span className="sr-only">{t("common_close")}</span>
+            </DialogClose>
           </div>
-          <div className="relative min-h-0 flex-1 pt-12">
+          <div className="relative min-h-0 flex-1">
             {explorerError ? (
               <pre className="m-4 overflow-auto rounded bg-destructive/10 p-3 text-destructive text-xs whitespace-pre-wrap">
                 {explorerError}
@@ -367,8 +394,8 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
                 pinch={{ step: 4 }}
                 doubleClick={{ mode: "zoomIn", step: 0.4 }}
               >
-                <FitWhenReady ready={explorerReady} targetRef={explorerRef} />
-                <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2">
+                <FitWhenReady ready={explorerReady} target={explorerHost} />
+                <div className="pointer-events-none absolute top-3 left-1/2 z-20 -translate-x-1/2">
                   <ExplorerZoomControls
                     zoomInLabel={zoomInLabel}
                     zoomOutLabel={zoomOutLabel}
@@ -376,11 +403,14 @@ export const MermaidDiagram = ({ chart }: { chart: string }) => {
                   />
                 </div>
                 <TransformComponent
-                  wrapperClass="!absolute !inset-0 !h-full !w-full"
-                  contentClass="!w-fit !h-fit"
+                  wrapperClass="!h-full !w-full"
+                  contentClass="!flex !h-full !w-full !items-center !justify-center"
                   wrapperStyle={{ width: "100%", height: "100%" }}
                 >
-                  <div ref={explorerRef} className="flex flex-col gap-6 p-4" />
+                  <div
+                    ref={handleExplorerHostRef}
+                    className="flex flex-col gap-6 p-4"
+                  />
                 </TransformComponent>
               </TransformWrapper>
             )}

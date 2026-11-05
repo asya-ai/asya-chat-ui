@@ -19,6 +19,7 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsSection,
+  SettingsSectionMessage,
 } from "@/components/settings/SettingsPanel"
 import { SettingsShell } from "@/components/SettingsShell"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -39,7 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { getTheme, setTheme, type ThemeMode } from "@/lib/theme"
+import { getThemePreference, setTheme, type ThemePreference } from "@/lib/theme"
 import { usePwaInstall } from "@/lib/use-pwa-install"
 import type { ApiKey, UserMemory } from "@/lib/types"
 import { Check, Pencil, Trash2, X } from "lucide-react"
@@ -63,7 +64,7 @@ export const MePage = () => {
     needsHttps,
     install: installPwa,
   } = usePwaInstall()
-  const [theme, setThemeState] = useState<ThemeMode>(getTheme())
+  const [theme, setThemeState] = useState<ThemePreference>(() => getThemePreference())
   const [installingPwa, setInstallingPwa] = useState(false)
   const [installHelpOpen, setInstallHelpOpen] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
@@ -129,7 +130,7 @@ export const MePage = () => {
       )
   }, [apiKeysOpen, t])
 
-  const onThemeChange = (mode: ThemeMode) => {
+  const onThemeChange = (mode: ThemePreference) => {
     setThemeState(mode)
     setTheme(mode)
   }
@@ -293,7 +294,7 @@ export const MePage = () => {
 
   return (
     <SettingsShell title={t("me_title")}>
-      <SettingsPage>
+      <SettingsPage narrow>
         <SettingsSection title={t("me_general")}>
           <SettingsRow label={t("language")}>
             <SettingsControl>
@@ -302,30 +303,42 @@ export const MePage = () => {
           </SettingsRow>
           <SettingsRow label={t("theme_title")}>
             <SettingsControl>
-              <Select value={theme} onValueChange={(value) => onThemeChange(value as ThemeMode)}>
+              <Select
+                value={theme}
+                onValueChange={(value) => onThemeChange(value as ThemePreference)}
+              >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="system">{t("theme_system")}</SelectItem>
                   <SelectItem value="light">{t("theme_light")}</SelectItem>
                   <SelectItem value="dark">{t("theme_dark")}</SelectItem>
                 </SelectContent>
               </Select>
             </SettingsControl>
           </SettingsRow>
-          {showInstallSection ? (
+          {showInstallSection && canPromptInstall ? (
             <SettingsRow label={t("me_install_app")}>
-              <SettingsControl>
+              <SettingsControl className="sm:w-auto">
                 <Button
-                  variant="outline"
-                  className="w-full"
+                  variant="secondary"
+                  size="sm"
+                  className="w-full sm:w-auto"
                   disabled={installingPwa}
                   onClick={onInstallApp}
                 >
-                  {canPromptInstall ? t("me_install_app") : t("me_install_app_help")}
+                  {t("me_install_app")}
                 </Button>
               </SettingsControl>
             </SettingsRow>
+          ) : null}
+          {showInstallSection && !canPromptInstall ? (
+            <SettingsActionRow
+              label={t("me_install_app")}
+              description={t("me_install_app_help")}
+              onClick={onInstallApp}
+            />
           ) : null}
           <SettingsRow label={t("me_action_info")}>
             <SettingsControl>
@@ -344,13 +357,17 @@ export const MePage = () => {
             </SettingsControl>
           </SettingsRow>
           <SettingsRow label={t("me_show_project_chat_indication")}>
-            <Switch
-              checked={showProjectIndication}
-              onCheckedChange={onShowProjectIndicationChange}
-            />
+            <SettingsControl className="w-auto sm:w-auto">
+              <Switch
+                checked={showProjectIndication}
+                onCheckedChange={onShowProjectIndicationChange}
+              />
+            </SettingsControl>
           </SettingsRow>
           <SettingsRow label={t("me_memory_enabled")}>
-            <Switch checked={memoryEnabled} onCheckedChange={onToggleMemory} />
+            <SettingsControl className="w-auto sm:w-auto">
+              <Switch checked={memoryEnabled} onCheckedChange={onToggleMemory} />
+            </SettingsControl>
           </SettingsRow>
           {memoryEnabled ? (
             <SettingsActionRow
@@ -448,7 +465,7 @@ export const MePage = () => {
             ))}
             {!writePrefs?.always_allow.some((row) => row.always_allow) &&
             !(writePrefs?.session_chat_ids.length) ? (
-              <p className="text-muted-foreground text-sm">{t("me_write_access_empty")}</p>
+              <SettingsSectionMessage>{t("me_write_access_empty")}</SettingsSectionMessage>
             ) : null}
           </SettingsSection>
         ) : null}

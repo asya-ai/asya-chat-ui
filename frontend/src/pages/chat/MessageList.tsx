@@ -14,6 +14,7 @@ type MessageListProps = {
   endRef: RefObject<HTMLDivElement | null>
   renderMessage: (msg: ChatMessage) => ReactNode
   loadingFallback?: ReactNode
+  className?: string
 }
 
 const MessageListComponent = ({
@@ -24,10 +25,14 @@ const MessageListComponent = ({
   endRef,
   renderMessage,
   loadingFallback,
+  className,
 }: MessageListProps) => (
   <div
     ref={containerRef}
-    className="relative flex flex-col flex-1 gap-6 px-4 md:px-8 pt-6 pb-0 min-h-0 overflow-x-hidden overflow-y-auto"
+    className={cn(
+      "relative flex flex-col flex-1 gap-6 px-4 md:px-8 pt-6 pb-0 min-h-0 overflow-x-hidden overflow-y-auto",
+      className
+    )}
     onScroll={onScroll}
     aria-live="polite"
     aria-relevant="additions text"
@@ -78,5 +83,6 @@ export const MessageList = memo(
     prev.containerRef === next.containerRef &&
     prev.endRef === next.endRef &&
     prev.renderMessage === next.renderMessage &&
-    prev.loadingFallback === next.loadingFallback
+    prev.loadingFallback === next.loadingFallback &&
+    prev.className === next.className
 )

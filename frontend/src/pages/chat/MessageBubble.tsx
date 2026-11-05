@@ -118,6 +118,8 @@ type MessageBubbleProps = {
   codeTheme: Record<string, CSSProperties>
   t: I18nContextValue["t"]
   onOpenSources?: (sources: SourceItem[]) => void
+  /** Narrow / embed: sticky message actions like mobile, not hover-only on md+. */
+  preferMobileLayout?: boolean
   exportQuestion?: string | null
   onStartEdit: (msg: ChatMessage) => void
   onDeleteFromMessage: (msg: ChatMessage) => void
@@ -1341,6 +1343,7 @@ const MessageBubbleComponent = ({
   codeTheme,
   t,
   onOpenSources,
+  preferMobileLayout = false,
   exportQuestion = null,
   onStartEdit,
   onDeleteFromMessage,
@@ -2433,8 +2436,20 @@ const MessageBubbleComponent = ({
           )}
         </div>
         {showUserSideActions ? (
-          <div className="flex justify-end mt-1 md:mt-0 md:right-full md:absolute md:inset-y-0 md:flex-col md:justify-end md:mr-0.5 pointer-events-none">
-            <div className="bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 md:flex md:items-center md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto">
+          <div
+            className={
+              preferMobileLayout
+                ? "flex justify-end mt-1 pointer-events-none"
+                : "flex justify-end mt-1 md:mt-0 md:right-full md:absolute md:inset-y-0 md:flex-col md:justify-end md:mr-0.5 pointer-events-none"
+            }
+          >
+            <div
+              className={
+                preferMobileLayout
+                  ? "bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 pointer-events-auto"
+                  : "bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 md:flex md:items-center md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto"
+              }
+            >
               {canManageMessage ? (
                 <Button
                   type="button"
@@ -2745,6 +2760,7 @@ export const MessageBubble = memo(
     if (prev.codeTheme !== next.codeTheme) return false
     if (prev.t !== next.t) return false
     if (prev.onOpenSources !== next.onOpenSources) return false
+    if (prev.preferMobileLayout !== next.preferMobileLayout) return false
     if (prev.onWriteApprovalDecision !== next.onWriteApprovalDecision) return false
     if (prev.onSourceProposalDecision !== next.onSourceProposalDecision) return false
     if (prev.thinkingLabels.length !== next.thinkingLabels.length) return false

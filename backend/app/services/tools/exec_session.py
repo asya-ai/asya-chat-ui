@@ -495,11 +495,15 @@ async def run_in_exec_session(
             if not session.container_id:
                 raise RuntimeError("Exec session container unavailable")
 
+            def _phase_bootstrap() -> tuple[str, str, int | None, bool]:
+                return _exec_bootstrap(
+                    session.container_id,
+                    timeout_seconds=timeout_seconds,
+                )
+
             t1 = anyio.current_time()
             stdout, stderr, exit_code, timed_out = await anyio.to_thread.run_sync(
-                _exec_bootstrap,
-                session.container_id,
-                timeout_seconds=timeout_seconds,
+                _phase_bootstrap
             )
             timing["exec_ms"] = int((anyio.current_time() - t1) * 1000)
         finally:

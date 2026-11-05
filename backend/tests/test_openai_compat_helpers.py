@@ -9,6 +9,7 @@ from app.api.openai_compat import (
     _coerce_responses_input,
     _normalize_provider_messages,
     _provider_tool_calls,
+    _responses_sse_events,
 )
 
 
@@ -75,7 +76,12 @@ def test_normalize_provider_messages_coerces_orphan_tool_output() -> None:
                 {"id": "call-1", "name": "weather", "arguments": {"city": "Riga"}}
             ],
         },
-        {"role": "tool", "content": "sunny", "tool_call_id": "call-1"},
+        {
+            "role": "tool",
+            "content": "sunny",
+            "tool_call_id": "call-1",
+            "name": "weather",
+        },
     ]
     assert dropped == 0
     assert coerced == 0
@@ -87,6 +93,40 @@ def test_normalize_provider_messages_drops_empty_orphan_tool_message() -> None:
     assert provider_messages == []
     assert dropped == 1
     assert coerced == 0
+
+
+def test_provider_tool_calls_preserves_thought_signature() -> None:
+    calls = [
+        ChatCompletionToolCall(
+            id="call-1",
+            function=ChatCompletionToolCallFunction(name="weather", arguments="{}"),
+            thought_signature="sig-abc",
+        )
+    ]
+    assert _provider_tool_calls(calls) == [
+        {
+            "id": "call-1",
+            "name": "weather",
+            "arguments": {},
+            "thought_signature": "sig-abc",
+        }
+    ]
+
+
+def test_responses_sse_events_emits_created_delta_completed() -> None:
+    payload = {
+        "id": "resp_test",
+        "model": "gemini-flash",
+        "created_at": 123,
+        "output_text": "Hi",
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    events = _responses_sse_events(payload)
+    joined = "".join(events)
+    assert "event: response.created" in joined
+    assert "response.output_text.delta" in joined
+    assert "event: response.completed" in joined
+    assert '"delta": "Hi"' in joined
 
 
 def test_coerce_responses_input_maps_function_call_roundtrip() -> None:

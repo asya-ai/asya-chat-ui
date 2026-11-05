@@ -3,23 +3,35 @@ import { useEffect, useState } from "react"
 const THEME_KEY = "chatui_theme"
 
 export type ThemeMode = "light" | "dark"
+export type ThemePreference = ThemeMode | "system"
 
-export const getTheme = (): ThemeMode => {
-  const stored = localStorage.getItem(THEME_KEY)
-  if (stored === "dark" || stored === "light") {
-    return stored
-  }
+const getSystemTheme = (): ThemeMode => {
   if (typeof window !== "undefined" && window.matchMedia) {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light"
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
   }
   return "light"
 }
 
-export const setTheme = (mode: ThemeMode) => {
-  localStorage.setItem(THEME_KEY, mode)
-  applyTheme(mode)
+export const getThemePreference = (): ThemePreference => {
+  const stored = localStorage.getItem(THEME_KEY)
+  if (stored === "dark" || stored === "light" || stored === "system") {
+    return stored
+  }
+  return "system"
+}
+
+export const resolveTheme = (preference: ThemePreference): ThemeMode => {
+  if (preference === "system") {
+    return getSystemTheme()
+  }
+  return preference
+}
+
+export const getTheme = (): ThemeMode => resolveTheme(getThemePreference())
+
+export const setTheme = (preference: ThemePreference) => {
+  localStorage.setItem(THEME_KEY, preference)
+  applyTheme(resolveTheme(preference))
 }
 
 export const applyTheme = (mode: ThemeMode) => {
@@ -35,6 +47,22 @@ export const toggleTheme = (): ThemeMode => {
   const next = getTheme() === "dark" ? "light" : "dark"
   setTheme(next)
   return next
+}
+
+let systemThemeListenerAttached = false
+
+/** Apply stored theme and follow OS appearance when preference is system. */
+export const initTheme = () => {
+  applyTheme(getTheme())
+  if (systemThemeListenerAttached || typeof window === "undefined" || !window.matchMedia) {
+    return
+  }
+  systemThemeListenerAttached = true
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (getThemePreference() === "system") {
+      applyTheme(getTheme())
+    }
+  })
 }
 
 /** Live light/dark from `<html class="dark">` (follows `setTheme`). */

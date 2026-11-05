@@ -130,6 +130,38 @@ def test_extract_response_text_keeps_text_alongside_function_calls() -> None:
     )
 
 
+def test_contents_from_messages_resolves_tool_name_without_tool_message_name() -> None:
+    provider = _provider_without_init()
+    contents = provider._contents_from_messages(
+        [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "web_search",
+                            "arguments": '{"query":"python"}',
+                        },
+                        "thought_signature": "sig",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": '{"ok": true}',
+            },
+        ]
+    )
+
+    assert contents[1]["parts"][0]["function_call"]["name"] == "web_search"
+    assert contents[1]["parts"][0]["thought_signature"] == "sig"
+    assert contents[2]["parts"][0]["function_response"]["name"] == "web_search"
+
+
 def test_contents_from_messages_keeps_tool_roundtrip() -> None:
     provider = _provider_without_init()
     contents = provider._contents_from_messages(

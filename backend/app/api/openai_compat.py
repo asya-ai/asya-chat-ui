@@ -44,6 +44,8 @@ class ChatCompletionToolCall(BaseModel):
     id: str
     type: str = "function"
     function: ChatCompletionToolCallFunction
+    # Required for Gemini multi-turn tool roundtrips; clients should echo this field.
+    thought_signature: str | None = None
 
 
 class ToolFunction(BaseModel):
@@ -220,13 +222,14 @@ def _provider_tool_calls(
                 parsed_arguments = {}
         except Exception:
             parsed_arguments = {}
-        provider_calls.append(
-            {
-                "id": call.id,
-                "name": call.function.name,
-                "arguments": parsed_arguments,
-            }
-        )
+        provider_call: dict[str, Any] = {
+            "id": call.id,
+            "name": call.function.name,
+            "arguments": parsed_arguments,
+        }
+        if call.thought_signature:
+            provider_call["thought_signature"] = call.thought_signature
+        provider_calls.append(provider_call)
     return provider_calls
 
 
@@ -235,6 +238,7 @@ def _normalize_provider_messages(
 ) -> tuple[list[dict[str, Any]], int, int]:
     provider_messages: list[dict[str, Any]] = []
     pending_tool_call_ids: set[str] = set()
+    pending_tool_call_names: dict[str, str] = {}
     dropped_tool_messages = 0
     coerced_orphan_tool_messages = 0
     for message in normalized_messages:
@@ -247,9 +251,13 @@ def _normalize_provider_messages(
             tool_calls = _provider_tool_calls(message.tool_calls)
             if tool_calls:
                 payload_message["tool_calls"] = tool_calls
-                pending_tool_call_ids.update(
-                    str(call.get("id") or "") for call in tool_calls if call.get("id")
-                )
+                for call in tool_calls:
+                    call_id = str(call.get("id") or "").strip()
+                    call_name = str(call.get("name") or "").strip()
+                    if call_id:
+                        pending_tool_call_ids.add(call_id)
+                    if call_id and call_name:
+                        pending_tool_call_names[call_id] = call_name
             if content_text or tool_calls:
                 provider_messages.append(payload_message)
             continue
@@ -272,14 +280,17 @@ def _normalize_provider_messages(
                 else:
                     dropped_tool_messages += 1
                 continue
-            provider_messages.append(
-                {
-                    "role": "tool",
-                    "content": content_text,
-                    "tool_call_id": tool_call_id,
-                }
-            )
+            tool_name = pending_tool_call_names.get(tool_call_id)
+            tool_payload: dict[str, Any] = {
+                "role": "tool",
+                "content": content_text,
+                "tool_call_id": tool_call_id,
+            }
+            if tool_name:
+                tool_payload["name"] = tool_name
+            provider_messages.append(tool_payload)
             pending_tool_call_ids.discard(tool_call_id)
+            pending_tool_call_names.pop(tool_call_id, None)
             continue
         provider_messages.append(
             {
@@ -401,6 +412,89 @@ class ModelListItem(BaseModel):
 class ModelListResponse(BaseModel):
     object: str = "list"
     data: list[ModelListItem]
+
+
+def _responses_sse_events(response_payload: dict[str, Any]) -> list[str]:
+    """Minimal OpenAI Responses SSE for providers we emulate via chat completions."""
+    response_id = str(response_payload.get("id") or f"resp_{uuid4().hex[:24]}")
+    created_at = int(
+        response_payload.get("created_at")
+        or response_payload.get("created")
+        or datetime.now(timezone.utc).timestamp()
+    )
+    model = str(response_payload.get("model") or "")
+    output_text = str(response_payload.get("output_text") or "")
+    in_progress = {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "in_progress",
+        "model": model,
+        "output": [],
+    }
+    events: list[str] = [
+        f"event: response.created\ndata: {json.dumps({'type': 'response.created', 'response': in_progress}, ensure_ascii=False)}\n\n",
+    ]
+    if output_text:
+        delta = {
+            "type": "response.output_text.delta",
+            "item_id": "msg_0",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": output_text,
+        }
+        events.append(
+            f"event: response.output_text.delta\ndata: {json.dumps(delta, ensure_ascii=False)}\n\n"
+        )
+    completed = dict(response_payload)
+    completed.setdefault("id", response_id)
+    completed.setdefault("object", "response")
+    completed.setdefault("created_at", created_at)
+    completed.setdefault("created", created_at)
+    completed["status"] = "completed"
+    events.append(
+        f"event: response.completed\ndata: {json.dumps({'type': 'response.completed', 'response': completed, 'sequence_number': 0}, ensure_ascii=False)}\n\n"
+    )
+    return events
+
+
+def _response_payload_from_completion(
+    completion: ChatCompletionResponse,
+) -> dict[str, Any]:
+    choice = completion.choices[0]
+    output_text = choice.message.content or ""
+    output_items: list[ResponseOutputMessage | ResponseOutputFunctionCall] = []
+    if output_text:
+        output_items.append(
+            ResponseOutputMessage(
+                id=f"msg_{uuid4().hex[:24]}",
+                content=[ResponseOutputText(text=output_text)],
+            )
+        )
+    response_tool_calls = choice.message.tool_calls or choice.tool_calls or []
+    for tool_call in response_tool_calls:
+        output_items.append(
+            ResponseOutputFunctionCall(
+                id=f"fc_{uuid4().hex[:24]}",
+                call_id=tool_call.id,
+                name=tool_call.function.name,
+                arguments=tool_call.function.arguments,
+            )
+        )
+    response_payload = ResponseCreateResponse(
+        id=completion.id.replace("chatcmpl-", "resp_"),
+        created=completion.created,
+        created_at=completion.created,
+        model=completion.model,
+        output=[item.model_dump(mode="json") for item in output_items],
+        output_text=output_text,
+        usage=ResponseUsage(
+            input_tokens=completion.usage.prompt_tokens,
+            output_tokens=completion.usage.completion_tokens,
+            total_tokens=completion.usage.total_tokens,
+        ),
+    )
+    return response_payload.model_dump(mode="json")
 
 
 def resolve_model(session: Session, model_ref: str) -> ChatModel:
@@ -561,6 +655,7 @@ async def chat_completions(
                 name=call.name,
                 arguments=json.dumps(call.arguments, ensure_ascii=False),
             ),
+            thought_signature=call.thought_signature,
         )
         for call in (response.tool_calls or [])
     ]
@@ -598,8 +693,9 @@ async def chat_completions(
         if choice.message.content:
             delta["content"] = choice.message.content
         if choice.message.tool_calls:
-            delta["tool_calls"] = [
-                {
+            delta["tool_calls"] = []
+            for tool_call in choice.message.tool_calls:
+                tool_delta: dict[str, Any] = {
                     "id": tool_call.id,
                     "type": tool_call.type,
                     "function": {
@@ -607,8 +703,9 @@ async def chat_completions(
                         "arguments": tool_call.function.arguments,
                     },
                 }
-                for tool_call in choice.message.tool_calls
-            ]
+                if tool_call.thought_signature:
+                    tool_delta["thought_signature"] = tool_call.thought_signature
+                delta["tool_calls"].append(tool_delta)
         first_chunk = {
             "id": completion_response.id,
             "object": "chat.completion.chunk",
@@ -788,42 +885,24 @@ async def create_response(
     completion = await chat_completions(
         completion_payload, session=session, auth=auth
     )
-    choice = completion.choices[0]
-    output_text = choice.message.content or ""
-    output_items: list[ResponseOutputMessage | ResponseOutputFunctionCall] = []
-    if output_text:
-        output_items.append(
-            ResponseOutputMessage(
-                id=f"msg_{uuid4().hex[:24]}",
-                content=[ResponseOutputText(text=output_text)],
-            )
+    if isinstance(completion, StreamingResponse):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected streaming chat completion for responses adapter",
         )
-    response_tool_calls = choice.message.tool_calls or choice.tool_calls or []
-    for tool_call in response_tool_calls:
-        output_items.append(
-            ResponseOutputFunctionCall(
-                # Keep OpenAI-like output item IDs (`fc_...`) and preserve
-                # model call linkage in `call_id`.
-                id=f"fc_{uuid4().hex[:24]}",
-                call_id=tool_call.id,
-                name=tool_call.function.name,
-                arguments=tool_call.function.arguments,
-            )
+    response_payload = _response_payload_from_completion(completion)
+    if payload.stream:
+
+        def event_stream():
+            for event in _responses_sse_events(response_payload):
+                yield event
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
         )
-    response_payload = ResponseCreateResponse(
-        id=completion.id.replace("chatcmpl-", "resp_"),
-        created=completion.created,
-        created_at=completion.created,
-        model=completion.model,
-        output=[item.model_dump(mode="json") for item in output_items],
-        output_text=output_text,
-        usage=ResponseUsage(
-            input_tokens=completion.usage.prompt_tokens,
-            output_tokens=completion.usage.completion_tokens,
-            total_tokens=completion.usage.total_tokens,
-        ),
-    )
-    return response_payload.model_dump(mode="json")
+    return response_payload
 
 
 @router.post("/embeddings", response_model=EmbeddingResponse)

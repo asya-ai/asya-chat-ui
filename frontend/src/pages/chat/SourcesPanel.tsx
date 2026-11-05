@@ -14,6 +14,7 @@ type SourcesPanelProps = {
   closeLabel: string
   onClose: () => void
   onNavigateInternal?: (path: string) => void
+  className?: string
 }
 
 const sourceUrl = (source: SourceItem) =>
@@ -40,10 +41,16 @@ export const SourcesPanel = ({
   closeLabel,
   onClose,
   onNavigateInternal,
+  className,
 }: SourcesPanelProps) => {
   const uniqueSources = dedupeSources(sources)
   return (
-  <aside className="flex h-full w-full max-w-[28.5rem] shrink-0 flex-col border-l border-border bg-background">
+  <aside
+    className={cn(
+      "flex h-full w-full max-w-[28.5rem] shrink-0 flex-col border-l border-border bg-background",
+      className
+    )}
+  >
     <div className="flex h-15 shrink-0 items-center justify-between gap-3 px-3 py-2.5">
       <h2 className="truncate font-heading text-4xl leading-10">{title}</h2>
       <Button
