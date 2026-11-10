@@ -1,11 +1,16 @@
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 from json_repair import loads as repair_json_loads
 
 from app.core.config import settings, _normalize_azure_endpoint
 import json
 
+from app.services.openai_completion_params import (
+    merge_openai_chat_completion_payload,
+    merge_openai_responses_payload,
+)
 from app.services.providers.base import (
     ChatResponse,
     ChatStreamChunk,
@@ -413,9 +418,7 @@ async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]
         if event_type == "response.output_item.added":
             item = getattr(event, "item", None)
             if getattr(item, "type", None) == "function_call":
-                if not signaled_tool_calls:
-                    signaled_tool_calls = True
-                    yield ChatStreamChunk(finish_reason="tool_calls")
+                signaled_tool_calls = True
                 index = getattr(event, "output_index", 0) or 0
                 pending_tool_calls[index] = {
                     "id": str(
@@ -426,16 +429,37 @@ async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]
                     "name": str(getattr(item, "name", None) or ""),
                     "arguments": str(getattr(item, "arguments", None) or ""),
                 }
+                call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
+                name = getattr(item, "name", None)
+                yield ChatStreamChunk(
+                    tool_call_deltas=[
+                        {
+                            "index": index,
+                            "id": str(call_id) if call_id else None,
+                            "type": "function",
+                            "function": {"name": str(name) if name else None},
+                        }
+                    ]
+                )
             continue
         if event_type == "response.function_call_arguments.delta":
-            if not signaled_tool_calls:
-                signaled_tool_calls = True
-                yield ChatStreamChunk(finish_reason="tool_calls")
+            signaled_tool_calls = True
             index = getattr(event, "output_index", 0) or 0
             entry = pending_tool_calls.setdefault(
                 index, {"id": "", "name": "", "arguments": ""}
             )
-            entry["arguments"] += str(getattr(event, "delta", None) or "")
+            fragment = str(getattr(event, "delta", None) or "")
+            entry["arguments"] += fragment
+            if fragment:
+                yield ChatStreamChunk(
+                    tool_call_deltas=[
+                        {
+                            "index": index,
+                            "type": "function",
+                            "function": {"arguments": fragment},
+                        }
+                    ]
+                )
             continue
         if event_type == "response.output_item.done":
             item = getattr(event, "item", None)
@@ -463,7 +487,6 @@ async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]
     usage = getattr(final_response, "usage", None) if final_response is not None else None
     yield _usage_chunk_from_response_usage(usage)
     yield ChatStreamChunk(
-        tool_calls=tool_calls or None,
         finish_reason=_finish_reason_from_response(final_response, tool_calls),
     )
 
@@ -546,6 +569,28 @@ class OpenAIProvider:
         if payload.pop("prompt_cache_retention", None) is not None:
             removed = True
         return removed
+
+    def _apply_client_completion_params(
+        self,
+        payload: dict[str, Any],
+        completion_params: dict[str, Any] | None,
+    ) -> None:
+        merge_openai_chat_completion_payload(
+            payload,
+            completion_params,
+            default_reasoning_effort=self.reasoning_effort,
+        )
+
+    def _apply_client_responses_params(
+        self,
+        payload: dict[str, Any],
+        completion_params: dict[str, Any] | None,
+    ) -> None:
+        merge_openai_responses_payload(
+            payload,
+            completion_params,
+            default_reasoning_effort=self.reasoning_effort,
+        )
 
     def _mark_responses_only_model(self, model: str) -> None:
         del model  # preference is per provider instance (one chat model at a time)
@@ -700,13 +745,18 @@ class OpenAIProvider:
             raise
 
     async def _stream_via_responses(
-        self, model: str, messages: list[dict]
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         input_items = _to_responses_input(messages)
         payload: dict[str, object] = {"model": model, "input": input_items}
         reasoning = self._responses_reasoning_payload(model)
         if reasoning:
             payload["reasoning"] = reasoning
+        self._apply_client_responses_params(payload, completion_params)
         self._apply_prompt_cache(payload)
         stream = await self._create_response_stream(payload)
         async for chunk in _iter_response_stream_chunks(stream):
@@ -718,6 +768,8 @@ class OpenAIProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         input_items = _to_responses_input(messages)
         payload: dict[str, object] = {
@@ -739,17 +791,25 @@ class OpenAIProvider:
         mapped_tool_choice = _to_responses_tool_choice(tool_choice)
         if mapped_tool_choice is not None:
             payload["tool_choice"] = mapped_tool_choice
+        self._apply_client_responses_params(payload, completion_params)
         self._apply_prompt_cache(payload)
         stream = await self._create_response_stream(payload)
         async for chunk in _iter_response_stream_chunks(stream):
             yield chunk
 
-    async def _chat_via_responses(self, model: str, messages: list[dict]) -> object:
+    async def _chat_via_responses(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
+    ) -> object:
         input_items = _to_responses_input(messages)
         payload: dict[str, object] = {"model": model, "input": input_items}
         reasoning = self._responses_reasoning_payload(model)
         if reasoning:
             payload["reasoning"] = reasoning
+        self._apply_client_responses_params(payload, completion_params)
         self._apply_prompt_cache(payload)
         return await self._create_response(payload)
 
@@ -759,6 +819,8 @@ class OpenAIProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> object:
         input_items = _to_responses_input(messages)
         payload: dict[str, object] = {
@@ -780,6 +842,7 @@ class OpenAIProvider:
         mapped_tool_choice = _to_responses_tool_choice(tool_choice)
         if mapped_tool_choice is not None:
             payload["tool_choice"] = mapped_tool_choice
+        self._apply_client_responses_params(payload, completion_params)
         self._apply_prompt_cache(payload)
         return await self._create_response(payload)
 
@@ -792,20 +855,29 @@ class OpenAIProvider:
                 raise NonChatModelError(str(exc)) from exc
             raise
 
-    async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
+    ) -> ChatResponse:
         reasoning_content: str | None = None
+        raw_completion = None
         if self._should_use_responses(model):
-            response = await self._chat_via_responses(model, messages)
+            response = await self._chat_via_responses(
+                model, messages, completion_params=completion_params
+            )
             message = _extract_response_text(response)
             reasoning_content = _extract_response_reasoning(response)
             usage = getattr(response, "usage", None)
         else:
-            payload = {"model": model, "messages": messages}
+            payload: dict[str, Any] = {"model": model, "messages": messages}
+            self._apply_client_completion_params(payload, completion_params)
             self._apply_prompt_cache(payload)
-            if self.reasoning_effort and self.reasoning_effort != "none":
-                payload["reasoning_effort"] = self.reasoning_effort
             try:
                 result = await self._create_chat_completion(payload)
+                raw_completion = result
                 message = result.choices[0].message.content or "" if result.choices else ""
                 reasoning_content = (
                     getattr(result.choices[0].message, "reasoning_content", None)
@@ -815,7 +887,9 @@ class OpenAIProvider:
                 usage = result.usage
             except NonChatModelError:
                 self._mark_responses_only_model(model)
-                response = await self._chat_via_responses(model, messages)
+                response = await self._chat_via_responses(
+                    model, messages, completion_params=completion_params
+                )
                 message = _extract_response_text(response)
                 reasoning_content = _extract_response_reasoning(response)
                 usage = getattr(response, "usage", None)
@@ -837,6 +911,7 @@ class OpenAIProvider:
                 cached_tokens=cached_tokens or 0,
                 thinking_tokens=thinking_tokens or 0,
             ),
+            raw_completion=raw_completion,
         )
 
     async def chat_with_tools(
@@ -845,6 +920,8 @@ class OpenAIProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> ChatResponse:
         normalized_messages = []
         for message in messages:
@@ -874,6 +951,7 @@ class OpenAIProvider:
                 messages=normalized_messages,
                 tools=tools,
                 tool_choice=tool_choice,
+                completion_params=completion_params,
             )
             content = _extract_response_text(response)
             usage = getattr(response, "usage", None)
@@ -900,7 +978,7 @@ class OpenAIProvider:
                 tool_calls=tool_calls or None,
                 finish_reason=finish_reason,
             )
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": normalized_messages,
             "tools": [
@@ -916,11 +994,12 @@ class OpenAIProvider:
             ],
             "tool_choice": tool_choice or "auto",
         }
+        self._apply_client_completion_params(payload, completion_params)
         self._apply_prompt_cache(payload)
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            payload["reasoning_effort"] = self.reasoning_effort
+        raw_completion = None
         try:
             result = await self._create_chat_completion(payload)
+            raw_completion = result
             usage = result.usage
         except NonChatModelError:
             self.logger.warning(
@@ -933,6 +1012,7 @@ class OpenAIProvider:
                     messages=normalized_messages,
                     tools=tools,
                     tool_choice=tool_choice,
+                    completion_params=completion_params,
                 )
             except Exception as responses_exc:
                 if not _is_responses_unavailable_error(responses_exc):
@@ -1018,6 +1098,7 @@ class OpenAIProvider:
             ),
             tool_calls=tool_calls or None,
             finish_reason=finish_reason,
+            raw_completion=raw_completion,
         )
 
     async def chat_grounded(self, model: str, messages: list[dict]) -> ChatResponse:
@@ -1052,25 +1133,34 @@ class OpenAIProvider:
             sources=sources or None,
         )
 
-    async def chat_stream(self, model: str, messages: list[dict]):
+    async def chat_stream(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
+    ):
         if self._should_use_responses(model):
-            async for chunk in self._stream_via_responses(model, messages):
+            async for chunk in self._stream_via_responses(
+                model, messages, completion_params=completion_params
+            ):
                 yield chunk
             return
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        self._apply_client_completion_params(payload, completion_params)
         self._apply_prompt_cache(payload)
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            payload["reasoning_effort"] = self.reasoning_effort
         try:
             stream = await self._create_chat_completion(payload)
         except NonChatModelError:
             self._mark_responses_only_model(model)
-            async for chunk in self._stream_via_responses(model, messages):
+            async for chunk in self._stream_via_responses(
+                model, messages, completion_params=completion_params
+            ):
                 yield chunk
             return
         usage_sent = False
@@ -1109,10 +1199,16 @@ class OpenAIProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ):
         if self._should_use_responses(model):
             async for chunk in self._stream_with_tools_via_responses(
-                model, messages, tools, tool_choice=tool_choice
+                model,
+                messages,
+                tools,
+                tool_choice=tool_choice,
+                completion_params=completion_params,
             ):
                 yield chunk
             return
@@ -1157,9 +1253,8 @@ class OpenAIProvider:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        self._apply_client_completion_params(payload, completion_params)
         self._apply_prompt_cache(payload)
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            payload["reasoning_effort"] = self.reasoning_effort
         try:
             stream = await self._create_chat_completion(payload)
         except NonChatModelError:
@@ -1169,7 +1264,11 @@ class OpenAIProvider:
             )
             try:
                 async for chunk in self._stream_with_tools_via_responses(
-                    model, messages, tools, tool_choice=tool_choice
+                    model,
+                    messages,
+                    tools,
+                    tool_choice=tool_choice,
+                    completion_params=completion_params,
                 ):
                     yield chunk
                 self._mark_responses_only_model(model)
@@ -1192,16 +1291,12 @@ class OpenAIProvider:
         pending_tool_calls: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage_sent = False
-        signaled_tool_calls = False
         async for event in stream:
             if event.choices:
                 choice = event.choices[0]
                 finish_reason = getattr(choice, "finish_reason", None) or finish_reason
                 delta = choice.delta
                 tool_deltas = getattr(delta, "tool_calls", None) or []
-                if tool_deltas and not signaled_tool_calls:
-                    signaled_tool_calls = True
-                    yield ChatStreamChunk(finish_reason="tool_calls")
                 content = getattr(delta, "content", None) if delta else None
                 reasoning_content = getattr(delta, "reasoning_content", None) if delta else None
                 if content or reasoning_content:
@@ -1214,11 +1309,30 @@ class OpenAIProvider:
                     if call.id:
                         entry["id"] = call.id
                     function = getattr(call, "function", None)
+                    fn_name = None
+                    fn_arguments = None
                     if function is not None:
                         if function.name:
                             entry["name"] = function.name
+                            fn_name = function.name
                         if function.arguments:
                             entry["arguments"] += function.arguments
+                            fn_arguments = function.arguments
+                    sse_fn: dict[str, str | None] = {}
+                    if fn_name:
+                        sse_fn["name"] = fn_name
+                    if fn_arguments:
+                        sse_fn["arguments"] = fn_arguments
+                    yield ChatStreamChunk(
+                        tool_call_deltas=[
+                            {
+                                "index": index,
+                                "id": call.id,
+                                "type": "function",
+                                "function": sse_fn,
+                            }
+                        ]
+                    )
             if event.usage:
                 usage_sent = True
                 cached_tokens, thinking_tokens = _extract_usage_details(event.usage)
@@ -1239,28 +1353,11 @@ class OpenAIProvider:
                     )
                 )
 
-        tool_calls: list[ChatToolCall] = []
-        for index in sorted(pending_tool_calls):
-            entry = pending_tool_calls[index]
-            arguments: dict = {}
-            if entry["arguments"]:
-                try:
-                    parsed_arguments = repair_json_loads(entry["arguments"])
-                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-                except Exception:
-                    arguments = {}
-            tool_calls.append(
-                ChatToolCall(
-                    id=entry["id"] or f"call_{index}",
-                    name=entry["name"],
-                    arguments=arguments,
-                )
-            )
         if not usage_sent:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
         yield ChatStreamChunk(
-            tool_calls=tool_calls or None,
-            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
+            finish_reason=finish_reason
+            or ("tool_calls" if pending_tool_calls else "stop"),
         )
 
 

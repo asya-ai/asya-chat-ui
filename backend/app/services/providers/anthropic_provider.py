@@ -1,9 +1,11 @@
+import json
 import logging
 from typing import Any
 
 from anthropic import AsyncAnthropic
 
 from app.core.config import settings
+from app.services.openai_completion_params import anthropic_generation_kwargs
 from app.services.providers.base import (
     ChatResponse,
     ChatStreamChunk,
@@ -139,12 +141,20 @@ class AnthropicProvider:
         )
         self.logger = logging.getLogger(__name__)
 
-    async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict | None = None,
+    ) -> ChatResponse:
         system = _extract_system(messages)
         payload = {
             "model": model,
             "messages": _to_anthropic_messages(messages),
-            "max_tokens": DEFAULT_MAX_TOKENS,
+            **anthropic_generation_kwargs(
+                completion_params, default_max_tokens=DEFAULT_MAX_TOKENS
+            ),
         }
         if system:
             payload["system"] = system
@@ -165,12 +175,16 @@ class AnthropicProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict | None = None,
     ) -> ChatResponse:
         system = _extract_system(messages)
         payload = {
             "model": model,
             "messages": _to_anthropic_messages(messages),
-            "max_tokens": DEFAULT_MAX_TOKENS,
+            **anthropic_generation_kwargs(
+                completion_params, default_max_tokens=DEFAULT_MAX_TOKENS
+            ),
             "tools": _tool_payload(tools),
         }
         if system:
@@ -204,12 +218,16 @@ class AnthropicProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict | None = None,
     ):
         system = _extract_system(messages)
         payload = {
             "model": model,
             "messages": _to_anthropic_messages(messages),
-            "max_tokens": DEFAULT_MAX_TOKENS,
+            **anthropic_generation_kwargs(
+                completion_params, default_max_tokens=DEFAULT_MAX_TOKENS
+            ),
             "tools": _tool_payload(tools),
         }
         if system:
@@ -231,20 +249,43 @@ class AnthropicProvider:
                         arguments=getattr(block, "input", {}) or {},
                     )
                 )
-        if tool_calls:
-            yield ChatStreamChunk(finish_reason="tool_calls")
+        for index, call in enumerate(tool_calls):
+            yield ChatStreamChunk(
+                tool_call_deltas=[
+                    {
+                        "index": index,
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                        },
+                    }
+                ]
+            )
+        stop_reason = getattr(final, "stop_reason", None)
+        finish_reason = "tool_calls" if tool_calls else stop_reason
+        if finish_reason == "tool_use":
+            finish_reason = "tool_calls"
         yield ChatStreamChunk(
             usage=_usage_from_anthropic(getattr(final, "usage", None)),
-            tool_calls=tool_calls or None,
-            finish_reason=getattr(final, "stop_reason", None),
+            finish_reason=finish_reason,
         )
 
-    async def chat_stream(self, model: str, messages: list[dict]):
+    async def chat_stream(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict | None = None,
+    ):
         system = _extract_system(messages)
         payload = {
             "model": model,
             "messages": _to_anthropic_messages(messages),
-            "max_tokens": DEFAULT_MAX_TOKENS,
+            **anthropic_generation_kwargs(
+                completion_params, default_max_tokens=DEFAULT_MAX_TOKENS
+            ),
         }
         if system:
             payload["system"] = system

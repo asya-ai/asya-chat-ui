@@ -75,6 +75,26 @@ def test_detects_unsupported_auto_tool_choice_errors() -> None:
     assert _is_unsupported_reasoning_effort_error(exc) is False
 
 
+def test_apply_client_completion_params_merges_limits_and_sampling() -> None:
+    from app.services.providers.openai_provider import OpenAIProvider
+
+    provider = OpenAIProvider(api_key="sk-test", reasoning_effort="low")
+    payload: dict = {"model": "gpt-4o", "messages": []}
+    provider._apply_client_completion_params(
+        payload,
+        {
+            "temperature": 0.25,
+            "max_completion_tokens": 120,
+            "top_p": 0.8,
+            "reasoning_effort": "high",
+        },
+    )
+    assert payload["temperature"] == 0.25
+    assert payload["max_completion_tokens"] == 120
+    assert payload["top_p"] == 0.8
+    assert payload["reasoning_effort"] == "high"
+
+
 def test_extract_usage_details_from_chat_completions() -> None:
     from types import SimpleNamespace
 
@@ -367,11 +387,21 @@ async def test_response_stream_chunks_emit_text_and_tool_calls() -> None:
         "reasoning:rs_1:0",
         "reasoning:rs_1:1",
     ]
-    assert any(chunk.finish_reason == "tool_calls" for chunk in chunks)
-    final_tools = next(chunk.tool_calls for chunk in chunks if chunk.tool_calls is not None)
-    assert final_tools[0].id == "call-1"
-    assert final_tools[0].name == "echo_tool"
-    assert final_tools[0].arguments == {"text": "hi"}
+    tool_deltas = [
+        delta
+        for chunk in chunks
+        if chunk.tool_call_deltas
+        for delta in chunk.tool_call_deltas
+    ]
+    assert tool_deltas
+    assert tool_deltas[0].get("id") == "call-1"
+    assert tool_deltas[0].get("function", {}).get("name") == "echo_tool"
+    assert chunks[-1].finish_reason == "tool_calls"
+    argument_fragments = "".join(
+        (delta.get("function") or {}).get("arguments") or ""
+        for delta in tool_deltas
+    )
+    assert "hi" in argument_fragments
     usage_chunk = next(chunk for chunk in chunks if chunk.usage is not None)
     assert usage_chunk.usage.input_tokens == 3
     assert usage_chunk.usage.output_tokens == 5

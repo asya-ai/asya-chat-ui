@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from json_repair import loads as repair_json_loads
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from sqlmodel import Session, select
 import json
 
@@ -18,21 +18,43 @@ from app.services.team_service import allowed_model_ids
 from app.services.model_capabilities import persist_responses_api_discovery
 from app.services.providers.base import ChatToolSpec
 from app.services.instance_providers import get_provider_for_org
+from app.services.openai_completion_params import params_from_chat_request
+from app.api import openai_compat_support as compat_support
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 logger = logging.getLogger(__name__)
 
 
 class ChatMessagePayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     role: str
-    content: str | list["ChatInputTextPart"] | None = None
+    content: str | list["ChatContentPart"] | None = None
     tool_calls: list["ChatCompletionToolCall"] | None = None
     tool_call_id: str | None = None
+    name: str | None = None
+    refusal: str | None = None
 
 
-class ChatInputTextPart(BaseModel):
+class ChatImageURL(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    url: str
+    detail: str | None = None
+
+
+class ChatContentPart(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     type: str
     text: str | None = None
+    image_url: ChatImageURL | dict[str, Any] | None = None
+    file: dict[str, Any] | None = None
+    input_audio: dict[str, Any] | None = None
+
+
+# Backward-compatible alias for tests and callers.
+ChatInputTextPart = ChatContentPart
 
 
 class ChatCompletionToolCallFunction(BaseModel):
@@ -78,29 +100,58 @@ class ToolSpec(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     messages: list[ChatMessagePayload]
     temperature: float | None = None
+    top_p: float | None = None
+    n: int | None = None
+    stream: bool | None = False
+    stream_options: dict[str, Any] | None = None
+    stop: str | list[str] | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
-    stream: bool | None = False
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    logit_bias: dict[str, int] | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
     user: str | None = None
+    seed: int | None = None
     tools: list[ToolSpec] | None = None
     tool_choice: object | None = None
+    parallel_tool_calls: bool | None = None
+    response_format: dict[str, Any] | None = None
+    audio: dict[str, Any] | None = None
+    service_tier: str | None = None
+    store: bool | None = None
+    metadata: dict[str, Any] | None = None
+    prediction: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
+    web_search_options: dict[str, Any] | None = None
+    modalities: list[str] | None = None
 
 
 class ChatCompletionChoice(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     index: int
     message: ChatMessagePayload
     # Kept for backward compatibility with existing callers.
     tool_calls: list[ChatCompletionToolCall] | None = None
-    finish_reason: str
+    finish_reason: str | None = None
+    logprobs: Any | None = None
 
 
 class ChatCompletionUsage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    prompt_tokens_details: dict[str, Any] | None = None
+    completion_tokens_details: dict[str, Any] | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -199,7 +250,7 @@ def _normalized_role(role: str) -> str:
     return "system" if role == "developer" else role
 
 
-def _chat_content_to_text(value: str | list[ChatInputTextPart] | None) -> str:
+def _chat_content_to_text(value: str | list[ChatContentPart] | None) -> str:
     if isinstance(value, str):
         return value.strip()
     if isinstance(value, list):
@@ -209,6 +260,95 @@ def _chat_content_to_text(value: str | list[ChatInputTextPart] | None) -> str:
             if part.type in {"text", "input_text", "output_text"}
         ).strip()
     return ""
+
+
+def _content_part_to_openai(part: ChatContentPart | dict[str, Any]) -> dict[str, Any] | None:
+    if isinstance(part, ChatContentPart):
+        raw = part.model_dump(mode="json", exclude_none=True)
+    elif isinstance(part, dict):
+        raw = dict(part)
+    else:
+        return None
+
+    part_type = str(raw.get("type") or "").lower()
+    if part_type in {"text", "input_text", "output_text"}:
+        text = raw.get("text")
+        if text is not None and str(text).strip():
+            return {"type": "text", "text": str(text)}
+        return None
+    if part_type == "image_url":
+        image_url = raw.get("image_url")
+        if isinstance(image_url, dict) and str(image_url.get("url") or "").strip():
+            return {"type": "image_url", "image_url": image_url}
+        return None
+    if part_type == "file" and isinstance(raw.get("file"), dict):
+        return raw
+    if part_type == "input_audio" and isinstance(raw.get("input_audio"), dict):
+        return raw
+    if part_type:
+        return raw
+    return None
+
+
+def _message_has_content(value: str | list[ChatContentPart] | None) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_content_part_to_openai(part) for part in value)
+    return False
+
+
+def _message_content_for_provider(
+    value: str | list[ChatContentPart] | None,
+) -> str | list[dict[str, Any]]:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [
+            converted
+            for part in value
+            if (converted := _content_part_to_openai(part)) is not None
+        ]
+        if not parts:
+            return ""
+        has_non_text = any(p.get("type") != "text" for p in parts)
+        if not has_non_text and len(parts) == 1:
+            return str(parts[0].get("text") or "")
+        return parts
+    return ""
+
+
+def _response_input_part_to_chat(part: dict[str, Any]) -> ChatContentPart | None:
+    part_type = str(part.get("type") or "").lower()
+    if part_type in {"input_text", "text", "output_text"}:
+        text = str(part.get("text") or "")
+        if text.strip():
+            return ChatContentPart(type="text", text=text)
+        return None
+    if part_type in {"input_image", "image_url"}:
+        image_url = part.get("image_url")
+        if isinstance(image_url, str) and image_url.strip():
+            return ChatContentPart(
+                type="image_url",
+                image_url=ChatImageURL(url=image_url),
+            )
+        if isinstance(image_url, dict) and str(image_url.get("url") or "").strip():
+            return ChatContentPart(type="image_url", image_url=image_url)
+        url = part.get("url")
+        if isinstance(url, str) and url.strip():
+            return ChatContentPart(
+                type="image_url",
+                image_url=ChatImageURL(url=url),
+            )
+        return None
+    if part_type == "file" and isinstance(part.get("file"), dict):
+        return ChatContentPart(type="file", file=part["file"])
+    text = str(part.get("text") or "").strip()
+    if text:
+        return ChatContentPart(type=part_type or "text", text=text)
+    return ChatContentPart.model_validate(part)
 
 
 def _provider_tool_calls(
@@ -245,9 +385,12 @@ def _normalize_provider_messages(
         role = message.role
         if role == "assistant":
             payload_message: dict[str, Any] = {"role": "assistant"}
-            content_text = _chat_content_to_text(message.content)
-            if content_text:
-                payload_message["content"] = content_text
+            content = _message_content_for_provider(message.content)
+            if isinstance(content, str):
+                if content:
+                    payload_message["content"] = content
+            elif content:
+                payload_message["content"] = content
             tool_calls = _provider_tool_calls(message.tool_calls)
             if tool_calls:
                 payload_message["tool_calls"] = tool_calls
@@ -258,7 +401,7 @@ def _normalize_provider_messages(
                         pending_tool_call_ids.add(call_id)
                     if call_id and call_name:
                         pending_tool_call_names[call_id] = call_name
-            if content_text or tool_calls:
+            if payload_message.get("content") is not None or tool_calls:
                 provider_messages.append(payload_message)
             continue
         if role == "tool":
@@ -292,12 +435,12 @@ def _normalize_provider_messages(
             pending_tool_call_ids.discard(tool_call_id)
             pending_tool_call_names.pop(tool_call_id, None)
             continue
-        provider_messages.append(
-            {
-                "role": role,
-                "content": _chat_content_to_text(message.content),
-            }
-        )
+        content = _message_content_for_provider(message.content)
+        if isinstance(content, str) and not content:
+            continue
+        if isinstance(content, list) and not content:
+            continue
+        provider_messages.append({"role": role, "content": content})
     return provider_messages, dropped_tool_messages, coerced_orphan_tool_messages
 
 
@@ -359,30 +502,98 @@ def _coerce_responses_input(raw_input: Any) -> tuple[list[ChatMessagePayload], s
         role = _normalized_role(str(item.get("role") or "user"))
         content_value = item.get("content")
         if isinstance(content_value, str):
-            text = content_value.strip()
-        elif isinstance(content_value, list):
-            text_parts: list[str] = []
+            messages.append(
+                ChatMessagePayload(role=role, content=content_value.strip())
+            )
+            continue
+        if isinstance(content_value, list):
+            content_parts: list[ChatContentPart] = []
             for part in content_value:
                 if isinstance(part, str):
-                    text_parts.append(part)
+                    if part.strip():
+                        content_parts.append(ChatContentPart(type="text", text=part))
                     continue
                 if not isinstance(part, dict):
                     continue
-                part_type = str(part.get("type") or "").lower()
-                if part_type in {"input_text", "text", "output_text"}:
-                    text_parts.append(str(part.get("text") or ""))
-            text = "".join(text_parts).strip()
-        elif content_value is None:
-            text = ""
-        else:
-            text = str(content_value).strip()
-        messages.append(ChatMessagePayload(role=role, content=text))
+                converted = _response_input_part_to_chat(part)
+                if converted is not None:
+                    content_parts.append(converted)
+            if content_parts:
+                messages.append(ChatMessagePayload(role=role, content=content_parts))
+            else:
+                messages.append(ChatMessagePayload(role=role, content=""))
+            continue
+        if content_value is None:
+            messages.append(ChatMessagePayload(role=role, content=""))
+            continue
+        messages.append(ChatMessagePayload(role=role, content=str(content_value).strip()))
     return messages, "array"
 
 
+class LegacyCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str
+    prompt: str | list[int] | list[str] | list[list[int]] | None = None
+    suffix: str | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    n: int | None = None
+    stream: bool | None = False
+    logprobs: int | None = None
+    echo: bool | None = None
+    stop: str | list[str] | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    best_of: int | None = None
+    logit_bias: dict[str, int] | None = None
+    user: str | None = None
+    seed: int | None = None
+
+
+class LegacyCompletionChoice(BaseModel):
+    text: str
+    index: int
+    logprobs: Any | None = None
+    finish_reason: str | None = None
+
+
+class LegacyCompletionResponse(BaseModel):
+    id: str
+    object: str = "text_completion"
+    created: int
+    model: str
+    choices: list[LegacyCompletionChoice]
+    usage: ChatCompletionUsage
+
+
+def _prompt_to_text(prompt: Any) -> str:
+    if prompt is None:
+        return ""
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        if not prompt:
+            return ""
+        if all(isinstance(item, int) for item in prompt):
+            return ""
+        if all(isinstance(item, str) for item in prompt):
+            return "".join(prompt)
+        if all(isinstance(item, list) for item in prompt):
+            return "".join(_prompt_to_text(item) for item in prompt)
+    return str(prompt)
+
+
 class EmbeddingRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     input: str | list[str]
+    encoding_format: str | None = None
+    dimensions: int | None = None
+    user: str | None = None
 
 
 class EmbeddingData(BaseModel):
@@ -406,7 +617,18 @@ class EmbeddingResponse(BaseModel):
 class ModelListItem(BaseModel):
     id: str
     object: str = "model"
+    created: int
     owned_by: str = "organization"
+
+
+def _model_list_item(model: ChatModel) -> ModelListItem:
+    # Stable per-model unix time (ChatModel has no created_at column).
+    created_ts = (int.from_bytes(model.id.bytes[:4], "big") % 800_000_000) + 1_500_000_000
+    return ModelListItem(
+        id=model.model_name,
+        created=created_ts,
+        owned_by=model.provider or "organization",
+    )
 
 
 class ModelListResponse(BaseModel):
@@ -543,7 +765,33 @@ def list_models(
     if disabled_providers:
         models_query = models_query.where(ChatModel.provider.notin_(disabled_providers))
     models = session.exec(models_query).all()
-    return ModelListResponse(data=[ModelListItem(id=model.model_name) for model in models])
+    return ModelListResponse(data=[_model_list_item(model) for model in models])
+
+
+@router.get("/models/{model_id}", response_model=ModelListItem)
+def get_model(
+    model_id: str,
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> ModelListItem:
+    model = resolve_model(session, model_id)
+    if model.id not in allowed_model_ids(session, auth.org_id, auth.user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Model is not enabled for this organization",
+        )
+    provider_config = session.exec(
+        select(OrgProviderConfig).where(
+            OrgProviderConfig.org_id == auth.org_id,
+            OrgProviderConfig.provider == model.provider,
+        )
+    ).first()
+    if provider_config is not None and provider_config.is_enabled is False:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model not found",
+        )
+    return _model_list_item(model)
 
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
@@ -576,7 +824,7 @@ async def chat_completions(
         )
 
     non_empty_messages = sum(
-        1 for message in normalized_messages if _chat_content_to_text(message.content)
+        1 for message in normalized_messages if _message_has_content(message.content)
     )
     if non_empty_messages == 0:
         raise HTTPException(
@@ -606,140 +854,239 @@ async def chat_completions(
         openrouter_endpoint=model.openrouter_endpoint,
     )
     message_payload, dropped_tool_messages, coerced_orphan_tool_messages = (
-        _normalize_provider_messages(
-        normalized_messages
-        )
+        _normalize_provider_messages(normalized_messages)
     )
-    if payload.tools:
-        tools = [
-            ChatToolSpec(
-                name=tool.function.name,
-                description=tool.function.description or "",
-                parameters=tool.function.parameters or {},
+    completion_params = params_from_chat_request(payload)
+    tool_specs = compat_support.chat_tools_from_specs(payload.tools or [])
+
+    if payload.stream:
+
+        async def event_stream():
+            completion_id = f"chatcmpl-{uuid4().hex[:24]}"
+            created = int(datetime.now(timezone.utc).timestamp())
+            merged_stream_options = compat_support.merge_stream_options(
+                completion_params, payload.stream_options
             )
-            for tool in payload.tools
-            if tool.type == "function"
-        ]
+            include_usage = compat_support.stream_include_usage(merged_stream_options)
+            stream_params = dict(completion_params)
+            stream_params["stream_options"] = compat_support.provider_stream_options(
+                merged_stream_options
+            )
+            sent_role = False
+            pending_tool_calls: dict[int, dict[str, str]] = {}
+            final_usage = None
+            finish_reason = "stop"
+            tool_index_by_id: dict[str, int] = {}
+            next_tool_index = 0
+
+            if tool_specs and hasattr(provider, "chat_stream_with_tools"):
+                stream_iter = provider.chat_stream_with_tools(
+                    model.model_name,
+                    message_payload,
+                    tool_specs,
+                    tool_choice=payload.tool_choice,
+                    completion_params=stream_params,
+                )
+            elif hasattr(provider, "chat_stream"):
+                stream_iter = provider.chat_stream(
+                    model.model_name,
+                    message_payload,
+                    completion_params=stream_params,
+                )
+            else:
+                if tool_specs:
+                    response = await provider.chat_with_tools(
+                        model.model_name,
+                        message_payload,
+                        tool_specs,
+                        tool_choice=payload.tool_choice,
+                        completion_params=completion_params,
+                    )
+                else:
+                    response = await provider.chat(
+                        model.model_name,
+                        message_payload,
+                        completion_params=completion_params,
+                    )
+                completion = compat_support.completion_from_chat_response(
+                    response, model_name=model.model_name
+                )
+                compat_support.record_usage_event(
+                    session,
+                    org_id=org_id,
+                    user_id=auth.user.id,
+                    model=model,
+                    usage=response.usage,
+                )
+                persist_responses_api_discovery(session, model, provider)
+                choice = completion.choices[0]
+                delta: dict[str, Any] = {"role": "assistant"}
+                if choice.message.content:
+                    delta["content"] = choice.message.content
+                if choice.message.tool_calls:
+                    delta["tool_calls"] = [
+                        {
+                            "index": i,
+                            "id": call.id,
+                            "type": call.type,
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                        for i, call in enumerate(choice.message.tool_calls)
+                    ]
+                yield compat_support.stream_chunk_sse(
+                    completion_id=completion_id,
+                    created=created,
+                    model=model.model_name,
+                    index=0,
+                    delta=delta,
+                )
+                yield compat_support.stream_chunk_sse(
+                    completion_id=completion_id,
+                    created=created,
+                    model=model.model_name,
+                    index=0,
+                    delta={},
+                    finish_reason=choice.finish_reason,
+                )
+                if include_usage and completion.usage is not None:
+                    yield compat_support.stream_chunk_sse(
+                        completion_id=completion_id,
+                        created=created,
+                        model=model.model_name,
+                        index=0,
+                        delta={},
+                        usage=completion.usage,
+                        usage_only=True,
+                    )
+                yield "data: [DONE]\n\n"
+                return
+
+            async for chunk in stream_iter:
+                if chunk.usage is not None:
+                    final_usage = chunk.usage
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
+                delta: dict[str, Any] = {}
+                if not sent_role:
+                    delta["role"] = "assistant"
+                    sent_role = True
+                if chunk.content:
+                    delta["content"] = chunk.content
+                if chunk.reasoning_content:
+                    delta["reasoning_content"] = chunk.reasoning_content
+                if delta:
+                    yield compat_support.stream_chunk_sse(
+                        completion_id=completion_id,
+                        created=created,
+                        model=model.model_name,
+                        index=0,
+                        delta=delta,
+                    )
+                if chunk.tool_call_deltas:
+                    yield compat_support.stream_chunk_sse(
+                        completion_id=completion_id,
+                        created=created,
+                        model=model.model_name,
+                        index=0,
+                        delta={
+                            "tool_calls": compat_support.tool_call_deltas_to_sse(
+                                chunk.tool_call_deltas
+                            )
+                        },
+                    )
+                elif chunk.tool_calls:
+                    tool_deltas: list[dict[str, Any]] = []
+                    for call in chunk.tool_calls:
+                        index = tool_index_by_id.get(call.id)
+                        if index is None:
+                            index = next_tool_index
+                            next_tool_index += 1
+                            tool_index_by_id[call.id] = index
+                        tool_deltas.append(
+                            {
+                                "index": index,
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": json.dumps(
+                                        call.arguments, ensure_ascii=False
+                                    ),
+                                },
+                            }
+                        )
+                    yield compat_support.stream_chunk_sse(
+                        completion_id=completion_id,
+                        created=created,
+                        model=model.model_name,
+                        index=0,
+                        delta={"tool_calls": tool_deltas},
+                    )
+
+            usage_api = compat_support.final_chunk_usage_from_stream(final_usage)
+            if final_usage is not None:
+                compat_support.record_usage_event(
+                    session,
+                    org_id=org_id,
+                    user_id=auth.user.id,
+                    model=model,
+                    usage=final_usage,
+                )
+                persist_responses_api_discovery(session, model, provider)
+            yield compat_support.stream_chunk_sse(
+                completion_id=completion_id,
+                created=created,
+                model=model.model_name,
+                index=0,
+                delta={},
+                finish_reason=finish_reason,
+            )
+            if include_usage and usage_api is not None:
+                yield compat_support.stream_chunk_sse(
+                    completion_id=completion_id,
+                    created=created,
+                    model=model.model_name,
+                    index=0,
+                    delta={},
+                    usage=usage_api,
+                    usage_only=True,
+                )
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    if tool_specs:
         response = await provider.chat_with_tools(
             model.model_name,
             message_payload,
-            tools,
+            tool_specs,
             tool_choice=payload.tool_choice,
+            completion_params=completion_params,
         )
     else:
         response = await provider.chat(
             model.model_name,
             message_payload,
+            completion_params=completion_params,
         )
-    usage_event = UsageEvent(
+    compat_support.record_usage_event(
+        session,
         org_id=org_id,
         user_id=auth.user.id,
-        chat_id=None,
-        message_id=None,
-        model_id=model.id,
-        prompt_tokens=response.usage.prompt_tokens,
-        completion_tokens=response.usage.completion_tokens,
-        total_tokens=response.usage.total_tokens,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
-        cached_tokens=response.usage.cached_tokens,
-        thinking_tokens=response.usage.thinking_tokens,
+        model=model,
+        usage=response.usage,
     )
-    session.add(usage_event)
-    session.commit()
     persist_responses_api_discovery(session, model, provider)
-    tool_calls = [
-        ChatCompletionToolCall(
-            id=call.id,
-            function=ChatCompletionToolCallFunction(
-                name=call.name,
-                arguments=json.dumps(call.arguments, ensure_ascii=False),
-            ),
-            thought_signature=call.thought_signature,
-        )
-        for call in (response.tool_calls or [])
-    ]
-    finish_reason = (
-        response.finish_reason
-        or ("tool_calls" if tool_calls else "stop")
+    return compat_support.completion_from_chat_response(
+        response, model_name=model.model_name
     )
-
-    completion_response = ChatCompletionResponse(
-        id=f"chatcmpl-{uuid4().hex[:24]}",
-        object="chat.completion",
-        created=int(datetime.now(timezone.utc).timestamp()),
-        model=model.model_name,
-        choices=[
-            ChatCompletionChoice(
-                index=0,
-                message=ChatMessagePayload(
-                    role="assistant",
-                    content=response.content,
-                    tool_calls=tool_calls or None,
-                ),
-                tool_calls=tool_calls or None,
-                finish_reason=finish_reason,
-            )
-        ],
-        usage=ChatCompletionUsage(
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
-        ),
-    )
-    if payload.stream:
-        choice = completion_response.choices[0]
-        delta: dict[str, Any] = {"role": "assistant"}
-        if choice.message.content:
-            delta["content"] = choice.message.content
-        if choice.message.tool_calls:
-            delta["tool_calls"] = []
-            for tool_call in choice.message.tool_calls:
-                tool_delta: dict[str, Any] = {
-                    "id": tool_call.id,
-                    "type": tool_call.type,
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
-                    },
-                }
-                if tool_call.thought_signature:
-                    tool_delta["thought_signature"] = tool_call.thought_signature
-                delta["tool_calls"].append(tool_delta)
-        first_chunk = {
-            "id": completion_response.id,
-            "object": "chat.completion.chunk",
-            "created": completion_response.created,
-            "model": completion_response.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": delta,
-                    "finish_reason": None,
-                }
-            ],
-        }
-        final_chunk = {
-            "id": completion_response.id,
-            "object": "chat.completion.chunk",
-            "created": completion_response.created,
-            "model": completion_response.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": choice.finish_reason,
-                }
-            ],
-        }
-
-        def event_stream():
-            yield f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
-    return completion_response
 
 
 @router.post("/responses", response_model=None)
@@ -867,21 +1214,32 @@ async def create_response(
 
     messages, input_type = _coerce_responses_input(payload.input)
     non_empty_messages = sum(
-        1 for message in messages if _chat_content_to_text(message.content)
+        1 for message in messages if _message_has_content(message.content)
     )
     if non_empty_messages == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Request input contains no non-empty text content",
+            detail="Request input contains no non-empty message content",
         )
     completion_payload = ChatCompletionRequest(
         model=payload.model,
         messages=messages,
         temperature=payload.temperature,
+        top_p=getattr(payload, "top_p", None),
         max_tokens=payload.max_output_tokens,
+        max_completion_tokens=payload.max_output_tokens,
         tools=payload.tools,
         tool_choice=payload.tool_choice,
+        stop=getattr(payload, "stop", None),
+        metadata=getattr(payload, "metadata", None),
+        parallel_tool_calls=getattr(payload, "parallel_tool_calls", None),
+        store=getattr(payload, "store", None),
+        user=getattr(payload, "user", None),
+        stream=payload.stream,
     )
+    adapter_stream = payload.stream and model.provider != "openai"
+    if adapter_stream:
+        completion_payload = completion_payload.model_copy(update={"stream": False})
     completion = await chat_completions(
         completion_payload, session=session, auth=auth
     )
@@ -905,6 +1263,62 @@ async def create_response(
     return response_payload
 
 
+@router.post("/completions", response_model=LegacyCompletionResponse)
+async def legacy_completions(
+    payload: LegacyCompletionRequest,
+    session: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> LegacyCompletionResponse | StreamingResponse:
+    prompt_text = _prompt_to_text(payload.prompt)
+    if not prompt_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="prompt is required",
+        )
+    messages = [ChatMessagePayload(role="user", content=prompt_text)]
+    chat_payload = ChatCompletionRequest(
+        model=payload.model,
+        messages=messages,
+        temperature=payload.temperature,
+        top_p=payload.top_p,
+        n=payload.n,
+        stream=payload.stream,
+        max_tokens=payload.max_tokens,
+        max_completion_tokens=payload.max_completion_tokens,
+        stop=payload.stop,
+        presence_penalty=payload.presence_penalty,
+        frequency_penalty=payload.frequency_penalty,
+        logit_bias=payload.logit_bias,
+        user=payload.user,
+        seed=payload.seed,
+    )
+    completion = await chat_completions(chat_payload, session=session, auth=auth)
+    if isinstance(completion, StreamingResponse):
+        return StreamingResponse(
+            compat_support.adapt_chat_completion_stream_to_text(completion),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+    created = completion.created
+    completion_id = completion.id.replace("chatcmpl-", "cmpl-")
+    choices = [
+        LegacyCompletionChoice(
+            text=choice.message.content or "",
+            index=choice.index,
+            logprobs=choice.logprobs,
+            finish_reason=choice.finish_reason,
+        )
+        for choice in completion.choices
+    ]
+    return LegacyCompletionResponse(
+        id=completion_id,
+        created=created,
+        model=completion.model,
+        choices=choices,
+        usage=completion.usage,
+    )
+
+
 @router.post("/embeddings", response_model=EmbeddingResponse)
 async def create_embeddings(
     payload: EmbeddingRequest,
@@ -912,7 +1326,7 @@ async def create_embeddings(
     auth: AuthContext = Depends(get_auth_context),
 ) -> EmbeddingResponse:
     model = resolve_model(session, payload.model)
-    if model.provider not in {"openai", "azure"}:
+    if model.provider not in {"openai", "azure", "openrouter"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Embeddings not supported for this provider",
@@ -921,7 +1335,7 @@ async def create_embeddings(
     api_key = provider_config.api_key_override if provider_config else None
     base_url = provider_config.base_url_override if provider_config else None
     endpoint = provider_config.endpoint_override if provider_config else None
-    from openai import AsyncAzureOpenAI, AsyncOpenAI
+    from openai import AsyncAzureOpenAI, AsyncOpenAI, OpenAIError
 
     if model.provider == "azure":
         client = AsyncAzureOpenAI(
@@ -929,13 +1343,50 @@ async def create_embeddings(
             azure_endpoint=endpoint or settings.azure_openai_endpoint,
             api_version=settings.azure_openai_api_version,
         )
+    elif model.provider == "openrouter":
+        client = AsyncOpenAI(
+            api_key=api_key or settings.openrouter_api_key,
+            base_url=base_url or "https://openrouter.ai/api/v1",
+        )
     else:
         client = AsyncOpenAI(
             api_key=api_key or settings.openai_api_key,
             base_url=base_url,
         )
     inputs = payload.input if isinstance(payload.input, list) else [payload.input]
-    response = await client.embeddings.create(model=model.model_name, input=inputs)
+    embed_kwargs: dict[str, Any] = {
+        "model": model.model_name,
+        "input": inputs,
+    }
+    if payload.encoding_format is not None:
+        embed_kwargs["encoding_format"] = payload.encoding_format
+    if payload.dimensions is not None:
+        embed_kwargs["dimensions"] = payload.dimensions
+    if payload.user is not None:
+        embed_kwargs["user"] = payload.user
+    try:
+        response = await client.embeddings.create(**embed_kwargs)
+    except OpenAIError as exc:
+        logger.warning(
+            "openai_compat.embeddings upstream_error org_id=%s model=%s: %s",
+            auth.org_id,
+            model.model_name,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "openai_compat.embeddings_error org_id=%s model=%s",
+            auth.org_id,
+            model.model_name,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Embedding request failed",
+        ) from exc
     data = [
         EmbeddingData(embedding=item.embedding, index=item.index)
         for item in response.data

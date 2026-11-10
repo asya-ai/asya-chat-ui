@@ -21,6 +21,7 @@ class ChatResponse:
     tool_calls: list["ChatToolCall"] | None = None
     finish_reason: str | None = None
     sources: list[dict] | list[str] | None = None
+    raw_completion: Any | None = None
 
 
 @dataclass
@@ -31,15 +32,26 @@ class ChatStreamChunk:
     reasoning_id: str | None = None
     usage: ChatUsage | None = None
     tool_calls: list["ChatToolCall"] | None = None
+    tool_call_deltas: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
 
 
 class ChatProvider(Protocol):
-    async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
+    ) -> ChatResponse:
         ...
 
     async def chat_stream(
-        self, model: str, messages: list[dict]
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         ...
 
@@ -49,6 +61,8 @@ class ChatProvider(Protocol):
         messages: list[dict],
         tools: list["ChatToolSpec"],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> ChatResponse:
         ...
 

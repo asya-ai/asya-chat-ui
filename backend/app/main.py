@@ -2,9 +2,11 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+from app.api import openai_compat_support as openai_compat_support
 
 from app.api.router import api_router
 from app.services.integrations.google_mcp_embed import google_mcp_embed
@@ -103,6 +105,10 @@ def _redact_sensitive(value):
     return value
 
 
+def _is_openai_compat_path(request: Request) -> bool:
+    return "/v1/" in request.url.path or request.url.path.rstrip("/").endswith("/v1")
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
@@ -113,4 +119,43 @@ async def validation_exception_handler(
         if "input" in redacted:
             redacted["input"] = _redact_sensitive(redacted["input"])
         redacted_errors.append(redacted)
+    if _is_openai_compat_path(request):
+        first = redacted_errors[0] if redacted_errors else {}
+        loc = first.get("loc") or ()
+        param = ".".join(str(part) for part in loc if part not in {"body"}) or None
+        message = first.get("msg", "Invalid request")
+        if param:
+            message = f"{param}: {message}"
+        return JSONResponse(
+            status_code=400,
+            content=openai_compat_support.openai_error_body(
+                message,
+                param=param,
+            ),
+        )
     return JSONResponse(status_code=422, content={"detail": redacted_errors})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    if not _is_openai_compat_path(request):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    error_type = "invalid_request_error"
+    code = None
+    if exc.status_code in {401, 403}:
+        error_type = "invalid_request_error"
+        code = "permission_denied" if exc.status_code == 403 else "invalid_api_key"
+    elif exc.status_code == 404:
+        error_type = "invalid_request_error"
+        code = "model_not_found"
+    elif exc.status_code >= 500:
+        error_type = "server_error"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=openai_compat_support.openai_error_body(
+            detail,
+            error_type=error_type,
+            code=code,
+        ),
+    )

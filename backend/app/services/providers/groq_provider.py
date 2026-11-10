@@ -1,10 +1,13 @@
 import logging
+from typing import Any
+
 from groq import AsyncGroq
 from json_repair import loads as repair_json_loads
 
 from app.core.config import settings
 import json
 
+from app.services.openai_completion_params import merge_openai_chat_completion_payload
 from app.services.providers.base import (
     ChatResponse,
     ChatStreamChunk,
@@ -46,8 +49,15 @@ class GroqProvider:
             removed = True
         return removed
 
-    async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
-        payload = {"model": model, "messages": messages}
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        payload: dict[str, Any] = {"model": model, "messages": messages}
+        merge_openai_chat_completion_payload(payload, completion_params, default_reasoning_effort=None)
         self._apply_prompt_cache(payload)
         try:
             result = await self.client.chat.completions.create(**payload)
@@ -74,6 +84,7 @@ class GroqProvider:
                 cached_tokens=0,
                 thinking_tokens=0,
             ),
+            raw_completion=result,
         )
 
     async def chat_with_tools(
@@ -82,6 +93,8 @@ class GroqProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ) -> ChatResponse:
         normalized_messages = []
         for message in messages:
@@ -105,7 +118,7 @@ class GroqProvider:
                 )
             else:
                 normalized_messages.append(message)
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": normalized_messages,
             "tools": [
@@ -121,6 +134,7 @@ class GroqProvider:
             ],
             "tool_choice": tool_choice or "auto",
         }
+        merge_openai_chat_completion_payload(payload, completion_params, default_reasoning_effort=None)
         self._apply_prompt_cache(payload)
         try:
             result = await self.client.chat.completions.create(**payload)
@@ -168,15 +182,23 @@ class GroqProvider:
             ),
             tool_calls=tool_calls or None,
             finish_reason=finish_reason,
+            raw_completion=result,
         )
 
-    async def chat_stream(self, model: str, messages: list[dict]):
-        payload = {
+    async def chat_stream(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict[str, Any] | None = None,
+    ):
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        merge_openai_chat_completion_payload(payload, completion_params, default_reasoning_effort=None)
         self._apply_prompt_cache(payload)
         try:
             stream = await self.client.chat.completions.create(**payload)
@@ -218,6 +240,8 @@ class GroqProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict[str, Any] | None = None,
     ):
         normalized_messages = []
         for message in messages:
@@ -259,6 +283,7 @@ class GroqProvider:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        merge_openai_chat_completion_payload(payload, completion_params, default_reasoning_effort=None)
         self._apply_prompt_cache(payload)
         try:
             stream = await self.client.chat.completions.create(**payload)
@@ -276,16 +301,12 @@ class GroqProvider:
         pending_tool_calls: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage_sent = False
-        signaled_tool_calls = False
         async for event in stream:
             if event.choices:
                 choice = event.choices[0]
                 finish_reason = getattr(choice, "finish_reason", None) or finish_reason
                 delta = choice.delta
                 tool_deltas = getattr(delta, "tool_calls", None) or []
-                if tool_deltas and not signaled_tool_calls:
-                    signaled_tool_calls = True
-                    yield ChatStreamChunk(finish_reason="tool_calls")
                 if delta and delta.content:
                     yield ChatStreamChunk(content=delta.content)
                 for call in tool_deltas:
@@ -296,11 +317,30 @@ class GroqProvider:
                     if call.id:
                         entry["id"] = call.id
                     function = getattr(call, "function", None)
+                    fn_name = None
+                    fn_arguments = None
                     if function is not None:
                         if function.name:
                             entry["name"] = function.name
+                            fn_name = function.name
                         if function.arguments:
                             entry["arguments"] += function.arguments
+                            fn_arguments = function.arguments
+                    sse_fn: dict[str, str | None] = {}
+                    if fn_name:
+                        sse_fn["name"] = fn_name
+                    if fn_arguments:
+                        sse_fn["arguments"] = fn_arguments
+                    yield ChatStreamChunk(
+                        tool_call_deltas=[
+                            {
+                                "index": index,
+                                "id": call.id,
+                                "type": "function",
+                                "function": sse_fn,
+                            }
+                        ]
+                    )
             if event.usage:
                 usage_sent = True
                 yield ChatStreamChunk(
@@ -315,26 +355,9 @@ class GroqProvider:
                     )
                 )
 
-        tool_calls: list[ChatToolCall] = []
-        for index in sorted(pending_tool_calls):
-            entry = pending_tool_calls[index]
-            arguments: dict = {}
-            if entry["arguments"]:
-                try:
-                    parsed_arguments = repair_json_loads(entry["arguments"])
-                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-                except Exception:
-                    arguments = {}
-            tool_calls.append(
-                ChatToolCall(
-                    id=entry["id"] or f"call_{index}",
-                    name=entry["name"],
-                    arguments=arguments,
-                )
-            )
         if not usage_sent:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
         yield ChatStreamChunk(
-            tool_calls=tool_calls or None,
-            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
+            finish_reason=finish_reason
+            or ("tool_calls" if pending_tool_calls else "stop"),
         )

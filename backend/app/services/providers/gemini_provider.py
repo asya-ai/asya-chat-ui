@@ -567,7 +567,13 @@ class GeminiProvider:
             async for chunk in stream:
                 yield chunk
 
-    async def chat(self, model: str, messages: list[dict]) -> ChatResponse:
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict | None = None,
+    ) -> ChatResponse:
         def _run() -> ChatResponse:
             system_instruction = self._extract_system_instruction(messages)
             contents = self._contents_from_messages(messages)
@@ -613,7 +619,13 @@ class GeminiProvider:
 
         return await anyio.to_thread.run_sync(_run)
 
-    async def chat_stream(self, model: str, messages: list[dict]):
+    async def chat_stream(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        completion_params: dict | None = None,
+    ):
         system_instruction = self._extract_system_instruction(messages)
         contents = self._contents_from_messages(messages)
         usage_sent = False
@@ -641,6 +653,8 @@ class GeminiProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict | None = None,
     ) -> ChatResponse:
         def _run() -> ChatResponse:
             system_instruction = self._extract_system_instruction(messages)
@@ -700,13 +714,16 @@ class GeminiProvider:
         messages: list[dict],
         tools: list[ChatToolSpec],
         tool_choice: object | None = None,
+        *,
+        completion_params: dict | None = None,
     ):
         _ = tool_choice
         system_instruction = self._extract_system_instruction(messages)
         contents = self._contents_from_messages(messages)
         tool_declarations = self._tool_declarations(tools)
         pending_tool_calls: dict[str, ChatToolCall] = {}
-        signaled_tool_calls = False
+        tool_index_by_key: dict[str, int] = {}
+        next_tool_index = 0
         usage_sent = False
 
         async for chunk in self._generate_content_stream_with_cache_fallback(
@@ -723,10 +740,28 @@ class GeminiProvider:
                 yield ChatStreamChunk(reasoning_content=reasoning)
             for call in self._tool_calls_from_response(chunk):
                 key = f"{call.id}:{call.name}"
-                if key not in pending_tool_calls and not signaled_tool_calls:
-                    signaled_tool_calls = True
-                    yield ChatStreamChunk(finish_reason="tool_calls")
-                pending_tool_calls[key] = call
+                if key not in pending_tool_calls:
+                    index = next_tool_index
+                    next_tool_index += 1
+                    tool_index_by_key[key] = index
+                    pending_tool_calls[key] = call
+                    yield ChatStreamChunk(
+                        tool_call_deltas=[
+                            {
+                                "index": index,
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": json.dumps(
+                                        call.arguments, ensure_ascii=False
+                                    ),
+                                },
+                            }
+                        ]
+                    )
+                else:
+                    pending_tool_calls[key] = call
             usage = getattr(chunk, "usage_metadata", None)
             if usage is not None:
                 usage_sent = True
@@ -736,7 +771,6 @@ class GeminiProvider:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
         tool_calls = list(pending_tool_calls.values())
         yield ChatStreamChunk(
-            tool_calls=tool_calls or None,
             finish_reason="tool_calls" if tool_calls else "stop",
         )
 
