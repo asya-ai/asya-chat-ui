@@ -15,7 +15,10 @@ from app.core.config import settings
 from app.models import ChatModel, OrgProviderConfig, UsageEvent
 from app.services.org_service import require_provider_enabled
 from app.services.team_service import allowed_model_ids
-from app.services.model_capabilities import persist_responses_api_discovery
+from app.services.model_capabilities import (
+    persist_responses_api_discovery,
+    prefer_responses_api_for_model,
+)
 from app.services.providers.base import ChatToolSpec
 from app.services.instance_providers import get_provider_for_org
 from app.services.openai_completion_params import params_from_chat_request
@@ -850,7 +853,7 @@ async def chat_completions(
         reasoning_effort=model.reasoning_effort,
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=settings.openai_prompt_cache_retention,
-        prefer_responses_api=model.uses_responses_api is True,
+        prefer_responses_api=prefer_responses_api_for_model(model),
         openrouter_endpoint=model.openrouter_endpoint,
     )
     message_payload, dropped_tool_messages, coerced_orphan_tool_messages = (

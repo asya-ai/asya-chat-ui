@@ -39,8 +39,11 @@ import {
   rasterizePdfExportHtml,
 } from "@/pages/chat/exportCoworkMarkdown"
 import {
+  attachmentImageUrl,
   collectChatImageUrlMap,
+  mergeAttachmentListIntoImageUrlMap,
   resolveCoworkPresentationMarkdown,
+  resolveMarkdownImageSrc,
 } from "@/pages/chat/resolveCoworkPresentationImages"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
@@ -1553,8 +1556,54 @@ const MessageBubbleComponent = ({
     return t("chat_thinking")
   })()
 
+  const generatedFiles = useMemo(
+    () => (!isUser ? collectDownloadableAttachments(msg) : []),
+    [isUser, msg]
+  )
+
+  const chatImageUrlMap = useMemo(() => {
+    const base = collectChatImageUrlMap(chatImageMessages ?? [msg])
+    return !isUser
+      ? mergeAttachmentListIntoImageUrlMap(base, generatedFiles)
+      : base
+  }, [chatImageMessages, generatedFiles, isUser, msg])
+
+  const latestInlineImageUrl = useMemo(() => {
+    if (isUser) return null
+    const imageFiles = generatedFiles.filter(
+      (attachment) =>
+        (attachment.content_type ?? "").startsWith("image/") ||
+        /\.(png|jpe?g|gif|webp|svg)$/i.test(attachment.file_name ?? "")
+    )
+    if (!imageFiles.length) return null
+    return attachmentImageUrl(imageFiles[imageFiles.length - 1]) ?? null
+  }, [generatedFiles, isUser])
+
+  const inlineImageMapKey = useMemo(() => {
+    const values = Object.values(chatImageUrlMap)
+    if (!values.length && !latestInlineImageUrl) return "none"
+    return `${values.length}:${latestInlineImageUrl ?? ""}:${values[values.length - 1]?.slice(0, 48) ?? ""}`
+  }, [chatImageUrlMap, latestInlineImageUrl])
+
   const markdownComponents = useMemo(
     () => ({
+      img({ src, alt, node, ...rest }: any) {
+        void node
+        const resolved = resolveMarkdownImageSrc(
+          typeof src === "string" ? src : undefined,
+          chatImageUrlMap,
+          { fallbackUrl: latestInlineImageUrl }
+        )
+        return (
+          <img
+            {...rest}
+            src={resolved}
+            alt={typeof alt === "string" ? alt : ""}
+            className="bg-muted/50 my-3 rounded-md w-auto max-w-full h-auto max-h-[min(70vh,640px)] object-contain"
+            loading="lazy"
+          />
+        )
+      },
       p({ children, node, ...rest }: any) {
         void node
         return (
@@ -1779,24 +1828,23 @@ const MessageBubbleComponent = ({
         )
       },
     }),
-    [codeTheme, isUser, t]
+    [chatImageUrlMap, codeTheme, isUser, latestInlineImageUrl, t]
   )
   const isLiveGeneration =
     msg.generation_status === "queued" ||
     msg.generation_status === "running" ||
     msg.generation_status === "streaming"
 
-  const chatImageUrlMap = useMemo(
-    () => collectChatImageUrlMap(chatImageMessages ?? [msg]),
-    [chatImageMessages, msg]
-  )
-
   const renderMarkdown = (markdown: string, key?: string) => {
     const base = isUser ? preserveMarkdownBlankLines(markdown) : markdown
-    const resolved = resolveCoworkPresentationMarkdown(base, chatImageUrlMap)
+    const resolved = resolveCoworkPresentationMarkdown(
+      base,
+      chatImageUrlMap,
+      isUser ? undefined : { fallbackUrl: latestInlineImageUrl }
+    )
     return (
       <DeferredMarkdown
-        key={key}
+        key={key ? `${key}-${inlineImageMapKey}` : inlineImageMapKey}
         markdown={resolved}
         urgent={isLiveGeneration}
         components={markdownComponents}
@@ -1815,11 +1863,6 @@ const MessageBubbleComponent = ({
         : [],
     [isUser, msg.attachments]
   )
-  const generatedFiles = useMemo(
-    () => (!isUser ? collectDownloadableAttachments(msg) : []),
-    [isUser, msg]
-  )
-
   const handleEditPickFiles = () => {
     editFileInputRef.current?.click()
   }

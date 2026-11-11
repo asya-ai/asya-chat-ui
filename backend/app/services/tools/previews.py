@@ -101,6 +101,12 @@ def tool_call_action_summary(name: str, arguments: dict[str, Any] | None = None)
         return "Downloading attachments"
     if name == "extract_pdf":
         return "Extracting PDF"
+    if name == "read_spreadsheet":
+        return "Reading spreadsheet"
+    if name == "search_spreadsheet":
+        return "Searching spreadsheet"
+    if name == "replace_spreadsheet_text":
+        return "Editing spreadsheet"
     if name == "generate_image":
         return "Generating image"
     if name == "edit_image":
@@ -159,6 +165,30 @@ def tool_call_input_preview(name: str, arguments: dict[str, Any] | None = None) 
     if name == "download_attachments":
         urls = _ensure_list(args.get("urls")) or _ensure_list(args.get("url"))
         return f"urls: {', '.join(str(item) for item in urls[:3])}" if urls else "urls: (empty)"
+    if name in {
+        "read_spreadsheet",
+        "search_spreadsheet",
+        "replace_spreadsheet_text",
+    }:
+        attachment_id = str(args.get("attachment_id") or "").strip()
+        file_name = str(args.get("file_name") or "").strip()
+        target = (
+            f"attachment_id: {attachment_id}"
+            if attachment_id
+            else (f"file: {file_name}" if file_name else "latest spreadsheet")
+        )
+        sheet = str(args.get("sheet_name") or "").strip()
+        if name == "search_spreadsheet":
+            query = str(args.get("query") or "").strip()
+            base = f"{target}; query: {query or '(empty)'}"
+        elif name == "replace_spreadsheet_text":
+            find = str(args.get("find") or "").strip()
+            replace = str(args.get("replace") or "")
+            base = f"{target}; find: {find or '(empty)'} → {replace!r}"
+        else:
+            start = args.get("start_row")
+            base = f"{target}; start_row: {start}" if isinstance(start, int) else target
+        return f"{base}; sheet: {sheet}" if sheet else base
     if name == "extract_pdf":
         attachment_id = str(args.get("attachment_id") or "").strip()
         file_name = str(args.get("file_name") or "").strip()
@@ -262,6 +292,16 @@ def tool_call_output_preview(name: str, output: dict[str, Any] | None = None) ->
                 else:
                     files += 1
         return f"files: {files}, failed: {failures}"
+    if name == "read_spreadsheet":
+        rows = output.get("rows")
+        count = len(rows) if isinstance(rows, list) else 0
+        return f"rows: {count}"
+    if name == "search_spreadsheet":
+        return f"matches: {output.get('match_count', 0)}"
+    if name == "replace_spreadsheet_text":
+        if output.get("error"):
+            return f"error: {str(output.get('error'))[:160]}"
+        return f"cells changed: {output.get('cells_changed', 0)}"
     if name == "extract_pdf":
         page_count = output.get("page_count")
         selected = output.get("selected_pages")

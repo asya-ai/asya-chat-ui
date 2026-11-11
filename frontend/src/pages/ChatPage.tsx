@@ -1025,6 +1025,9 @@ export const ChatPage = () => {
           event.usage && typeof event.usage === "object"
             ? (event.usage as ChatMessage["usage"])
             : null
+        const doneAttachments = Array.isArray(event.attachments)
+          ? (event.attachments as NonNullable<ChatMessage["attachments"]>)
+          : null
         updateChatMessagesFor(targetChatId, (prev) =>
           prev.map((msg) =>
             matchesAssistant(msg)
@@ -1034,9 +1037,29 @@ export const ChatPage = () => {
                   content: content && content.length > 0 ? content : msg.content || "",
                   model_name: modelName ?? msg.model_name ?? null,
                   model_id: modelId ?? msg.model_id ?? null,
-                  attachments:
-                    (event.attachments as ChatMessage["attachments"]) ??
-                    msg.attachments,
+                  attachments: doneAttachments ?? msg.attachments,
+                  stream_parts: doneAttachments?.length
+                    ? (msg.stream_parts ?? []).map((part) => {
+                        if (part.type !== "action" || !part.attachments?.length) {
+                          return part
+                        }
+                        let changed = false
+                        const nextAttachments = part.attachments.map((item) => {
+                          const fileName = (item.file_name ?? "").trim()
+                          if (!fileName) return item
+                          const match = doneAttachments.find(
+                            (candidate) => (candidate.file_name ?? "").trim() === fileName
+                          )
+                          if (!match?.content_url) return item
+                          if (item.content_url === match.content_url) return item
+                          changed = true
+                          return { ...item, ...match }
+                        })
+                        return changed
+                          ? { ...part, attachments: nextAttachments }
+                          : part
+                      })
+                    : msg.stream_parts,
                   sources:
                     (event.sources as ChatMessage["sources"]) ?? msg.sources,
                   usage: usage ?? msg.usage ?? null,

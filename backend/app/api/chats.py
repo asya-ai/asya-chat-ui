@@ -78,6 +78,7 @@ from app.services.team_service import allowed_model_ids
 from app.services.model_capabilities import (
     ensure_model_capabilities,
     persist_responses_api_discovery,
+    prefer_responses_api_for_model,
     supports_image_input,
     supports_image_output,
 )
@@ -104,6 +105,13 @@ from app.services.tools.code_execution import (
 )
 from app.services.tools.registry import ToolRegistry, ToolSpec, ToolResult
 from app.services.tools.pdf_tool import PdfToolContext, extract_pdf
+from app.services.tools.spreadsheet_tool import (
+    SpreadsheetToolContext,
+    chat_has_spreadsheet_attachments,
+    read_spreadsheet,
+    replace_spreadsheet_text,
+    search_spreadsheet,
+)
 from app.services.tools.memory_tools import (
     MemoryToolContext,
     search_past_chats,
@@ -670,6 +678,124 @@ def _build_tool_registry(
         ),
         _extract_pdf_handler,
     )
+    if chat_id and chat_has_spreadsheet_attachments(
+        session,
+        str(chat_id),
+        pending_attachments=pending_attachments,
+    ):
+        spreadsheet_ctx = SpreadsheetToolContext(
+            session=session,
+            chat_id=str(chat_id),
+            pending_attachments=pending_attachments,
+        )
+
+        async def _read_spreadsheet_handler(args: dict) -> object:
+            return await read_spreadsheet(
+                spreadsheet_ctx,
+                attachment_id=args.get("attachment_id"),
+                file_name=args.get("file_name"),
+                sheet_name=args.get("sheet_name"),
+                start_row=args.get("start_row"),
+                max_rows=args.get("max_rows"),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="read_spreadsheet",
+                description=(
+                    "Read rows from an Excel .xlsx attachment in this chat. "
+                    "Returns sheet names, row numbers, cell addresses, and values."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "attachment_id": {"type": "string"},
+                        "file_name": {"type": "string"},
+                        "sheet_name": {"type": "string"},
+                        "start_row": {
+                            "type": "integer",
+                            "description": "1-based first row (default 1)",
+                        },
+                        "max_rows": {
+                            "type": "integer",
+                            "description": f"Max rows to return (default {80}, cap 80)",
+                        },
+                    },
+                },
+            ),
+            _read_spreadsheet_handler,
+        )
+
+        async def _search_spreadsheet_handler(args: dict) -> object:
+            return await search_spreadsheet(
+                spreadsheet_ctx,
+                query=args.get("query", ""),
+                attachment_id=args.get("attachment_id"),
+                file_name=args.get("file_name"),
+                sheet_name=args.get("sheet_name"),
+                match_case=bool(args.get("match_case")),
+                max_results=args.get("max_results"),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="search_spreadsheet",
+                description=(
+                    "Search cell text in a chat Excel attachment. "
+                    "Returns sheet, cell address, and matching value."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "attachment_id": {"type": "string"},
+                        "file_name": {"type": "string"},
+                        "sheet_name": {"type": "string"},
+                        "match_case": {"type": "boolean"},
+                        "max_results": {"type": "integer"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            _search_spreadsheet_handler,
+        )
+
+        async def _replace_spreadsheet_handler(args: dict) -> object:
+            return await replace_spreadsheet_text(
+                spreadsheet_ctx,
+                find=args.get("find", ""),
+                replace=args.get("replace", ""),
+                attachment_id=args.get("attachment_id"),
+                file_name=args.get("file_name"),
+                sheet_name=args.get("sheet_name"),
+                match_case=bool(args.get("match_case")),
+                use_regex=bool(args.get("use_regex")),
+            )
+
+        registry.register(
+            ToolSpec(
+                name="replace_spreadsheet_text",
+                description=(
+                    "Find/replace text in string cells of a chat Excel file. "
+                    "Returns an updated .xlsx attachment; prefer this over code_execution "
+                    "for quick text edits."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "find": {"type": "string"},
+                        "replace": {"type": "string"},
+                        "attachment_id": {"type": "string"},
+                        "file_name": {"type": "string"},
+                        "sheet_name": {"type": "string"},
+                        "match_case": {"type": "boolean"},
+                        "use_regex": {"type": "boolean"},
+                    },
+                    "required": ["find", "replace"],
+                },
+            ),
+            _replace_spreadsheet_handler,
+        )
     if web_tools_enabled and web_search_enabled:
         async def _search_handler(args: dict) -> object:
             return await web_search(
@@ -1904,7 +2030,7 @@ async def _maybe_update_chat_title(
             chat.org_id,
             title_model.provider,
             org_config=provider_config,
-            prefer_responses_api=title_model.uses_responses_api is True,
+            prefer_responses_api=prefer_responses_api_for_model(title_model),
             openrouter_endpoint=title_model.openrouter_endpoint,
             prompt_cache_enabled=False,
         )
@@ -5770,7 +5896,7 @@ async def create_message(
             settings.openai_prompt_cache_retention if prompt_cache_enabled else None
         ),
         prompt_cache_enabled=prompt_cache_enabled,
-        prefer_responses_api=model.uses_responses_api is True,
+        prefer_responses_api=prefer_responses_api_for_model(model),
         openrouter_endpoint=model.openrouter_endpoint,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)
@@ -6655,7 +6781,7 @@ async def edit_message(
             settings.openai_prompt_cache_retention if prompt_cache_enabled else None
         ),
         prompt_cache_enabled=prompt_cache_enabled,
-        prefer_responses_api=model.uses_responses_api is True,
+        prefer_responses_api=prefer_responses_api_for_model(model),
         openrouter_endpoint=model.openrouter_endpoint,
     )
     grounding_enabled = _grounding_enabled(org, model.provider)

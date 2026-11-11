@@ -14,6 +14,7 @@ from sqlmodel import Session
 
 from app.api.chats import (
     MAX_CONTEXT_MESSAGES,
+    _attachment_content_url,
     _attachment_image_url,
     _attachment_lines,
     _build_tool_registry,
@@ -33,6 +34,7 @@ from app.api.chats import (
 from app.services.model_capabilities import (
     ensure_model_capabilities,
     persist_responses_api_discovery,
+    prefer_responses_api_for_model,
     supports_image_input,
 )
 from app.services.system_prompts import provider_chat_message
@@ -180,12 +182,63 @@ class _DbEventSender:
 
 
 class _DbToolEventSender:
-    def __init__(self, session: Session, task_id: UUID, sequence_ref: list[int]) -> None:
+    def __init__(
+        self,
+        session: Session,
+        task_id: UUID,
+        sequence_ref: list[int],
+        *,
+        chat_id: UUID | None = None,
+        message_id: UUID | None = None,
+    ) -> None:
         self._session = session
         self._task_id = task_id
         self._sequence_ref = sequence_ref
+        self._chat_id = chat_id
+        self._message_id = message_id
+
+    def _enrich_attachment_payload(self, payload: dict) -> dict:
+        if self._chat_id is None or self._message_id is None:
+            return payload
+        if payload.get("type") != "tool_call" or payload.get("state") != "end":
+            return payload
+        output = payload.get("output")
+        if not isinstance(output, dict):
+            return payload
+        raw = output.get("attachments")
+        if not isinstance(raw, list) or not raw:
+            return payload
+        has_inline = any(
+            isinstance(item, dict) and item.get("data_base64") for item in raw
+        )
+        if not has_inline:
+            return payload
+        from app.api.chats import _attachment_content_url
+
+        stored = persist_tool_attachment_dicts(
+            self._session,
+            chat_id=self._chat_id,
+            message_id=self._message_id,
+            items=[item for item in raw if isinstance(item, dict)],
+        )
+        if not stored:
+            return payload
+        output = {
+            **output,
+            "attachments": [
+                {
+                    "id": str(item.id),
+                    "file_name": item.file_name,
+                    "content_type": item.content_type,
+                    "content_url": _attachment_content_url(item.id),
+                }
+                for item in stored
+            ],
+        }
+        return {**payload, "output": output}
 
     async def send(self, payload: dict) -> None:
+        payload = self._enrich_attachment_payload(payload)
         _persist_generation_event(
             self._session, self._task_id, self._sequence_ref, "tool_event", payload
         )
@@ -699,7 +752,7 @@ async def _run_generation(task_id: UUID) -> None:
                 settings.openai_prompt_cache_retention if prompt_cache_enabled else None
             ),
             prompt_cache_enabled=prompt_cache_enabled,
-            prefer_responses_api=model.uses_responses_api is True,
+            prefer_responses_api=prefer_responses_api_for_model(model),
             openrouter_endpoint=model.openrouter_endpoint,
         )
 
@@ -1142,7 +1195,13 @@ async def _run_generation(task_id: UUID) -> None:
                 )
             elif tool_registry and hasattr(provider, "chat_with_tools"):
                 activity_sender = _DbEventSender(session, task.id, sequence_ref)
-                tool_event_sender = _DbToolEventSender(session, task.id, sequence_ref)
+                tool_event_sender = _DbToolEventSender(
+                    session,
+                    task.id,
+                    sequence_ref,
+                    chat_id=chat.id,
+                    message_id=assistant_message.id,
+                )
                 delta_sender = _DbDeltaSender(
                     session,
                     task.id,
@@ -1274,12 +1333,28 @@ async def _run_generation(task_id: UUID) -> None:
                     session.add(assistant_message)
                     session.commit()
                 if tool_attachments:
-                    persist_tool_attachment_dicts(
-                        session,
-                        chat_id=chat.id,
-                        message_id=assistant_message.id,
-                        items=list(tool_attachments),
-                    )
+                    existing_names = {
+                        row.file_name
+                        for row in session.exec(
+                            select(ChatMessageAttachment).where(
+                                ChatMessageAttachment.message_id == assistant_message.id
+                            )
+                        ).all()
+                    }
+                    remaining = [
+                        item
+                        for item in tool_attachments
+                        if isinstance(item, dict)
+                        and str(item.get("file_name") or "").strip()
+                        and str(item.get("file_name")).strip() not in existing_names
+                    ]
+                    if remaining:
+                        persist_tool_attachment_dicts(
+                            session,
+                            chat_id=chat.id,
+                            message_id=assistant_message.id,
+                            items=list(remaining),
+                        )
                 if not delta_sender.emitted:
                     _append_event(
                         session,
@@ -1446,6 +1521,20 @@ async def _run_generation(task_id: UUID) -> None:
             task.completed_at = completed_at
             session.commit()
             clear_agent_checkpoint(session, task.id)
+            stored_attachments = session.exec(
+                select(ChatMessageAttachment).where(
+                    ChatMessageAttachment.message_id == assistant_message.id
+                )
+            ).all()
+            client_attachments = [
+                {
+                    "id": str(item.id),
+                    "file_name": item.file_name,
+                    "content_type": item.content_type,
+                    "content_url": _attachment_content_url(item.id),
+                }
+                for item in stored_attachments
+            ]
             _append_event(
                 session,
                 task.id,
@@ -1457,7 +1546,7 @@ async def _run_generation(task_id: UUID) -> None:
                     "content": assistant_message.content,
                     "model_name": model.display_name,
                     "model_id": str(model.id),
-                    "attachments": tool_attachments or [],
+                    "attachments": client_attachments or tool_attachments or [],
                     "sources": assistant_message.sources or [],
                     "usage": _aggregated_message_usage_payload(
                         session, assistant_message.id

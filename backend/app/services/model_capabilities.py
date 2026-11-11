@@ -19,6 +19,25 @@ _IMAGE_OUTPUT_MODEL = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_INPUT_PROVIDERS = frozenset({"openai", "azure", "gemini", "vertex", "openrouter"})
+_RESPONSES_API_MODEL = re.compile(r"gpt-\d+-(?:sol|luna)(?:$|[-_./])", re.IGNORECASE)
+
+
+def infer_uses_responses_api(provider: str, model_name: str) -> bool | None:
+    """Models that require /v1/responses for tools + reasoning on Azure/OpenAI."""
+    if provider not in {"openai", "azure"}:
+        return None
+    if _RESPONSES_API_MODEL.search(model_name.lower()):
+        return True
+    return None
+
+
+def prefer_responses_api_for_model(model: ChatModel) -> bool:
+    if model.uses_responses_api is True:
+        return True
+    if model.uses_responses_api is False:
+        return False
+    inferred = infer_uses_responses_api(model.provider, model.model_name)
+    return inferred is True
 
 
 def _is_non_chat_model(model_name: str) -> bool:
@@ -174,6 +193,10 @@ def _apply_missing_capabilities(model: ChatModel) -> bool:
             changed = True
     if model.context_length is None and resolved_context is not None:
         model.context_length = resolved_context
+        changed = True
+    inferred_responses = infer_uses_responses_api(model.provider, model.model_name)
+    if model.uses_responses_api is None and inferred_responses is not None:
+        model.uses_responses_api = inferred_responses
         changed = True
     return changed
 

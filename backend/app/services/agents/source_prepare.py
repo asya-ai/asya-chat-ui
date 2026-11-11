@@ -36,7 +36,11 @@ from app.services.agents.source_parsing import extract_text_from_file
 from app.services.file_storage import delete_file, maybe_read_file_bytes, write_agent_source_file
 from app.services.image_normalize import normalize_image_attachment
 from app.services.instance_providers import get_provider_for_org
-from app.services.model_capabilities import ensure_model_capabilities, supports_image_input
+from app.services.model_capabilities import (
+    ensure_model_capabilities,
+    prefer_responses_api_for_model,
+    supports_image_input,
+)
 from app.services.org_service import require_provider_enabled
 
 logger = logging.getLogger(__name__)
@@ -341,7 +345,7 @@ async def _describe_image_async(
         agent.org_id,
         model.provider,
         org_config=provider_config,
-        prefer_responses_api=model.uses_responses_api is True,
+        prefer_responses_api=prefer_responses_api_for_model(model),
         openrouter_endpoint=model.openrouter_endpoint,
         prompt_cache_enabled=False,
     )

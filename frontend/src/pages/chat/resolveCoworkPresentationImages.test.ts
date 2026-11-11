@@ -4,7 +4,9 @@ import type { ChatMessage } from "@/lib/types"
 
 import {
   collectChatImageUrlMap,
+  mergeAttachmentListIntoImageUrlMap,
   resolveCoworkPresentationMarkdown,
+  resolveMarkdownImageSrc,
 } from "./resolveCoworkPresentationImages"
 
 describe("resolveCoworkPresentationMarkdown", () => {
@@ -30,5 +32,24 @@ describe("resolveCoworkPresentationMarkdown", () => {
     expect(resolveCoworkPresentationMarkdown(md, map)).toBe(
       "![caption](/api/chats/c1/messages/a1/attachments/att-1/content)"
     )
+  })
+
+  it("uses preview_url when content_url is missing", () => {
+    const map = mergeAttachmentListIntoImageUrlMap({}, [
+      {
+        file_name: "generated-abc.png",
+        content_type: "image/png",
+        preview_url: "blob:preview",
+      },
+    ])
+    expect(map["generated-abc.png"]).toBe("blob:preview")
+  })
+
+  it("falls back to the sole message image when src is caption text", () => {
+    const url = "/api/chats/attachments/x/content?token=t"
+    const resolved = resolveMarkdownImageSrc("Attēls ar pievienoto personu", null, {
+      fallbackUrl: url,
+    })
+    expect(resolved).toBe(url)
   })
 })

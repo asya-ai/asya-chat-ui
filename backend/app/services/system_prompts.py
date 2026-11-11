@@ -58,6 +58,12 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
         "Always check page_count first, then request precise page/page ranges before answering. "
         "Do not guess missing pages."
     ),
+    "read_spreadsheet": (
+        "Attached .xlsx: use read_spreadsheet, search_spreadsheet, replace_spreadsheet_text "
+        "before code_execution for read/search/string replace."
+    ),
+    "search_spreadsheet": "Search attached .xlsx cells.",
+    "replace_spreadsheet_text": "Find/replace in attached .xlsx; returns updated file.",
     "web_search": (
         "Use web_search for fresh or uncertain facts. Keep queries focused and minimal."
     ),
@@ -136,6 +142,9 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
 TOOL_PROMPT_ORDER = (
     "code_execution",
     "extract_pdf",
+    "read_spreadsheet",
+    "search_spreadsheet",
+    "replace_spreadsheet_text",
     "web_search",
     "web_scrape",
     "download_attachments",
