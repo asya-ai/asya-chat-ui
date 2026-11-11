@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import base64
 import io
 import logging
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -87,6 +88,10 @@ class ImageToolContext:
     org_id: str
     chat_id: str | None = None
     user_id: str | None = None
+    pending_attachments: list[dict[str, Any]] | None = None
+
+
+_CATALOG_MAX_ITEMS = 40
 
 
 def _coerce_attachment_uuid(value: str | None) -> UUID | None:
@@ -101,6 +106,228 @@ def _coerce_attachment_uuid(value: str | None) -> UUID | None:
             return UUID(candidate)
         except ValueError:
             continue
+    return None
+
+
+def _is_generated_image_file_name(file_name: str) -> bool:
+    return (file_name or "").startswith("generated-")
+
+
+def _normalize_id_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                items.append(item.strip())
+        return items
+    return []
+
+
+def _attachment_raw_bytes(attachment: ChatMessageAttachment) -> bytes | None:
+    raw = attachment_bytes(
+        file_path=attachment.file_path,
+        data_base64=attachment.data_base64,
+    )
+    return raw if raw else None
+
+
+def _attachment_to_base64(attachment: ChatMessageAttachment) -> tuple[str | None, str]:
+    raw = _attachment_raw_bytes(attachment)
+    if not raw:
+        return None, attachment.content_type or "image/png"
+    return base64.b64encode(raw).decode("ascii"), attachment.content_type or "image/png"
+
+
+def _pending_image_attachments(
+    pending_attachments: list[dict[str, Any]] | None,
+) -> list[ChatMessageAttachment]:
+    if not pending_attachments:
+        return []
+    items: list[ChatMessageAttachment] = []
+    for raw in pending_attachments:
+        if not isinstance(raw, dict):
+            continue
+        content_type = str(raw.get("content_type") or "").strip().lower()
+        if not content_type.startswith("image/"):
+            continue
+        file_name = str(raw.get("file_name") or "").strip()
+        data_base64 = str(raw.get("data_base64") or "").strip()
+        if not (file_name and data_base64):
+            continue
+        attachment_id = str(raw.get("attachment_id") or "").strip() or str(uuid4())
+        raw["attachment_id"] = attachment_id
+        try:
+            parsed_id = UUID(attachment_id)
+        except ValueError:
+            attachment_id = str(uuid4())
+            raw["attachment_id"] = attachment_id
+            parsed_id = UUID(attachment_id)
+        items.append(
+            ChatMessageAttachment(
+                id=parsed_id,
+                message_id=UUID(int=0),
+                file_name=file_name,
+                content_type=content_type,
+                data_base64=data_base64,
+            )
+        )
+    return items
+
+
+def _latest_user_message_id(session: Session, chat_id: str) -> str | None:
+    try:
+        chat_uuid = UUID(str(chat_id))
+    except ValueError:
+        return None
+    row = session.exec(
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat_uuid)
+        .where(ChatMessage.is_current.is_(True))
+        .where(ChatMessage.role == "user")
+        .order_by(ChatMessage.created_at.desc())
+    ).first()
+    return str(row.id) if row else None
+
+
+def build_chat_image_catalog(
+    session: Session,
+    chat_id: str | None,
+    *,
+    pending_attachments: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Images in the chat for tool resolution (newest last)."""
+    if not chat_id:
+        return []
+    try:
+        chat_uuid = UUID(str(chat_id))
+    except ValueError:
+        return []
+    rows = session.exec(
+        select(ChatMessageAttachment, ChatMessage.role, ChatMessage.id, ChatMessage.created_at)
+        .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
+        .where(ChatMessage.chat_id == chat_uuid)
+        .where(ChatMessage.is_current.is_(True))
+        .where(ChatMessageAttachment.content_type.like("image/%"))
+        .order_by(ChatMessage.created_at, ChatMessageAttachment.created_at)
+    ).all()
+    catalog: list[dict[str, Any]] = []
+    for attachment, role, message_id, message_created_at in rows:
+        catalog.append(
+            {
+                "attachment_id": str(attachment.id),
+                "file_name": attachment.file_name,
+                "message_role": role,
+                "message_id": str(message_id),
+                "created_at": (
+                    message_created_at.isoformat()
+                    if isinstance(message_created_at, datetime)
+                    else str(message_created_at)
+                ),
+                "source": "chat",
+                "is_generated": _is_generated_image_file_name(attachment.file_name),
+            }
+        )
+    for pending in _pending_image_attachments(pending_attachments):
+        catalog.append(
+            {
+                "attachment_id": str(pending.id),
+                "file_name": pending.file_name,
+                "message_role": "user",
+                "message_id": "pending",
+                "created_at": "",
+                "source": "pending",
+                "is_generated": False,
+            }
+        )
+    return catalog
+
+
+def format_chat_images_tool_hint(catalog: list[dict[str, Any]]) -> str:
+    if not catalog:
+        return " No images in this chat yet."
+    shown = catalog[:_CATALOG_MAX_ITEMS]
+    parts = [
+        f"{item['attachment_id']} · {item['file_name']} · {item.get('message_role', '?')}"
+        for item in shown
+    ]
+    suffix = f" (+{len(catalog) - len(shown)} more)" if len(catalog) > len(shown) else ""
+    return " Chat images (attachment_id · file_name · role): " + "; ".join(parts) + suffix
+
+
+def select_default_edit_base_attachment_id(
+    catalog: list[dict[str, Any]],
+    *,
+    latest_user_message_id: str | None,
+) -> tuple[str | None, str | None]:
+    if not catalog:
+        return None, "No image provided for editing"
+    if len(catalog) == 1:
+        return str(catalog[0]["attachment_id"]), None
+
+    turn_images = [
+        entry
+        for entry in catalog
+        if entry.get("source") == "pending"
+        or (
+            latest_user_message_id
+            and entry.get("message_id") == latest_user_message_id
+        )
+    ]
+    if len(turn_images) > 1:
+        return None, (
+            "Multiple images on the latest user message; set image_id to the base canvas."
+        )
+    if len(turn_images) == 1 and len(catalog) > 1:
+        return None, (
+            "New image on the latest user message while other chat images exist; "
+            "set image_id to the base canvas and reference_image_ids for reference-only uploads."
+        )
+
+    generated = [entry for entry in catalog if entry.get("is_generated")]
+    if generated:
+        return str(generated[-1]["attachment_id"]), None
+
+    return None, "Multiple images in chat; set image_id to the base canvas to edit."
+
+
+def _resolve_chat_attachment(
+    session: Session,
+    chat_id: str | None,
+    ref: str,
+    *,
+    pending_attachments: list[dict[str, Any]] | None = None,
+) -> ChatMessageAttachment | None:
+    if not ref:
+        return None
+    image_uuid = _coerce_attachment_uuid(ref)
+    if image_uuid:
+        attachment = session.exec(
+            select(ChatMessageAttachment).where(ChatMessageAttachment.id == image_uuid)
+        ).first()
+        if attachment:
+            return attachment
+    for pending in _pending_image_attachments(pending_attachments):
+        if str(pending.id) == ref or pending.file_name == ref:
+            return pending
+    if chat_id:
+        try:
+            chat_uuid = UUID(str(chat_id))
+        except ValueError:
+            chat_uuid = None
+        if chat_uuid is not None:
+            return session.exec(
+                select(ChatMessageAttachment)
+                .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
+                .where(ChatMessage.chat_id == chat_uuid)
+                .where(ChatMessage.is_current.is_(True))
+                .where(ChatMessageAttachment.file_name == ref)
+                .order_by(ChatMessage.created_at.desc())
+            ).first()
     return None
 
 
@@ -326,12 +553,18 @@ async def edit_image(
     image_id: str | None = None,
     image_base64: str | None = None,
     image_content_type: str | None = None,
+    reference_image_ids: list[str] | None = None,
     mask_id: str | None = None,
     mask_base64: str | None = None,
     mask_content_type: str | None = None,
     model_override: ChatModel | None = None,
 ) -> ToolResult:
     session = context.session
+    catalog = build_chat_image_catalog(
+        session,
+        context.chat_id,
+        pending_attachments=context.pending_attachments,
+    )
     model = model_override or get_image_model(
         session,
         context.org_id,
@@ -345,73 +578,103 @@ async def edit_image(
             output={"error": "No image model enabled for this organization"},
         )
 
+    resolved_base_id: str | None = None
+    resolved_base_name: str | None = None
     if image_id and not image_base64:
-        image_uuid = _coerce_attachment_uuid(image_id)
-        attachment = None
-        if image_uuid:
-            attachment = session.exec(
-                select(ChatMessageAttachment).where(ChatMessageAttachment.id == image_uuid)
-            ).first()
-        if not attachment and context.chat_id:
-            # Fallback: caller may pass "<attachment_id>_<filename>" from code-exec style paths.
-            attachment = session.exec(
-                select(ChatMessageAttachment)
-                .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
-                .where(ChatMessage.chat_id == context.chat_id)
-                .where(ChatMessage.is_current.is_(True))
-                .where(ChatMessageAttachment.file_name == image_id)
-                .order_by(ChatMessage.created_at.desc())
-            ).first()
+        attachment = _resolve_chat_attachment(
+            session,
+            context.chat_id,
+            image_id,
+            pending_attachments=context.pending_attachments,
+        )
         if attachment:
-            raw = attachment_bytes(
-                file_path=attachment.file_path,
-                data_base64=attachment.data_base64,
-            )
-            image_base64 = base64.b64encode(raw).decode("ascii") if raw else None
-            image_content_type = attachment.content_type
-    # If no explicit image was provided, fall back to the latest image attachment in this chat.
+            image_base64, image_content_type = _attachment_to_base64(attachment)
+            resolved_base_id = str(attachment.id)
+            resolved_base_name = attachment.file_name
     if not image_base64 and context.chat_id:
-        try:
-            latest_image_attachment = session.exec(
-                select(ChatMessageAttachment)
-                .join(ChatMessage, ChatMessage.id == ChatMessageAttachment.message_id)
-                .where(ChatMessage.chat_id == context.chat_id)
-                .where(ChatMessage.is_current.is_(True))
-                .where(ChatMessageAttachment.content_type.like("image/%"))
-                .order_by(ChatMessage.created_at.desc())
-            ).first()
-        except Exception:
-            latest_image_attachment = None
-        if latest_image_attachment:
-            raw = attachment_bytes(
-                file_path=latest_image_attachment.file_path,
-                data_base64=latest_image_attachment.data_base64,
+        latest_user_message_id = _latest_user_message_id(session, context.chat_id)
+        default_id, ambiguous = select_default_edit_base_attachment_id(
+            catalog,
+            latest_user_message_id=latest_user_message_id,
+        )
+        if ambiguous:
+            return ToolResult(
+                name="edit_image",
+                output={
+                    "error": ambiguous,
+                    "chat_images": catalog,
+                },
             )
-            image_base64 = base64.b64encode(raw).decode("ascii") if raw else None
-            image_content_type = latest_image_attachment.content_type
+        if default_id:
+            attachment = _resolve_chat_attachment(
+                session,
+                context.chat_id,
+                default_id,
+                pending_attachments=context.pending_attachments,
+            )
+            if attachment:
+                image_base64, image_content_type = _attachment_to_base64(attachment)
+                resolved_base_id = str(attachment.id)
+                resolved_base_name = attachment.file_name
     if mask_id and not mask_base64:
-        mask_uuid = _coerce_attachment_uuid(mask_id)
-        mask_attachment = None
-        if mask_uuid:
-            mask_attachment = session.exec(
-                select(ChatMessageAttachment).where(ChatMessageAttachment.id == mask_uuid)
-            ).first()
+        mask_attachment = _resolve_chat_attachment(
+            session,
+            context.chat_id,
+            mask_id,
+            pending_attachments=context.pending_attachments,
+        )
         if mask_attachment:
-            raw = attachment_bytes(
-                file_path=mask_attachment.file_path,
-                data_base64=mask_attachment.data_base64,
-            )
-            mask_base64 = base64.b64encode(raw).decode("ascii") if raw else None
-            mask_content_type = mask_attachment.content_type
+            mask_base64, mask_mime = _attachment_to_base64(mask_attachment)
+            mask_content_type = mask_attachment.content_type or mask_mime
 
     if not image_base64:
         return ToolResult(
             name="edit_image",
-            output={"error": "No image provided for editing"},
+            output={
+                "error": "No image provided for editing",
+                "chat_images": catalog,
+            },
         )
 
+    reference_ids = _normalize_id_list(reference_image_ids)
+    if resolved_base_id:
+        reference_ids = [item for item in reference_ids if item != resolved_base_id]
+    reference_payloads: list[tuple[str, str, str]] = []
+    for ref in reference_ids:
+        ref_attachment = _resolve_chat_attachment(
+            session,
+            context.chat_id,
+            ref,
+            pending_attachments=context.pending_attachments,
+        )
+        if not ref_attachment:
+            return ToolResult(
+                name="edit_image",
+                output={
+                    "error": f"Reference image not found: {ref}",
+                    "chat_images": catalog,
+                },
+            )
+        ref_b64, ref_type = _attachment_to_base64(ref_attachment)
+        if not ref_b64:
+            return ToolResult(
+                name="edit_image",
+                output={"error": f"Reference image empty: {ref_attachment.file_name}"},
+            )
+        reference_payloads.append((ref_attachment.file_name, ref_type, ref_b64))
+
+    edit_prompt = prompt
+    if reference_payloads and model.provider in {"openai", "azure"}:
+        ref_names = ", ".join(name for name, _, _ in reference_payloads)
+        edit_prompt = (
+            f"{prompt}\n\nReference images (likeness/style only, not the edit canvas): {ref_names}"
+        ).strip()
+
     logger.info(
-        "Editing image with provider=%s model=%s org_id=%s",
+        "Editing image base_id=%s base_file=%s reference_ids=%s provider=%s model=%s org_id=%s",
+        resolved_base_id,
+        resolved_base_name,
+        reference_ids,
         model.provider,
         model.model_name,
         context.org_id,
@@ -472,7 +735,7 @@ async def edit_image(
             request_kwargs: dict[str, Any] = {
                 "model": model.model_name,
                 "image": image_file,
-                "prompt": prompt,
+                "prompt": edit_prompt,
             }
             if (model.model_name or "").strip().lower() == "dall-e-2":
                 request_kwargs["response_format"] = "b64_json"
@@ -524,9 +787,15 @@ async def edit_image(
                         )
                 else:
                     raise
-            return await _build_image_result(
+            tool_result = await _build_image_result(
                 "edit_image", result, model_id=str(model.id)
             )
+            if isinstance(tool_result.output, dict):
+                tool_result.output["base_image_id"] = resolved_base_id
+                tool_result.output["base_file_name"] = resolved_base_name
+                if reference_ids:
+                    tool_result.output["reference_image_ids"] = reference_ids
+            return tool_result
         finally:
             await client.close()
 
@@ -535,25 +804,38 @@ async def edit_image(
         creds = resolve_effective_credentials(session, model.provider, provider_config)
         client = genai.Client(api_key=creds.api_key)
         mime_type = image_content_type or "image/png"
+        parts: list[dict[str, Any]] = [{"text": edit_prompt}]
+        for ref_name, ref_type, ref_b64 in reference_payloads:
+            parts.append({"text": f"Reference image ({ref_name}) — likeness/style only:"})
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": ref_type,
+                        "data": ref_b64,
+                    }
+                }
+            )
+        parts.append({"text": "Base image to edit:"})
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": image_base64,
+                }
+            }
+        )
         response = client.models.generate_content(
             model=model.model_name,
-            contents=[
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": image_base64,
-                            }
-                        },
-                    ],
-                }
-            ],
+            contents=[{"role": "user", "parts": parts}],
             config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
-        return _extract_gemini_image("edit_image", response, model_id=str(model.id))
+        tool_result = _extract_gemini_image("edit_image", response, model_id=str(model.id))
+        if isinstance(tool_result.output, dict) and not tool_result.output.get("error"):
+            tool_result.output["base_image_id"] = resolved_base_id
+            tool_result.output["base_file_name"] = resolved_base_name
+            if reference_ids:
+                tool_result.output["reference_image_ids"] = reference_ids
+        return tool_result
 
     return ToolResult(
         name="edit_image",

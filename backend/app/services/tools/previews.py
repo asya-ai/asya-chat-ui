@@ -185,7 +185,19 @@ def tool_call_input_preview(name: str, arguments: dict[str, Any] | None = None) 
         return f"{language}: {first_line}" if first_line else f"{language}: (empty code)"
     if name in {"generate_image", "edit_image"}:
         prompt = str(args.get("prompt") or "").strip()
-        return f"prompt: {prompt}" if prompt else "prompt: (empty)"
+        base = f"prompt: {prompt}" if prompt else "prompt: (empty)"
+        if name == "edit_image":
+            image_id = str(args.get("image_id") or "").strip()
+            refs = args.get("reference_image_ids")
+            ref_count = len(refs) if isinstance(refs, list) else 0
+            extra: list[str] = []
+            if image_id:
+                extra.append(f"base: {image_id}")
+            if ref_count:
+                extra.append(f"refs: {ref_count}")
+            if extra:
+                return f"{base}; " + ", ".join(extra)
+        return base
     if name == "store_memory":
         content = str(args.get("content") or "").strip()
         return f"content: {content}" if content else "content: (empty)"

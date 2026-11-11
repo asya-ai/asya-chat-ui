@@ -1037,10 +1037,12 @@ async def _run_generation(task_id: UUID) -> None:
                 if latest_image_attachment:
                     image_result = await edit_image(
                         ImageToolContext(
-                            session=session, org_id=str(chat.org_id), chat_id=str(chat.id), user_id=str(chat.user_id)
+                            session=session,
+                            org_id=str(chat.org_id),
+                            chat_id=str(chat.id),
+                            user_id=str(chat.user_id),
                         ),
                         prompt=image_prompt,
-                        image_id=str(latest_image_attachment.id),
                         model_override=model,
                     )
                 else:

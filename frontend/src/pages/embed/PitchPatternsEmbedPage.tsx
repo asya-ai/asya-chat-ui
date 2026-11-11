@@ -988,6 +988,7 @@ export const PitchPatternsEmbedPage = () => {
         <MessageBubble
           key={msg.id}
           msg={msg}
+          chatImageMessages={visibleMessages}
           isUser={isUser}
           isCodeEvent={isCodeEvent}
           isThinking={isThinking}

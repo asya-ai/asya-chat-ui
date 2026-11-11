@@ -90,7 +90,9 @@ from app.services.system_prompts import (
 )
 from app.services.tools.image_tool import (
     ImageToolContext,
+    build_chat_image_catalog,
     edit_image,
+    format_chat_images_tool_hint,
     generate_image,
     get_image_model,
     image_usage_token_fields,
@@ -532,6 +534,7 @@ def _build_tool_registry(
                 org_id=str(org_id),
                 chat_id=str(chat_id) if chat_id else None,
                 user_id=str(user_id) if user_id else None,
+                pending_attachments=pending_attachments,
             ),
             prompt=args.get("prompt", ""),
         )
@@ -550,6 +553,17 @@ def _build_tool_registry(
         ),
         _handler,
     )
+    image_catalog = (
+        build_chat_image_catalog(
+            session,
+            str(chat_id) if chat_id else None,
+            pending_attachments=pending_attachments,
+        )
+        if chat_id
+        else []
+    )
+    edit_images_hint = format_chat_images_tool_hint(image_catalog)
+
     async def _edit_handler(args: dict) -> object:
         return await edit_image(
             ImageToolContext(
@@ -557,11 +571,13 @@ def _build_tool_registry(
                 org_id=str(org_id),
                 chat_id=str(chat_id) if chat_id else None,
                 user_id=str(user_id) if user_id else None,
+                pending_attachments=pending_attachments,
             ),
             prompt=args.get("prompt", ""),
             image_id=args.get("image_id"),
             image_base64=args.get("image_base64"),
             image_content_type=args.get("image_content_type"),
+            reference_image_ids=args.get("reference_image_ids"),
             mask_id=args.get("mask_id"),
             mask_base64=args.get("mask_base64"),
             mask_content_type=args.get("mask_content_type"),
@@ -571,15 +587,24 @@ def _build_tool_registry(
         ToolSpec(
             name="edit_image",
             description=(
-                "Edit an existing image with a prompt and optional mask. "
-                "If no image_id or image_base64 is provided, the latest image attachment "
-                "from the current chat is used."
+                "Edit a base image (image_id). reference_image_ids are optional likeness/style refs. "
+                "Without image_id, uses the only chat image, the latest assistant-generated image "
+                "when the user did not attach a new image, or returns an error if ambiguous."
+                f"{edit_images_hint}"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "prompt": {"type": "string", "description": "Edit instructions"},
-                    "image_id": {"type": "string", "description": "Attachment ID of the image"},
+                    "image_id": {
+                        "type": "string",
+                        "description": "Base canvas: attachment_id or file_name",
+                    },
+                    "reference_image_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Reference-only images (not the canvas)",
+                    },
                     "image_base64": {"type": "string", "description": "Base64 image data"},
                     "image_content_type": {"type": "string", "description": "Image MIME type"},
                     "mask_id": {"type": "string", "description": "Attachment ID of the mask"},

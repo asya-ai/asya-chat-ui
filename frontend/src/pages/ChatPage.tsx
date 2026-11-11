@@ -3839,6 +3839,7 @@ export const ChatPage = () => {
         <MessageBubble
           key={msg.id}
           msg={msg}
+          chatImageMessages={visibleMessages}
           isUser={isUser}
           isCodeEvent={isCodeEvent}
           isThinking={isSharedView ? false : isThinking}

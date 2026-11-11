@@ -82,7 +82,8 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     "edit_image": (
         "Use edit_image when the user asks to modify an existing image. "
         "Before calling it, briefly say what change you are about to make. "
-        "If no image is specified, it will use the latest image attachment in the chat. "
+        "Set image_id to the base canvas (see the tool's chat image list). "
+        "Put likeness or style-only uploads in reference_image_ids, not image_id. "
         "Embed the returned file_name in Marp/markdown the same way as generate_image."
     ),
     "store_memory": (

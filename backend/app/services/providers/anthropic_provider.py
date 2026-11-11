@@ -269,6 +269,7 @@ class AnthropicProvider:
             finish_reason = "tool_calls"
         yield ChatStreamChunk(
             usage=_usage_from_anthropic(getattr(final, "usage", None)),
+            tool_calls=tool_calls or None,
             finish_reason=finish_reason,
         )
 

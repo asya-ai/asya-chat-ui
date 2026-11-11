@@ -38,7 +38,10 @@ import {
   materializeExportMarkdownImages,
   rasterizePdfExportHtml,
 } from "@/pages/chat/exportCoworkMarkdown"
-import { collectChatImageUrlMap } from "@/pages/chat/resolveCoworkPresentationImages"
+import {
+  collectChatImageUrlMap,
+  resolveCoworkPresentationMarkdown,
+} from "@/pages/chat/resolveCoworkPresentationImages"
 
 import type { I18nContextValue } from "@/lib/i18n-context"
 import { ThinkingFruitRive } from "@/components/ThinkingFruitRive"
@@ -102,6 +105,8 @@ SyntaxHighlighter.registerLanguage("yml", yaml)
 
 type MessageBubbleProps = {
   msg: ChatMessage
+  /** Chat thread used to resolve bare attachment file names in markdown. */
+  chatImageMessages?: ChatMessage[]
   isUser: boolean
   isCodeEvent: boolean
   isThinking: boolean
@@ -1327,6 +1332,7 @@ const ThinkingTrail = ({
 
 const MessageBubbleComponent = ({
   msg,
+  chatImageMessages,
   isUser,
   isCodeEvent,
   isThinking,
@@ -1780,14 +1786,23 @@ const MessageBubbleComponent = ({
     msg.generation_status === "running" ||
     msg.generation_status === "streaming"
 
-  const renderMarkdown = (markdown: string, key?: string) => (
-    <DeferredMarkdown
-      key={key}
-      markdown={isUser ? preserveMarkdownBlankLines(markdown) : markdown}
-      urgent={isLiveGeneration}
-      components={markdownComponents}
-    />
+  const chatImageUrlMap = useMemo(
+    () => collectChatImageUrlMap(chatImageMessages ?? [msg]),
+    [chatImageMessages, msg]
   )
+
+  const renderMarkdown = (markdown: string, key?: string) => {
+    const base = isUser ? preserveMarkdownBlankLines(markdown) : markdown
+    const resolved = resolveCoworkPresentationMarkdown(base, chatImageUrlMap)
+    return (
+      <DeferredMarkdown
+        key={key}
+        markdown={resolved}
+        urgent={isLiveGeneration}
+        components={markdownComponents}
+      />
+    )
+  }
   const attachmentSrc = (attachment: DownloadableAttachment) => attachmentDownloadSrc(attachment)
   const attachmentHref = (attachment: DownloadableAttachment) => attachmentDownloadSrc(attachment)
   // User uploads live on msg.attachments; assistant "generated files" strip is separate.
@@ -2748,6 +2763,7 @@ export const MessageBubble = memo(
   MessageBubbleComponent,
   (prev, next) => {
     if (prev.msg !== next.msg) return false
+    if (prev.chatImageMessages !== next.chatImageMessages) return false
     if (prev.isUser !== next.isUser) return false
     if (prev.isCodeEvent !== next.isCodeEvent) return false
     if (prev.isThinking !== next.isThinking) return false

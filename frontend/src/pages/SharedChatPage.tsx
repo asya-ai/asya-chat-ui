@@ -93,6 +93,7 @@ export const SharedChatPage = () => {
       return (
         <MessageBubble
           msg={msg}
+          chatImageMessages={messages}
           isUser={isUser}
           isCodeEvent={isCodeEvent}
           isThinking={false}

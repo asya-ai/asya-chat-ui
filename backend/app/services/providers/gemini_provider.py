@@ -771,6 +771,7 @@ class GeminiProvider:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
         tool_calls = list(pending_tool_calls.values())
         yield ChatStreamChunk(
+            tool_calls=tool_calls or None,
             finish_reason="tool_calls" if tool_calls else "stop",
         )
 

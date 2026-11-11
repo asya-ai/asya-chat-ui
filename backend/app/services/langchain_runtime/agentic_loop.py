@@ -23,6 +23,51 @@ from app.services.mcp import mcp_source_items_from_tool_result
 logger = logging.getLogger(__name__)
 
 WEB_SCRAPE_ANSWER_MARKDOWN_LIMIT = 12000
+
+
+def _merge_stream_tool_call_deltas(
+    pending: dict[int, dict[str, str]],
+    tool_call_deltas: list[dict[str, Any]] | None,
+) -> None:
+    if not tool_call_deltas:
+        return
+    for delta in tool_call_deltas:
+        index = int(delta.get("index", 0) or 0)
+        entry = pending.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        if delta.get("id"):
+            entry["id"] = str(delta["id"])
+        function = delta.get("function") or {}
+        if function.get("name"):
+            entry["name"] = str(function["name"])
+        if function.get("arguments"):
+            entry["arguments"] += str(function["arguments"])
+
+
+def _tool_calls_from_stream_pending(
+    pending: dict[int, dict[str, str]],
+) -> list[Any]:
+    from app.services.providers.base import ChatToolCall
+
+    tool_calls: list[ChatToolCall] = []
+    for index in sorted(pending):
+        entry = pending[index]
+        arguments: dict[str, Any] = {}
+        if entry["arguments"]:
+            try:
+                parsed = repair_json_loads(entry["arguments"])
+                arguments = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                arguments = {}
+        if not entry["name"]:
+            continue
+        tool_calls.append(
+            ChatToolCall(
+                id=entry["id"] or f"call_{index}",
+                name=entry["name"],
+                arguments=arguments,
+            )
+        )
+    return tool_calls
 WEB_SCRAPE_ANSWER_HEAD_RATIO = 0.7
 
 ToolEventEmitter = Callable[[dict[str, Any]], Awaitable[None]]
@@ -329,6 +374,7 @@ async def run_agentic_loop_langchain(
             episode_id = f"reasoning_{current_step}"
             all_reasoning_parts: list[str] = []
             tool_calls: list[Any] = []
+            pending_tool_calls: dict[int, dict[str, str]] = {}
             step_usage: ChatUsage | None = None
             finish_reason: str | None = None
             last_emitted_reasoning_len = 0
@@ -380,6 +426,10 @@ async def run_agentic_loop_langchain(
             async for chunk in provider.chat_stream_with_tools(
                 model_name, messages, tool_specs
             ):
+                if chunk.tool_call_deltas:
+                    _merge_stream_tool_call_deltas(
+                        pending_tool_calls, chunk.tool_call_deltas
+                    )
                 if chunk.tool_calls:
                     tool_calls = list(chunk.tool_calls)
                 if chunk.content:
@@ -397,6 +447,8 @@ async def run_agentic_loop_langchain(
             await _emit_reasoning(force=True)
             if episode_reasoning:
                 all_reasoning_parts.append(episode_reasoning)
+            if not tool_calls and pending_tool_calls:
+                tool_calls = _tool_calls_from_stream_pending(pending_tool_calls)
             return (
                 "".join(content_parts),
                 "\n\n".join(all_reasoning_parts),
@@ -535,6 +587,10 @@ async def run_agentic_loop_langchain(
         if not tool_calls:
             step_text = (content or "").strip()
             truncated = _is_length_truncated(finish_reason)
+            lost_tool_calls = str(finish_reason or "").strip().lower() in {
+                "tool_calls",
+                "tool_use",
+            }
             logger.info(
                 "Agentic step %s/%s no tool_calls finish_reason=%s response_len=%s",
                 step + 1,
@@ -542,6 +598,66 @@ async def run_agentic_loop_langchain(
                 finish_reason,
                 len(content or ""),
             )
+
+            if lost_tool_calls and not step_text:
+                consecutive_empty += 1
+                consecutive_length = 0
+                logger.warning(
+                    "Agentic step %s/%s finish_reason=%s but tool_calls were not captured",
+                    step + 1,
+                    max_steps,
+                    finish_reason,
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Continue with the tool call or provide the full answer "
+                            "in your next message."
+                        ),
+                    }
+                )
+                await _emit_activity(thinking_label, "end")
+                await _publish_step_timing(
+                    step,
+                    model_ms=model_ms,
+                    tools_ms=0,
+                    tool_names=[],
+                    usage_snapshot=step_usage,
+                    finish=finish_reason,
+                    exec_runs=[],
+                )
+                await _save_step_checkpoint(step + 1)
+                continue
+
+            if lost_tool_calls and step_text:
+                logger.warning(
+                    "Agentic step %s/%s finishing with stub text after missing tool_calls",
+                    step + 1,
+                    max_steps,
+                )
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Continue from where you left off and complete the full "
+                            "answer, including any code or files you intended to provide."
+                        ),
+                    }
+                )
+                await _emit_activity(thinking_label, "end")
+                await _publish_step_timing(
+                    step,
+                    model_ms=model_ms,
+                    tools_ms=0,
+                    tool_names=[],
+                    usage_snapshot=step_usage,
+                    finish=finish_reason,
+                    exec_runs=[],
+                )
+                await _save_step_checkpoint(step + 1)
+                continue
 
             # Output was cut mid-answer — keep going instead of returning a stump.
             if truncated and step_text:

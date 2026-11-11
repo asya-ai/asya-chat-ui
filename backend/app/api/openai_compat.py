@@ -878,6 +878,7 @@ async def chat_completions(
             finish_reason = "stop"
             tool_index_by_id: dict[str, int] = {}
             next_tool_index = 0
+            streamed_tool_deltas = False
 
             if tool_specs and hasattr(provider, "chat_stream_with_tools"):
                 stream_iter = provider.chat_stream_with_tools(
@@ -986,6 +987,7 @@ async def chat_completions(
                         delta=delta,
                     )
                 if chunk.tool_call_deltas:
+                    streamed_tool_deltas = True
                     yield compat_support.stream_chunk_sse(
                         completion_id=completion_id,
                         created=created,
@@ -997,7 +999,7 @@ async def chat_completions(
                             )
                         },
                     )
-                elif chunk.tool_calls:
+                elif chunk.tool_calls and not streamed_tool_deltas:
                     tool_deltas: list[dict[str, Any]] = []
                     for call in chunk.tool_calls:
                         index = tool_index_by_id.get(call.id)

@@ -487,6 +487,7 @@ async def _iter_response_stream_chunks(stream) -> AsyncIterator[ChatStreamChunk]
     usage = getattr(final_response, "usage", None) if final_response is not None else None
     yield _usage_chunk_from_response_usage(usage)
     yield ChatStreamChunk(
+        tool_calls=tool_calls or None,
         finish_reason=_finish_reason_from_response(final_response, tool_calls),
     )
 
@@ -1353,11 +1354,29 @@ class OpenAIProvider:
                     )
                 )
 
+        tool_calls: list[ChatToolCall] = []
+        for index in sorted(pending_tool_calls):
+            entry = pending_tool_calls[index]
+            arguments: dict = {}
+            if entry["arguments"]:
+                try:
+                    parsed_arguments = repair_json_loads(entry["arguments"])
+                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                except Exception:
+                    arguments = {}
+            tool_calls.append(
+                ChatToolCall(
+                    id=entry["id"] or f"call_{index}",
+                    name=entry["name"],
+                    arguments=arguments,
+                )
+            )
         if not usage_sent:
             yield ChatStreamChunk(usage=ChatUsage(0, 0, 0, 0, 0, 0, 0))
         yield ChatStreamChunk(
+            tool_calls=tool_calls or None,
             finish_reason=finish_reason
-            or ("tool_calls" if pending_tool_calls else "stop"),
+            or ("tool_calls" if tool_calls else "stop"),
         )
 
 
