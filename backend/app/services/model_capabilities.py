@@ -82,6 +82,9 @@ def infer_capabilities_for_model(
         if lowered.startswith("gpt-3.5"):
             return False, image_output
 
+    if provider == "vertex" and lowered.startswith("claude"):
+        return True, image_output if image_output is not None else False
+
     if provider in {"gemini", "vertex"}:
         if lowered.startswith("gemini-"):
             if "embedding" in lowered:

@@ -139,6 +139,17 @@ TOOL_SYSTEM_PROMPTS: dict[str, str] = {
     ),
 }
 
+PROJECT_SOURCE_CITATION_PROMPT = (
+    "When citing project sources in your answer, use inline numeric markers like [1] or [1][3] "
+    "that match the source id from list/search/read project tools. Put markers after the claim "
+    "they support. Do not paste long lists of file names or titles in brackets — use numeric "
+    "citations only."
+)
+
+_PROJECT_SOURCE_TOOLS = frozenset(
+    {"list_project_sources", "search_project_sources", "read_project_source"}
+)
+
 TOOL_PROMPT_ORDER = (
     "code_execution",
     "extract_pdf",
@@ -397,4 +408,6 @@ def build_system_prompt_messages(
     )
     if memory_tools_enabled:
         messages.append({"role": "system", "content": MEMORY_SYSTEM_PROMPT})
+    if tool_names.intersection(_PROJECT_SOURCE_TOOLS):
+        messages.append({"role": "system", "content": PROJECT_SOURCE_CITATION_PROMPT})
     return messages

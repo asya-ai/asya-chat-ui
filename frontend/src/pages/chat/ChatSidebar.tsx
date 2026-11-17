@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent,
   type HTMLAttributes,
   type MouseEvent,
   type ReactNode,
@@ -364,6 +365,7 @@ export const ChatSidebar = ({
   const [sourceUrl, setSourceUrl] = useState("")
   const [sourceUrlTitle, setSourceUrlTitle] = useState("")
   const [sourceBusy, setSourceBusy] = useState(false)
+  const [projectFilesDragActive, setProjectFilesDragActive] = useState(false)
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const instrNameRef = useRef<HTMLInputElement | null>(null)
@@ -693,17 +695,16 @@ export const ChatSidebar = ({
     }
   }
 
-  const handleUploadFiles = async (files: FileList | null) => {
-    if (!focusedAgentId || !files?.length) return
+  const uploadProjectSourceFiles = async (files: File[]) => {
+    if (!focusedAgentId || files.length === 0 || sourceBusy) return
     try {
       setSourceBusy(true)
-      const list = Array.from(files)
-      const attachments = await readFilesAsAttachments(list)
+      const attachments = await readFilesAsAttachments(files)
       await Promise.all(
         attachments.map((attachment, index) =>
           agentApi.createSource(focusedAgentId, {
             kind: "file",
-            title: list[index]?.name || attachment.file_name,
+            title: files[index]?.name || attachment.file_name,
             file_name: attachment.file_name,
             content_type: attachment.content_type,
             data_base64: attachment.data_base64,
@@ -715,6 +716,38 @@ export const ChatSidebar = ({
       setSourceBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ""
     }
+  }
+
+  const handleUploadFiles = async (files: FileList | null) => {
+    if (!files?.length) return
+    await uploadProjectSourceFiles(Array.from(files))
+  }
+
+  const handleProjectFilesDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (sourceBusy || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    setProjectFilesDragActive(true)
+  }
+
+  const handleProjectFilesDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (sourceBusy || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+    if (!projectFilesDragActive) setProjectFilesDragActive(true)
+  }
+
+  const handleProjectFilesDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node)) return
+    setProjectFilesDragActive(false)
+  }
+
+  const handleProjectFilesDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (sourceBusy || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    setProjectFilesDragActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    void uploadProjectSourceFiles(files)
   }
 
   const handleAddUrl = async () => {
@@ -1460,7 +1493,17 @@ export const ChatSidebar = ({
                     ) : null}
 
                     {projectSubTab === "files" ? (
-                      <>
+                      <div
+                        className={cn(
+                          "flex flex-col gap-4 -mx-1 px-1 rounded-lg transition-[box-shadow,background-color]",
+                          projectFilesDragActive &&
+                            "bg-primary/5 ring-2 ring-primary/30 ring-inset"
+                        )}
+                        onDragEnter={handleProjectFilesDragEnter}
+                        onDragOver={handleProjectFilesDragOver}
+                        onDragLeave={handleProjectFilesDragLeave}
+                        onDrop={handleProjectFilesDrop}
+                      >
                         <div className="flex gap-2">
                           <Button
                             type="button"
@@ -1638,7 +1681,7 @@ export const ChatSidebar = ({
                             })()}
                           </div>
                         )}
-                      </>
+                      </div>
                     ) : null}
 
                     {projectSubTab === "instructions" ? (

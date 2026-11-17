@@ -1706,6 +1706,103 @@ def _source_item(url: str, title: str | None = None) -> dict:
     }
 
 
+def _project_source_item(
+    *,
+    catalog_id: int | None = None,
+    title: str | None = None,
+    snippet: str | None = None,
+    source_id: str | None = None,
+    url: str | None = None,
+) -> dict:
+    item: dict[str, object] = {"host": "project"}
+    if title:
+        item["title"] = title
+    if catalog_id is not None:
+        item["catalog_id"] = catalog_id
+    if source_id:
+        item["source_id"] = source_id
+    if snippet:
+        item["snippet"] = snippet
+    if url:
+        item["url"] = url
+    return item
+
+
+def _project_sources_from_tool_output(tool_name: str, output: dict) -> list[dict]:
+    if not isinstance(output, dict) or output.get("error"):
+        return []
+    items: list[dict] = []
+    if tool_name == "search_project_sources":
+        for row in output.get("results") or []:
+            if not isinstance(row, dict):
+                continue
+            title = row.get("title")
+            if not isinstance(title, str) or not title.strip():
+                continue
+            raw_id = row.get("id")
+            catalog_id = raw_id if isinstance(raw_id, int) else None
+            snippet = row.get("snippet")
+            items.append(
+                _project_source_item(
+                    catalog_id=catalog_id,
+                    title=title.strip(),
+                    snippet=snippet if isinstance(snippet, str) else None,
+                )
+            )
+    elif tool_name == "read_project_source":
+        title = output.get("title")
+        if isinstance(title, str) and title.strip():
+            raw_id = output.get("id")
+            catalog_id = raw_id if isinstance(raw_id, int) else None
+            content = output.get("content")
+            snippet = content[:300] if isinstance(content, str) else None
+            items.append(
+                _project_source_item(
+                    catalog_id=catalog_id,
+                    title=title.strip(),
+                    snippet=snippet,
+                )
+            )
+    elif tool_name == "list_project_sources":
+        for row in output.get("sources") or []:
+            if not isinstance(row, dict):
+                continue
+            title = row.get("title")
+            if not isinstance(title, str) or not title.strip():
+                continue
+            raw_id = row.get("id")
+            catalog_id = raw_id if isinstance(raw_id, int) else None
+            summary = row.get("summary")
+            items.append(
+                _project_source_item(
+                    catalog_id=catalog_id,
+                    title=title.strip(),
+                    snippet=summary if isinstance(summary, str) else None,
+                )
+            )
+    return items
+
+
+def _sources_cited_in_text(content: str, registry: dict[int, dict]) -> list[dict]:
+    if not content or not registry:
+        return []
+    cited: list[dict] = []
+    seen: set[int] = set()
+    for match in re.finditer(r"\[(\d{1,4})\]", content):
+        try:
+            idx = int(match.group(1))
+        except ValueError:
+            continue
+        if idx in seen:
+            continue
+        item = registry.get(idx)
+        if not item:
+            continue
+        seen.add(idx)
+        cited.append(item)
+    return cited
+
+
 async def _resolve_source_urls(urls: list[str]) -> list[dict]:
     if not urls:
         return []
@@ -1731,6 +1828,12 @@ async def _resolve_source_urls(urls: list[str]) -> list[dict]:
 
 
 def _source_identity(item: dict) -> str | None:
+    catalog_id = item.get("catalog_id")
+    if catalog_id is not None:
+        try:
+            return f"catalog:{int(catalog_id)}"
+        except (TypeError, ValueError):
+            pass
     source_id = item.get("source_id")
     if source_id is not None and str(source_id).strip():
         return f"id:{str(source_id).strip()}"

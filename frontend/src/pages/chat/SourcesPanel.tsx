@@ -12,6 +12,7 @@ type SourcesPanelProps = {
   title: string
   emptyLabel: string
   closeLabel: string
+  projectHostLabel: string
   onClose: () => void
   onNavigateInternal?: (path: string) => void
   className?: string
@@ -34,11 +35,15 @@ const hostFromSource = (source: SourceItem) => {
 const faviconUrl = (host: string) =>
   `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`
 
+const isProjectSource = (source: SourceItem) =>
+  source.host === "project" || Boolean(source.source_id && !source.url)
+
 export const SourcesPanel = ({
   sources,
   title,
   emptyLabel,
   closeLabel,
+  projectHostLabel,
   onClose,
   onNavigateInternal,
   className,
@@ -70,9 +75,11 @@ export const SourcesPanel = ({
         ) : (
           uniqueSources.map((source, index) => {
             const url = sourceUrl(source)
-            const host = hostFromSource(source)
+            const project = isProjectSource(source)
+            const host = project ? projectHostLabel : hostFromSource(source)
             const isInternal = url.startsWith("/chat/")
             const label = source.title?.trim() || url || host
+            const snippet = source.snippet?.trim()
             const hasLink = Boolean(url)
             const Wrapper = hasLink ? "a" : "div"
             return (
@@ -102,7 +109,7 @@ export const SourcesPanel = ({
               >
                 <div className="flex items-center gap-1">
                   <span className="relative size-5 shrink-0 overflow-hidden rounded-full bg-secondary">
-                    {url && !isInternal ? (
+                    {url && !isInternal && !project ? (
                       <img
                         src={faviconUrl(host)}
                         alt=""
@@ -122,6 +129,11 @@ export const SourcesPanel = ({
                   </span>
                 </div>
                 <p className="text-sm font-medium leading-4 text-foreground">{label}</p>
+                {snippet ? (
+                  <p className="line-clamp-3 text-xs leading-4 text-muted-foreground">
+                    {snippet}
+                  </p>
+                ) : null}
               </Wrapper>
             )
           })

@@ -28,6 +28,32 @@ class _GeminiCachedContentEntry:
 _GEMINI_CACHED_CONTENT: dict[str, _GeminiCachedContentEntry] = {}
 
 
+def _schema_uses_json_schema_refs(schema: object) -> bool:
+    """True when schema needs parameters_json_schema instead of parameters."""
+    if isinstance(schema, dict):
+        if "$ref" in schema or "$defs" in schema or "definitions" in schema:
+            return True
+        return any(_schema_uses_json_schema_refs(value) for value in schema.values())
+    if isinstance(schema, list):
+        return any(_schema_uses_json_schema_refs(item) for item in schema)
+    return False
+
+
+def _function_declaration_for_tool(tool: ChatToolSpec) -> types.FunctionDeclaration:
+    params = tool.parameters if isinstance(tool.parameters, dict) else {}
+    if _schema_uses_json_schema_refs(params):
+        return types.FunctionDeclaration(
+            name=tool.name,
+            description=tool.description,
+            parameters_json_schema=params,
+        )
+    return types.FunctionDeclaration(
+        name=tool.name,
+        description=tool.description,
+        parameters=params,
+    )
+
+
 class GeminiProvider:
     def __init__(
         self,
@@ -507,15 +533,7 @@ class GeminiProvider:
 
     def _tool_declarations(self, tools: list[ChatToolSpec]) -> list:
         return [
-            types.Tool(
-                function_declarations=[
-                    types.FunctionDeclaration(
-                        name=tool.name,
-                        description=tool.description,
-                        parameters=tool.parameters,
-                    )
-                ]
-            )
+            types.Tool(function_declarations=[_function_declaration_for_tool(tool)])
             for tool in tools
         ]
 

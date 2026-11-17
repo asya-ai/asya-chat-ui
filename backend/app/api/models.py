@@ -205,15 +205,39 @@ def _normalize_openrouter_endpoint(value: str | None) -> str | None:
 def _normalize_provider_model_name(provider: str, model_name: str) -> str:
     value = model_name.strip()
     if provider in {"gemini", "vertex"}:
-        if value.startswith("publishers/google/models/"):
-            value = value.split("publishers/google/models/", 1)[1]
-        if value.startswith("models/"):
-            value = value.split("models/", 1)[1]
+        from app.services.providers.vertex_config import normalize_vertex_model_name
+
+        return normalize_vertex_model_name(value)
     return value
 
 
 def _validate_vertex_model_invokable(session: Session, org_id: UUID, model_name: str) -> None:
+    from app.services.providers.vertex_claude import ping_vertex_claude_model
+    from app.services.providers.vertex_config import (
+        is_vertex_claude_model,
+        normalize_vertex_model_name,
+        resolve_vertex_runtime_config,
+    )
+
+    from app.services.instance_providers import resolve_effective_credentials
+
+    normalized = normalize_vertex_model_name(model_name)
     provider_config = require_provider_enabled(session, org_id, "vertex")
+    if is_vertex_claude_model(normalized):
+        creds = resolve_effective_credentials(session, "vertex", provider_config)
+        runtime = resolve_vertex_runtime_config(creds.config)
+        try:
+            ping_vertex_claude_model(runtime, normalized)
+        except Exception as exc:
+            detail = str(exc)
+            if len(detail) > 400:
+                detail = f"{detail[:400]}..."
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Vertex model is not invokable for this org/project/region: {detail}",
+            ) from exc
+        return
+
     provider = get_provider_for_org(
         session,
         org_id,
@@ -222,7 +246,7 @@ def _validate_vertex_model_invokable(session: Session, org_id: UUID, model_name:
     )
     try:
         provider.client.models.generate_content(
-            model=model_name,
+            model=normalized,
             contents="ping",
             config={"max_output_tokens": 1},
         )

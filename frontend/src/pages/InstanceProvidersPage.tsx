@@ -19,12 +19,15 @@ import { Textarea } from "@/components/ui/textarea"
 import { authApi, instanceProviderApi, ttsApi } from "@/lib/api"
 import { useI18n, type TranslationKey } from "@/lib/i18n-context"
 import type { InstanceProvider, TtsSettings, TtsVoice } from "@/lib/types"
+import { buildVertexConfigJson, VERTEX_LOCATION_OPTIONS } from "@/lib/vertex-config"
 
 type ProviderDraft = {
   api_key: string
   base_url: string
   endpoint: string
   config_json: string
+  vertex_project: string
+  vertex_location: string
   display_name: string
   is_enabled: boolean
 }
@@ -45,6 +48,8 @@ const emptyDraft = (): ProviderDraft => ({
   base_url: "",
   endpoint: "",
   config_json: "",
+  vertex_project: "",
+  vertex_location: "eu",
   display_name: "",
   is_enabled: true,
 })
@@ -103,6 +108,8 @@ export const InstanceProvidersPage = () => {
             base_url: item.base_url ?? "",
             endpoint: item.endpoint ?? "",
             config_json: "",
+            vertex_project: "",
+            vertex_location: item.provider === "vertex" ? "eu" : "",
             display_name: item.display_name ?? item.provider,
             is_enabled: item.is_enabled,
           }
@@ -256,13 +263,32 @@ export const InstanceProvidersPage = () => {
     const draft = drafts[item.provider] ?? emptyDraft()
     setError(null)
     try {
+      let vertexConfigJson: string | undefined
+      if (item.provider === "vertex") {
+        try {
+          vertexConfigJson = buildVertexConfigJson({
+            credentialsJson: draft.config_json,
+            project: draft.vertex_project,
+            location: draft.vertex_location,
+          })
+        } catch {
+          setError("Invalid Vertex JSON")
+          return
+        }
+      }
       const payload = {
         display_name: draft.display_name || item.provider,
         is_enabled: draft.is_enabled,
         ...(draft.api_key.trim() ? { api_key: draft.api_key.trim() } : {}),
         base_url: draft.base_url.trim() || null,
         endpoint: draft.endpoint.trim() || null,
-        ...(draft.config_json.trim() ? { config_json: draft.config_json.trim() } : {}),
+        ...(item.provider === "vertex"
+          ? vertexConfigJson
+            ? { config_json: vertexConfigJson }
+            : {}
+          : draft.config_json.trim()
+            ? { config_json: draft.config_json.trim() }
+            : {}),
       }
       await instanceProviderApi.update(item.provider, payload)
       await loadProviders()
@@ -424,16 +450,42 @@ export const InstanceProvidersPage = () => {
             />
           ) : null}
           {isVertex ? (
-            <Textarea
-              placeholder={
-                item.config_json_set
-                  ? t("org_provider_override_set")
-                  : t("org_provider_vertex_config_placeholder")
-              }
-              value={draft.config_json}
-              onChange={(event) => updateDraft(item.provider, { config_json: event.target.value })}
-              className="h-28 font-mono text-xs"
-            />
+            <>
+              <Input
+                placeholder={t("org_provider_vertex_project")}
+                value={draft.vertex_project}
+                onChange={(event) =>
+                  updateDraft(item.provider, { vertex_project: event.target.value })
+                }
+              />
+              <Select
+                value={draft.vertex_location || "eu"}
+                onValueChange={(value) =>
+                  updateDraft(item.provider, { vertex_location: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t("org_provider_vertex_location")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {VERTEX_LOCATION_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Textarea
+                placeholder={
+                  item.config_json_set
+                    ? t("org_provider_override_set")
+                    : t("org_provider_vertex_config_placeholder")
+                }
+                value={draft.config_json}
+                onChange={(event) => updateDraft(item.provider, { config_json: event.target.value })}
+                className="h-28 font-mono text-xs"
+              />
+            </>
           ) : isAzure ? (
             <Input
               placeholder={t("org_provider_endpoint")}

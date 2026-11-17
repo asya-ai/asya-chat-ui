@@ -203,7 +203,7 @@ export const resolveCoworkPresentationMarkdown = (
 ): string => {
   if (!markdown) return markdown
   const hasMap = Boolean(imageUrls && Object.keys(imageUrls).length > 0)
-  if (!hasMap && !options?.soleFallbackUrl) return markdown
+  if (!hasMap && !options?.fallbackUrl) return markdown
 
   let next = markdown.replace(
     /(!\[[^\]]*\]\()([^)\s]+)(\))/g,

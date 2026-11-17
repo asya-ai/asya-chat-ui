@@ -206,6 +206,7 @@ export type SourceItem = {
   title?: string | null
   host?: string | null
   source_id?: string | null
+  catalog_id?: number | null
   snippet?: string | null
 }
 
@@ -245,13 +246,17 @@ export const dedupeSources = (sources: SourceItem[]): SourceItem[] => {
   const seen = new Set<string>()
   const unique: SourceItem[] = []
   for (const source of sources) {
+    const catalogId = source.catalog_id
     const sourceId = source.source_id?.trim()
     const url = source.url?.trim()
     // Drop private MCP endpoints and other non-citation URLs; keep title-only rows.
     if (url && !isUsableSourceUrl(url)) continue
     if (sourceId?.startsWith("mcp:") && !url) continue
     const title = source.title?.trim()
-    const key = sourceId
+    const key =
+      typeof catalogId === "number" && Number.isFinite(catalogId)
+        ? `catalog:${catalogId}`
+        : sourceId
       ? `id:${sourceId}`
       : url
         ? `url:${url}`

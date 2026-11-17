@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ComponentProps, CSSProperties, HTMLAttributes, ReactNode } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import ReactMarkdown from "react-markdown"
@@ -69,6 +69,10 @@ import type {
   TtsStatus,
 } from "@/lib/types"
 import { SpeakMessageButton } from "@/pages/chat/SpeakMessageButton"
+import {
+  buildSourceCitationMaps,
+  withSourceCitations,
+} from "@/pages/chat/sourceCitations"
 import { dedupeSources, isInternalToolEvent } from "@/lib/types"
 import { shouldSubmitOnEnter } from "@/lib/chat-input"
 import { cn } from "@/lib/utils"
@@ -1455,6 +1459,16 @@ const MessageBubbleComponent = ({
     isUser ? msg.content.trim() : !isThinking && finalAnswerText
   )
   const uniqueSources = msg.sources?.length ? dedupeSources(msg.sources) : []
+  const sourceCitationMaps = useMemo(
+    () => buildSourceCitationMaps(uniqueSources),
+    [uniqueSources]
+  )
+  const openCitedSource = useCallback(
+    (source: SourceItem) => {
+      onOpenSources?.(dedupeSources([...uniqueSources, source]))
+    },
+    [onOpenSources, uniqueSources]
+  )
   const content = useMemo(() => normalizeMathContent(msg.content), [msg.content])
   const streamParts = msg.stream_parts ?? []
   const streamTextLength = streamParts.reduce(
@@ -1606,6 +1620,10 @@ const MessageBubbleComponent = ({
       },
       p({ children, node, ...rest }: any) {
         void node
+        const body =
+          !isUser && uniqueSources.length > 0
+            ? withSourceCitations(children, sourceCitationMaps, openCitedSource)
+            : children
         return (
           <p
             className={
@@ -1615,7 +1633,7 @@ const MessageBubbleComponent = ({
             }
             {...rest}
           >
-            {children}
+            {body}
           </p>
         )
       },
@@ -1637,9 +1655,13 @@ const MessageBubbleComponent = ({
       },
       li({ children, node, ...rest }: any) {
         void node
+        const body =
+          !isUser && uniqueSources.length > 0
+            ? withSourceCitations(children, sourceCitationMaps, openCitedSource)
+            : children
         return (
           <li className="leading-7" {...rest}>
-            {children}
+            {body}
           </li>
         )
       },
@@ -1828,7 +1850,16 @@ const MessageBubbleComponent = ({
         )
       },
     }),
-    [chatImageUrlMap, codeTheme, isUser, latestInlineImageUrl, t]
+    [
+      chatImageUrlMap,
+      codeTheme,
+      isUser,
+      latestInlineImageUrl,
+      openCitedSource,
+      sourceCitationMaps,
+      t,
+      uniqueSources.length,
+    ]
   )
   const isLiveGeneration =
     msg.generation_status === "queued" ||

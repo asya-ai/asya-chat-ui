@@ -46,11 +46,9 @@ _OPENROUTER_ENDPOINTS_CACHE: dict[str, tuple[float, list[dict[str, object]], str
 
 
 def _normalize_gemini_name(name: str) -> str:
-    if name.startswith("publishers/google/models/"):
-        return name.split("publishers/google/models/", 1)[1]
-    if name.startswith("models/"):
-        return name.split("/", 1)[1]
-    return name
+    from app.services.providers.vertex_config import normalize_vertex_model_name
+
+    return normalize_vertex_model_name(name)
 
 
 def _detect_modalities(value: object) -> set[str]:

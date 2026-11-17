@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from google.genai import types
 
-from app.services.providers.gemini_provider import GeminiProvider
+from app.services.providers.base import ChatToolSpec
+from app.services.providers.gemini_provider import (
+    GeminiProvider,
+    _function_declaration_for_tool,
+)
 
 
 def _provider_without_init() -> GeminiProvider:
@@ -226,6 +230,51 @@ def test_build_config_includes_tools_and_system_without_cache() -> None:
     assert config.cached_content is None
     assert config.system_instruction == "be helpful"
     assert config.tools == tools
+
+
+def test_function_declaration_uses_json_schema_for_defs_and_refs() -> None:
+    tool = ChatToolSpec(
+        name="create_event",
+        description="Create calendar event",
+        parameters={
+            "type": "object",
+            "properties": {
+                "attendees": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/EventAttendee"},
+                }
+            },
+            "$defs": {
+                "EventAttendee": {
+                    "type": "object",
+                    "properties": {"email": {"type": "string"}},
+                }
+            },
+        },
+    )
+
+    declaration = _function_declaration_for_tool(tool)
+
+    assert declaration.parameters is None
+    assert declaration.parameters_json_schema == tool.parameters
+
+
+def test_function_declaration_uses_parameters_for_flat_schema() -> None:
+    tool = ChatToolSpec(
+        name="search",
+        description="Search",
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    )
+
+    declaration = _function_declaration_for_tool(tool)
+
+    assert declaration.parameters_json_schema is None
+    assert declaration.parameters is not None
+    assert declaration.parameters.type == types.Type.OBJECT
 
 
 def test_cache_key_includes_system_and_tools() -> None:

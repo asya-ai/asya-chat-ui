@@ -133,12 +133,21 @@ def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
 
 
 class AnthropicProvider:
-    def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
-        self.client = AsyncAnthropic(
-            api_key=api_key or settings.anthropic_api_key,
-            base_url=base_url or settings.anthropic_base_url,
-            timeout=180.0,
-        )
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        client: AsyncAnthropic | None = None,
+    ) -> None:
+        if client is not None:
+            self.client = client
+        else:
+            self.client = AsyncAnthropic(
+                api_key=api_key or settings.anthropic_api_key,
+                base_url=base_url or settings.anthropic_base_url,
+                timeout=180.0,
+            )
         self.logger = logging.getLogger(__name__)
 
     async def chat(

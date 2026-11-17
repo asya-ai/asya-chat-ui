@@ -332,16 +332,34 @@ async def run_agentic_loop_langchain(
     from app.api.chats import (
         _dedupe_sources,
         _limit_sources,
+        _project_sources_from_tool_output,
         _sanitize_tool_output_for_context,
         _source_item,
+        _sources_cited_in_text,
     )
     from app.workers.generation_checkpoint import usage_from_dict
 
     # Scraped pages first when truncating — they were deliberately visited.
     scrape_sources: list[dict] = []
     other_sources: list[dict] = []
+    project_source_registry: dict[int, dict] = {}
 
-    def _finalize_sources() -> list[dict]:
+    def _remember_project_sources(items: list[dict], *, promote: bool) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("catalog_id")
+            if isinstance(raw_id, int):
+                project_source_registry[raw_id] = item
+            if promote:
+                other_sources.append(item)
+
+    def _finalize_sources(answer_text: str | None = None) -> list[dict]:
+        if answer_text:
+            _remember_project_sources(
+                _sources_cited_in_text(answer_text, project_source_registry),
+                promote=True,
+            )
         return _limit_sources(_dedupe_sources(scrape_sources + other_sources))
 
     async def _emit_activity(label: str, state: str) -> None:
@@ -673,7 +691,7 @@ async def run_agentic_loop_langchain(
                     return (
                         _visible_content(content),
                         attachments,
-                        _finalize_sources(),
+                        _finalize_sources(_visible_content(content)),
                         image_usages,
                         usage,
                     )
@@ -715,7 +733,7 @@ async def run_agentic_loop_langchain(
                     return (
                         _visible_content(content),
                         attachments,
-                        _finalize_sources(),
+                        _finalize_sources(_visible_content(content)),
                         image_usages,
                         usage,
                     )
@@ -752,7 +770,8 @@ async def run_agentic_loop_langchain(
                 exec_runs=[],
             )
             await _emit_activity("Answering", "start")
-            return _visible_content(content), attachments, _finalize_sources(), image_usages, usage
+            final_text = _visible_content(content)
+            return final_text, attachments, _finalize_sources(final_text), image_usages, usage
 
         consecutive_empty = 0
         consecutive_length = 0
@@ -1345,6 +1364,19 @@ async def run_agentic_loop_langchain(
                             other_sources.append(
                                 _source_item(f"/chat/{cid}", item.get("chat_title"))
                             )
+            elif call.name in {
+                "list_project_sources",
+                "search_project_sources",
+                "read_project_source",
+            }:
+                if isinstance(tool_output, dict):
+                    project_items = _project_sources_from_tool_output(
+                        str(call.name or ""), tool_output
+                    )
+                    _remember_project_sources(
+                        project_items,
+                        promote=call.name != "list_project_sources",
+                    )
             else:
                 for source in mcp_source_items_from_tool_result(call.name, result.output):
                     other_sources.append(source)
@@ -1386,10 +1418,13 @@ async def run_agentic_loop_langchain(
         )
         await _save_step_checkpoint(step + 1)
 
+    final_fallback = (
+        "I reached the tool step limit before finishing. Please refine your request and try again."
+    )
     return (
-        "I reached the tool step limit before finishing. Please refine your request and try again.",
+        final_fallback,
         attachments,
-        _finalize_sources(),
+        _finalize_sources(final_fallback),
         image_usages,
         usage,
     )

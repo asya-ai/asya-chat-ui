@@ -21,7 +21,6 @@ import {
 import type {
   AgentSource,
   Chat,
-  ChatModel,
   ChatMessage,
   ChatMessageAttachmentInput,
   GenerationStatus,
@@ -32,6 +31,10 @@ import type {
 } from "@/lib/types"
 import { useI18n } from "@/lib/i18n-context"
 import { useBranding } from "@/lib/branding"
+import {
+  resolveChatModelSelection,
+  selectableChatModelsFrom,
+} from "@/lib/chat-model-selection"
 import {
   splitModelDisplayName,
   supportsImageInput,
@@ -897,15 +900,9 @@ export const ChatPage = () => {
       models.map((model) => [model.id, splitModelDisplayName(model.display_name).label])
     )
   }, [models])
-  const isEmbeddingModel = useCallback((model: ChatModel) => {
-    const name = `${model.display_name} ${model.model_name}`.toLowerCase()
-    return /(^|[\s/_-])(embedding|embeddings|text-embedding|embed)([\s/_-]|$)/.test(
-      name
-    )
-  }, [])
   const selectableChatModels = useMemo(
-    () => models.filter((model) => !isEmbeddingModel(model)),
-    [models, isEmbeddingModel]
+    () => selectableChatModelsFrom(models),
+    [models]
   )
   const selectedChatModel = useMemo(
     () => selectableChatModels.find((model) => model.id === selectedModel) ?? null,
@@ -1797,18 +1794,14 @@ export const ChatPage = () => {
 
   useEffect(() => {
     if (selectableChatModels.length === 0) return
-    const availableModels = selectableChatModels.filter(
-      (model) => model.is_available !== false
+    const resolved = resolveChatModelSelection(
+      selectableChatModels,
+      selectedModel,
+      modelStore.get()
     )
-    // Prefer available models so a stale selection doesn't stick on a disabled item.
-    const pool = availableModels.length > 0 ? availableModels : selectableChatModels
-    if (selectedModel && pool.some((model) => model.id === selectedModel)) return
-    const stored = modelStore.get()
-    if (stored && pool.some((model) => model.id === stored)) {
-      setSelectedModel(stored)
-      return
+    if (resolved !== selectedModel) {
+      setSelectedModel(resolved)
     }
-    setSelectedModel(pool[0].id)
   }, [selectableChatModels, selectedModel])
 
   useEffect(() => {
@@ -4544,6 +4537,7 @@ export const ChatPage = () => {
                 sources={sourcesPanelSources}
                 title={t("chat_sources")}
                 emptyLabel={t("chat_sources_empty")}
+                projectHostLabel={t("chat_source_project")}
                 closeLabel={t("common_close")}
                 className={
                   isMobile ? "min-w-0 max-w-none flex-1 border-l-0" : undefined

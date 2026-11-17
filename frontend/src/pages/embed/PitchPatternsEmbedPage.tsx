@@ -25,6 +25,10 @@ import {
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { chatApi, integrationsApi, modelApi, orgApi } from "@/lib/api"
+import {
+  resolveChatModelSelection,
+  selectableChatModelsFrom,
+} from "@/lib/chat-model-selection"
 import { useAuth } from "@/lib/auth-context"
 import {
   EMBED_SESSION_MESSAGE,
@@ -433,9 +437,12 @@ export const PitchPatternsEmbedPage = () => {
       const modelsList = await modelApi.list(orgId, { scope: "allowed" })
       if (isStale()) return
       setModels(modelsList)
-      const modelId = modelStore.get() ?? modelsList[0]?.id
+      const modelId = resolveChatModelSelection(
+        selectableChatModelsFrom(modelsList),
+        undefined,
+        modelStore.get()
+      )
       if (modelId) {
-        modelStore.set(modelId)
         setSelectedModel(modelId)
       }
 
@@ -500,9 +507,12 @@ export const PitchPatternsEmbedPage = () => {
         ? models
         : await modelApi.list(orgId, { scope: "allowed" })
       if (!models.length) setModels(modelsList)
-      const modelId = selectedModel ?? modelStore.get() ?? modelsList[0]?.id
+      const modelId = resolveChatModelSelection(
+        selectableChatModelsFrom(modelsList),
+        selectedModel,
+        modelStore.get()
+      )
       if (modelId) {
-        modelStore.set(modelId)
         setSelectedModel(modelId)
       }
       const chat = await chatApi.create({
@@ -646,15 +656,27 @@ export const PitchPatternsEmbedPage = () => {
   }, [actionInfoLevel, conversationMessages, messages])
   const isEmptyChat = conversationMessages.length === 0
   const selectableChatModels = useMemo(
-    () =>
-      models.filter((model) => {
-        const name = `${model.display_name} ${model.model_name}`.toLowerCase()
-        return !/(^|[\s/_-])(embedding|embeddings|text-embedding|embed)([\s/_-]|$)/.test(
-          name
-        )
-      }),
+    () => selectableChatModelsFrom(models),
     [models]
   )
+
+  useEffect(() => {
+    if (selectableChatModels.length === 0) return
+    const resolved = resolveChatModelSelection(
+      selectableChatModels,
+      selectedModel,
+      modelStore.get()
+    )
+    if (resolved !== selectedModel) {
+      setSelectedModel(resolved)
+    }
+  }, [selectableChatModels, selectedModel])
+
+  useEffect(() => {
+    if (selectedModel) {
+      modelStore.set(selectedModel)
+    }
+  }, [selectedModel])
 
   const send = async (overrideText?: string) => {
     if (sending) return
@@ -1051,10 +1073,7 @@ export const PitchPatternsEmbedPage = () => {
       selectedModelId={selectedModel}
       open={modelMenuOpen}
       onOpenChange={setModelMenuOpen}
-      onSelect={(modelId) => {
-        setSelectedModel(modelId)
-        modelStore.set(modelId)
-      }}
+      onSelect={setSelectedModel}
       selectLabel={t("chat_select_model")}
     />
   )
@@ -1232,6 +1251,7 @@ export const PitchPatternsEmbedPage = () => {
             sources={sourcesPanelSources}
             title={t("chat_sources")}
             emptyLabel={t("chat_sources_empty")}
+            projectHostLabel={t("chat_source_project")}
             closeLabel={t("common_close")}
             className="min-w-0 max-w-none flex-1 border-l-0"
             onClose={() => setSourcesPanelSources(null)}

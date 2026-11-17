@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import { useNavigate, useParams } from "@tanstack/react-router"
 import {
   ArrowLeft,
@@ -24,6 +24,7 @@ import type {
 } from "@/lib/types"
 import { isCloudSourceUrl } from "@/lib/types"
 import { orgStore } from "@/lib/storage"
+import { cn } from "@/lib/utils"
 import {
   groupModelsByDisplayName,
   splitModelDisplayName,
@@ -131,6 +132,7 @@ export const ProjectPage = () => {
   const [instrModelId, setInstrModelId] = useState("")
 
   const [sourceFiles, setSourceFiles] = useState<File[]>([])
+  const [filesDragActive, setFilesDragActive] = useState(false)
   const [sourceFileKey, setSourceFileKey] = useState(0)
   const [sourceUrl, setSourceUrl] = useState("")
   const [sourceUrlTitle, setSourceUrlTitle] = useState("")
@@ -277,16 +279,16 @@ export const ProjectPage = () => {
       notify(t("project_instructions_saved"))
     })
 
-  const handleUploadFiles = () =>
+  const uploadSourceFiles = (files: File[]) =>
     withBusy(async () => {
-      if (!project || sourceFiles.length === 0) return
-      const attachments = await readFilesAsAttachments(sourceFiles)
+      if (!project || files.length === 0) return
+      const attachments = await readFilesAsAttachments(files)
       if (attachments.length === 0) throw new Error(t("project_files_read_failed"))
       await Promise.all(
         attachments.map((attachment, index) =>
           agentApi.createSource(project.id, {
             kind: "file",
-            title: sourceFiles[index]?.name || attachment.file_name,
+            title: files[index]?.name || attachment.file_name,
             file_name: attachment.file_name,
             content_type: attachment.content_type,
             data_base64: attachment.data_base64,
@@ -300,6 +302,35 @@ export const ProjectPage = () => {
         tCount("project_file_uploaded", "project_files_uploaded", attachments.length)
       )
     })
+
+  const handleUploadFiles = () => void uploadSourceFiles(sourceFiles)
+
+  const handleFilesDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!canEdit || busy || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    setFilesDragActive(true)
+  }
+
+  const handleFilesDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!canEdit || busy || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+    if (!filesDragActive) setFilesDragActive(true)
+  }
+
+  const handleFilesDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node)) return
+    setFilesDragActive(false)
+  }
+
+  const handleFilesDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!canEdit || busy || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    setFilesDragActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    void uploadSourceFiles(files)
+  }
 
   const handleAddUrl = () =>
     withBusy(async () => {
@@ -621,7 +652,16 @@ export const ProjectPage = () => {
       ) : null}
 
       {tab === "files" ? (
-        <div className="space-y-6">
+        <div
+          className={cn(
+            "space-y-6 rounded-lg transition-[box-shadow,background-color]",
+            filesDragActive && canEdit && "bg-primary/5 ring-2 ring-primary/30 ring-inset p-2 -m-2"
+          )}
+          onDragEnter={handleFilesDragEnter}
+          onDragOver={handleFilesDragOver}
+          onDragLeave={handleFilesDragLeave}
+          onDrop={handleFilesDrop}
+        >
           {canEdit ? (
             <Card className="gap-4 p-4">
               <div className="space-y-2">

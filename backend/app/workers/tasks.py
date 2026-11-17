@@ -73,6 +73,7 @@ from app.services.agents.chat_index import (
     enqueue_project_chat_index,
     upsert_project_chat_source,
 )
+from app.services.tools.agent_tools import AgentToolContext
 from app.services.tools.code_execution import project_source_exec_path
 from app.services.langchain_runtime import (
     chat_stream_with_langchain,
@@ -930,6 +931,11 @@ async def _run_generation(task_id: UUID) -> None:
                             "input_preview": (latest_user_message.content or "")[:160],
                         },
                     )
+                    agent_tool_ctx = AgentToolContext(
+                        session=session,
+                        agent_id=chat.agent_id,
+                        user_id=chat.user_id,
+                    )
                     chunks = retrieve_agent_chunks(
                         session,
                         agent_id=chat.agent_id,
@@ -942,9 +948,12 @@ async def _run_generation(task_id: UUID) -> None:
                         source_key = str(source.id)
                         if source_key not in seen_agent_source_ids:
                             seen_agent_source_ids.add(source_key)
+                            catalog_id = agent_tool_ctx.number_for(source.id)
                             agent_sources.append(
                                 {
                                     "source_id": source_key,
+                                    "catalog_id": catalog_id,
+                                    "host": "project",
                                     "title": source.title,
                                     "url": source.url,
                                     "snippet": chunk.content[:300],
@@ -1005,8 +1014,9 @@ async def _run_generation(task_id: UUID) -> None:
                         "`<source_id>_<sanitized_name>` (original file bytes when available).\n"
                         "- Run multiple searches and read more than one source when the "
                         "question is broad or comparative. Do not stop after one search.\n"
-                        "- Base your answer on the sources and cite them by title. If the "
-                        "sources do not cover something, say so instead of guessing.\n"
+                        "- Base your answer on the sources and cite them inline with numeric "
+                        "markers like [1] matching the source ids below. If the sources do not "
+                        "cover something, say so instead of guessing.\n"
                     )
                     if catalog_lines:
                         guidance += (
