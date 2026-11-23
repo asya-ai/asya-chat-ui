@@ -1243,16 +1243,20 @@ const DeferredMarkdown = ({
   markdown,
   urgent,
   components,
+  renderVersion,
 }: {
   markdown: string
   urgent: boolean
   components: ComponentProps<typeof ReactMarkdown>["components"]
+  /** Changes when renderer context (e.g. citation sources) changes, forcing blocks to re-render. */
+  renderVersion: string
 }) => {
   const [ready, setReady] = useState(urgent)
   const normalized = useMemo(
     () => completeStreamingMarkdownTables(normalizeMathContent(markdown)),
     [markdown]
   )
+  const blocks = useMemo(() => splitMarkdownBlocks(normalized), [normalized])
 
   useEffect(() => {
     if (urgent) {
@@ -1275,15 +1279,87 @@ const DeferredMarkdown = ({
 
   return (
     <div className="chat-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
-        rehypePlugins={[rehypeKatex]}
-        components={components}
-      >
-        {normalized}
-      </ReactMarkdown>
+      {blocks.map((block, index) => (
+        <MarkdownBlock
+          key={index}
+          markdown={block}
+          components={components}
+          renderVersion={renderVersion}
+        />
+      ))}
     </div>
   )
+}
+
+const MARKDOWN_REMARK_PLUGINS: ComponentProps<typeof ReactMarkdown>["remarkPlugins"] = [
+  remarkGfm,
+  remarkBreaks,
+  [remarkMath, { singleDollarTextMath: false }],
+]
+const MARKDOWN_REHYPE_PLUGINS: ComponentProps<typeof ReactMarkdown>["rehypePlugins"] = [
+  rehypeKatex,
+]
+
+/** One top-level chunk; memoized so finished chunks are not re-parsed while later text streams. */
+const MarkdownBlock = memo(function MarkdownBlock({
+  markdown,
+  components,
+}: {
+  markdown: string
+  components: ComponentProps<typeof ReactMarkdown>["components"]
+  renderVersion: string
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+      rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+      components={components}
+    >
+      {markdown}
+    </ReactMarkdown>
+  )
+})
+
+/**
+ * Split markdown at blank lines that are safely between top-level blocks (outside code fences
+ * and $$ math, not followed by indented continuation). Docs using reference links/footnotes are
+ * kept whole since definitions must share a parse with their usages.
+ */
+const splitMarkdownBlocks = (markdown: string): string[] => {
+  if (/^\s{0,3}\[[^\]]+\]:/m.test(markdown) || markdown.includes("[^")) return [markdown]
+  const lines = markdown.split("\n")
+  const blocks: string[] = []
+  let current: string[] = []
+  let fence: string | null = null
+  let inMath = false
+  let pendingBlank = false
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (fence === null && !inMath && pendingBlank && trimmed !== "") {
+      const isContinuation = /^\s/.test(line)
+      if (!isContinuation && current.some((l) => l.trim() !== "")) {
+        blocks.push(current.join("\n"))
+        current = []
+      }
+      pendingBlank = false
+    }
+    current.push(line)
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (fenceMatch) {
+      if (fence === null) fence = fenceMatch[1][0]
+      else if (fenceMatch[1][0] === fence) fence = null
+      continue
+    }
+    if (fence !== null) continue
+    if (trimmed.startsWith("$$")) {
+      const count = (trimmed.match(/\$\$/g) ?? []).length
+      if (count % 2 === 1) inMath = !inMath
+      continue
+    }
+    if (!inMath && trimmed === "") pendingBlank = true
+  }
+  if (current.length) blocks.push(current.join("\n"))
+  return blocks.length ? blocks : [markdown]
 }
 
 const ThinkingTrail = ({
@@ -1458,7 +1534,10 @@ const MessageBubbleComponent = ({
   const canCopyMessage = Boolean(
     isUser ? msg.content.trim() : !isThinking && finalAnswerText
   )
-  const uniqueSources = msg.sources?.length ? dedupeSources(msg.sources) : []
+  const uniqueSources = useMemo(
+    () => (msg.sources?.length ? dedupeSources(msg.sources) : []),
+    [msg.sources]
+  )
   const sourceCitationMaps = useMemo(
     () => buildSourceCitationMaps(uniqueSources),
     [uniqueSources]
@@ -1599,14 +1678,32 @@ const MessageBubbleComponent = ({
     return `${values.length}:${latestInlineImageUrl ?? ""}:${values[values.length - 1]?.slice(0, 48) ?? ""}`
   }, [chatImageUrlMap, latestInlineImageUrl])
 
+  // Volatile values read by markdown renderers at render time. Keeping the components object
+  // stable stops react-markdown from remounting the whole tree on every streamed token
+  // (which caused jitter and lost text selection).
+  const markdownCtx = useRef({
+    chatImageUrlMap,
+    latestInlineImageUrl,
+    sourceCitationMaps,
+    openCitedSource,
+    hasSources: uniqueSources.length > 0,
+  })
+  // eslint-disable-next-line react-hooks/refs -- intentional: read by renderers at render time
+  markdownCtx.current = {
+    chatImageUrlMap,
+    latestInlineImageUrl,
+    sourceCitationMaps,
+    openCitedSource,
+    hasSources: uniqueSources.length > 0,
+  }
   const markdownComponents = useMemo(
     () => ({
       img({ src, alt, node, ...rest }: any) {
         void node
         const resolved = resolveMarkdownImageSrc(
           typeof src === "string" ? src : undefined,
-          chatImageUrlMap,
-          { fallbackUrl: latestInlineImageUrl }
+          markdownCtx.current.chatImageUrlMap,
+          { fallbackUrl: markdownCtx.current.latestInlineImageUrl }
         )
         return (
           <img
@@ -1621,8 +1718,12 @@ const MessageBubbleComponent = ({
       p({ children, node, ...rest }: any) {
         void node
         const body =
-          !isUser && uniqueSources.length > 0
-            ? withSourceCitations(children, sourceCitationMaps, openCitedSource)
+          !isUser && markdownCtx.current.hasSources
+            ? withSourceCitations(
+                children,
+                markdownCtx.current.sourceCitationMaps,
+                markdownCtx.current.openCitedSource
+              )
             : children
         return (
           <p
@@ -1656,8 +1757,12 @@ const MessageBubbleComponent = ({
       li({ children, node, ...rest }: any) {
         void node
         const body =
-          !isUser && uniqueSources.length > 0
-            ? withSourceCitations(children, sourceCitationMaps, openCitedSource)
+          !isUser && markdownCtx.current.hasSources
+            ? withSourceCitations(
+                children,
+                markdownCtx.current.sourceCitationMaps,
+                markdownCtx.current.openCitedSource
+              )
             : children
         return (
           <li className="leading-7" {...rest}>
@@ -1850,16 +1955,7 @@ const MessageBubbleComponent = ({
         )
       },
     }),
-    [
-      chatImageUrlMap,
-      codeTheme,
-      isUser,
-      latestInlineImageUrl,
-      openCitedSource,
-      sourceCitationMaps,
-      t,
-      uniqueSources.length,
-    ]
+    [codeTheme, isUser, t]
   )
   const isLiveGeneration =
     msg.generation_status === "queued" ||
@@ -1879,6 +1975,7 @@ const MessageBubbleComponent = ({
         markdown={resolved}
         urgent={isLiveGeneration}
         components={markdownComponents}
+        renderVersion={`${uniqueSources.length}`}
       />
     )
   }
@@ -2535,8 +2632,8 @@ const MessageBubbleComponent = ({
             <div
               className={
                 preferMobileLayout
-                  ? "bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 pointer-events-auto"
-                  : "bottom-0 z-10 sticky grid grid-cols-2 w-fit opacity-100 md:flex md:items-center md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto"
+                  ? "bottom-0 z-10 sticky flex flex-nowrap items-center w-fit opacity-100 pointer-events-auto"
+                  : "bottom-0 z-10 sticky flex flex-nowrap items-center w-fit opacity-100 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:opacity-0 pointer-events-auto"
               }
             >
               {canManageMessage ? (
@@ -2577,10 +2674,10 @@ const MessageBubbleComponent = ({
         ) : null}
         {showAssistantFooter ? (
           <div className="flex flex-wrap justify-between items-center gap-2 mt-2 transition">
-            <div className="flex justify-start items-center gap-1">
+            <div className="flex justify-start items-center gap-1 min-w-0">
               {showAssistantAnswerActions ? (
               <TooltipProvider delayDuration={300}>
-                <div className="flex items-center gap-1">
+                <div className="flex flex-nowrap items-center gap-1 shrink-0">
                   {canCopyMessage ? (
                     <Tooltip>
                       <TooltipTrigger asChild>

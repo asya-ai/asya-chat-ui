@@ -209,6 +209,24 @@ def _attachment_access_token(attachment_id: UUID) -> str:
     return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 
+_INLINE_SAFE_ATTACHMENT_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "image/bmp",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/ogg",
+        "audio/webm",
+        "video/mp4",
+        "video/webm",
+    }
+)
+
+
 def _decode_attachment_access_token(token: str) -> UUID:
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
@@ -835,6 +853,7 @@ def _build_tool_registry(
                 urls=args.get("urls"),
                 output=args.get("output"),
                 question=args.get("question"),
+                render=args.get("render") is True,
             )
 
         registry.register(
@@ -863,6 +882,13 @@ def _build_tool_registry(
                         "question": {
                             "type": "string",
                             "description": "Required when output=answer. Question to answer from the page only.",
+                        },
+                        "render": {
+                            "type": "boolean",
+                            "description": (
+                                "Force a full browser render. Use only when a previous scrape of the "
+                                "page looked incomplete (missing data, prices, tables, results)."
+                            ),
                         },
                     },
                 },
@@ -4703,16 +4729,28 @@ def _message_reads_for_chat(session: Session, chat: Chat) -> list["ChatMessageRe
     tool_events_by_assistant: dict[UUID, list[ChatGenerationEvent]] = {}
     timeline_events_by_assistant: dict[UUID, list[ChatGenerationEvent]] = {}
     if task_by_id:
-        generation_events = session.exec(
+        # Deltas are one row per streamed token. They are only needed to interleave text
+        # with tool/activity steps, so load them just for tasks that have such steps;
+        # plain-text answers render from message.content.
+        structural_events = session.exec(
             select(ChatGenerationEvent)
             .where(ChatGenerationEvent.task_id.in_(list(task_by_id.keys())))
-            .where(
-                ChatGenerationEvent.event_type.in_(
-                    ["tool_event", "activity", "delta"]
-                )
-            )
-            .order_by(ChatGenerationEvent.sequence, ChatGenerationEvent.created_at)
+            .where(ChatGenerationEvent.event_type.in_(["tool_event", "activity"]))
         ).all()
+        timeline_task_ids = list({event.task_id for event in structural_events})
+        delta_events = (
+            session.exec(
+                select(ChatGenerationEvent)
+                .where(ChatGenerationEvent.task_id.in_(timeline_task_ids))
+                .where(ChatGenerationEvent.event_type == "delta")
+            ).all()
+            if timeline_task_ids
+            else []
+        )
+        generation_events = sorted(
+            [*structural_events, *delta_events],
+            key=lambda event: (event.sequence, event.created_at),
+        )
         for event in generation_events:
             task = task_by_id.get(event.task_id)
             if not task:
@@ -4930,14 +4968,21 @@ def get_attachment_content(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Attachment content missing",
         )
+    # content_type is client-supplied: only render known-safe raster/media types
+    # inline. Everything else (html, svg, js, xml, …) is forced to download so an
+    # upload can't execute script on the app origin (stored XSS).
+    declared_type = (attachment.content_type or "").split(";", 1)[0].strip().lower()
+    inline = declared_type in _INLINE_SAFE_ATTACHMENT_TYPES
     return Response(
         content=data,
-        media_type=attachment.content_type or "application/octet-stream",
+        media_type=declared_type if inline else "application/octet-stream",
         headers={
             "Cache-Control": "private, max-age=300",
             "Content-Disposition": _content_disposition_header(
-                "inline", attachment.file_name
+                "inline" if inline else "attachment", attachment.file_name
             ),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'",
         },
     )
 

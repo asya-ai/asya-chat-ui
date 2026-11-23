@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -234,31 +235,30 @@ async def _normalize_web_scrape_answer_result(
     if not isinstance(scrape_results, list):
         return result, None
 
-    normalized_results: list[dict[str, Any]] = []
-    additional_usage: ChatUsage | None = None
-    for item in scrape_results:
-        if not isinstance(item, dict):
-            continue
+    async def _answer_one(item: dict[str, Any]) -> tuple[dict[str, Any], ChatUsage | None]:
         if item.get("error"):
-            normalized_results.append(
-                {key: value for key, value in item.items() if key != "analysis_input"}
-            )
-            continue
+            return {key: value for key, value in item.items() if key != "analysis_input"}, None
         try:
-            answered_item, answer_usage = await _generate_web_scrape_answer(
+            return await _generate_web_scrape_answer(
                 provider=provider,
                 model_name=model_name,
                 result_item=item,
             )
-            normalized_results.append(answered_item)
-            additional_usage = _merge_chat_usage(additional_usage, answer_usage)
         except Exception as exc:
-            normalized_results.append(
-                {
-                    **{key: value for key, value in item.items() if key != "analysis_input"},
-                    "error": f"Answer generation failed: {exc}",
-                }
-            )
+            return {
+                **{key: value for key, value in item.items() if key != "analysis_input"},
+                "error": f"Answer generation failed: {exc}",
+            }, None
+
+    # Pages are independent: answer them concurrently instead of one by one.
+    answered = await asyncio.gather(
+        *(_answer_one(item) for item in scrape_results if isinstance(item, dict))
+    )
+    normalized_results: list[dict[str, Any]] = []
+    additional_usage: ChatUsage | None = None
+    for answered_item, answer_usage in answered:
+        normalized_results.append(answered_item)
+        additional_usage = _merge_chat_usage(additional_usage, answer_usage)
 
     result.output["results"] = normalized_results
     return result, additional_usage

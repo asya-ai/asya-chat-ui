@@ -306,6 +306,37 @@ def tool_call_deltas_to_sse(tool_call_deltas: list[dict[str, Any]]) -> list[dict
     return out
 
 
+def upstream_exception_to_http(
+    exc: Exception,
+    *,
+    default_status: int = 502,
+) -> Any:
+    """Map provider/SDK failures to HTTP errors for OpenAI-compatible routes."""
+    from fastapi import HTTPException
+
+    message = str(exc).strip() or "Upstream request failed"
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        name = type(exc).__name__
+        if "Authentication" in name or name == "PermissionDeniedError":
+            status_code = 401
+        elif "NotFound" in name:
+            status_code = 404
+        elif "BadRequest" in name:
+            status_code = 400
+        elif "RateLimit" in name:
+            status_code = 429
+        else:
+            status_code = default_status
+    try:
+        status_code = int(status_code)
+    except (TypeError, ValueError):
+        status_code = default_status
+    if status_code < 400:
+        status_code = default_status
+    return HTTPException(status_code=status_code, detail=message[:2000])
+
+
 def openai_error_body(
     message: str,
     *,

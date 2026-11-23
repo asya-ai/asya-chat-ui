@@ -65,6 +65,10 @@ celery_app.conf.update(
             "task": "chatui.cleanup_stale_generation_tasks",
             "schedule": 60 * 5,
         },
+        "compact-generation-events-backlog": {
+            "task": "chatui.compact_generation_events_backlog",
+            "schedule": 60 * 10,
+        },
         "cleanup-retained-data-daily": {
             "task": "chatui.cleanup_retained_data",
             "schedule": 60 * 60 * 24,

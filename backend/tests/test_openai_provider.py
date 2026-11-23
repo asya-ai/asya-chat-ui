@@ -52,6 +52,31 @@ def test_detects_reasoning_effort_errors() -> None:
     assert _is_prompt_cache_param_error(exc) is False
 
 
+def test_normalize_prompt_cache_key_truncates_long_api_keys() -> None:
+    from uuid import uuid4
+
+    from app.services.openai_completion_params import (
+        OPENAI_PROMPT_CACHE_KEY_MAX_LEN,
+        normalize_openai_prompt_cache_key,
+    )
+
+    raw = f"api:{uuid4()}:{uuid4()}"
+    assert len(raw) > OPENAI_PROMPT_CACHE_KEY_MAX_LEN
+    normalized = normalize_openai_prompt_cache_key(raw)
+    assert normalized is not None
+    assert len(normalized) <= OPENAI_PROMPT_CACHE_KEY_MAX_LEN
+    assert normalize_openai_prompt_cache_key(raw) == normalized
+
+
+def test_detects_unsupported_sampling_param_errors() -> None:
+    from app.services.providers.openai_provider import _is_unsupported_sampling_param_error
+
+    exc = ValueError(
+        "Unsupported parameter: 'temperature' is not supported with this model."
+    )
+    assert _is_unsupported_sampling_param_error(exc) is True
+
+
 def test_detects_function_tools_with_reasoning_effort_errors() -> None:
     exc = ValueError(
         "Error code: 400 - {'error': {'message': \"Function tools with reasoning_effort "

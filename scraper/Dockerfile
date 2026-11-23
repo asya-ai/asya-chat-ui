@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable && pnpm install --frozen-lockfile \
     && pnpm exec puppeteer browsers install chrome
 
-COPY server.js http_fetch.js url_safety.js marp_export.js blocked_selectors.json ./
+COPY server.js http_fetch.js url_safety.js marp_export.js static_detect.js blocked_selectors.json ./
 
 EXPOSE 3001
 

@@ -10,6 +10,7 @@ import json
 from app.services.openai_completion_params import (
     merge_openai_chat_completion_payload,
     merge_openai_responses_payload,
+    normalize_openai_prompt_cache_key,
 )
 from app.services.providers.base import (
     ChatResponse,
@@ -146,6 +147,101 @@ def _is_prompt_cache_param_error(exc: Exception) -> bool:
         or "prompt_cache" in message
         or "cache_control" in message
     )
+
+
+def _is_unsupported_sampling_param_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "temperature" not in message and "top_p" not in message:
+        return False
+    return "unsupported parameter" in message or "not supported with this model" in message
+
+
+def _strip_unsupported_responses_sampling(payload: dict) -> bool:
+    removed = False
+    if payload.pop("temperature", None) is not None:
+        removed = True
+    if payload.pop("top_p", None) is not None:
+        removed = True
+    return removed
+
+
+def _adapt_chat_completion_payload_after_error(
+    payload: dict, exc: Exception, *, logger
+) -> bool:
+    changed = False
+    if _is_context_length_error(exc) and isinstance(payload.get("messages"), list):
+        payload["messages"] = _trim_messages_for_context(payload["messages"])
+        if payload.pop("prompt_cache_key", None) is not None:
+            changed = True
+        if payload.pop("prompt_cache_retention", None) is not None:
+            changed = True
+        logger.warning(
+            "chat.completions context limit exceeded, retrying with aggressively trimmed history"
+        )
+        changed = True
+    if _is_unsupported_reasoning_effort_error(exc) and payload.get("reasoning_effort"):
+        payload.pop("reasoning_effort", None)
+        logger.warning(
+            "chat.completions rejected reasoning_effort for model=%s; retrying without reasoning override: %s",
+            payload.get("model"),
+            exc,
+        )
+        changed = True
+    if _is_prompt_cache_param_error(exc):
+        if payload.pop("prompt_cache_key", None) is not None:
+            changed = True
+        if payload.pop("prompt_cache_retention", None) is not None:
+            changed = True
+        if changed:
+            logger.warning(
+                "chat.completions rejected prompt_cache params, retrying without them: %s",
+                exc,
+            )
+    if _is_unsupported_auto_tool_choice_error(exc):
+        if _strip_auto_tool_choice(payload):
+            logger.warning(
+                "chat.completions rejected auto tool_choice, retrying without tool_choice: %s",
+                exc,
+            )
+            changed = True
+    if _is_unsupported_sampling_param_error(exc):
+        if _strip_unsupported_responses_sampling(payload):
+            logger.warning(
+                "chat.completions rejected sampling params for model=%s; retrying without temperature/top_p: %s",
+                payload.get("model"),
+                exc,
+            )
+            changed = True
+    return changed
+
+
+def _adapt_responses_payload_after_error(payload: dict, exc: Exception, *, logger) -> bool:
+    changed = False
+    if _is_unsupported_reasoning_effort_error(exc):
+        if payload.pop("reasoning", None) is not None:
+            logger.warning(
+                "responses rejected reasoning.effort for model=%s; retrying without reasoning override",
+                payload.get("model"),
+            )
+            changed = True
+    if _is_prompt_cache_param_error(exc):
+        removed_key = payload.pop("prompt_cache_key", None) is not None
+        removed_retention = payload.pop("prompt_cache_retention", None) is not None
+        if removed_key or removed_retention:
+            logger.warning(
+                "responses rejected prompt_cache params, retrying without them: %s",
+                exc,
+            )
+            changed = True
+    if _is_unsupported_sampling_param_error(exc):
+        if _strip_unsupported_responses_sampling(payload):
+            logger.warning(
+                "responses rejected sampling params for model=%s; retrying without temperature/top_p: %s",
+                payload.get("model"),
+                exc,
+            )
+            changed = True
+    return changed
 
 
 def _is_unsupported_auto_tool_choice_error(exc: Exception) -> bool:
@@ -531,7 +627,7 @@ class OpenAIProvider:
             max_retries=0,
         )
         self.reasoning_effort = reasoning_effort
-        self.prompt_cache_key = prompt_cache_key
+        self.prompt_cache_key = normalize_openai_prompt_cache_key(prompt_cache_key)
         self.prompt_cache_retention = (
             prompt_cache_retention or settings.openai_prompt_cache_retention
             if prompt_cache_enabled
@@ -559,7 +655,9 @@ class OpenAIProvider:
 
     def _apply_prompt_cache(self, payload: dict) -> None:
         if self.prompt_cache_key:
-            payload["prompt_cache_key"] = self.prompt_cache_key
+            payload["prompt_cache_key"] = normalize_openai_prompt_cache_key(
+                self.prompt_cache_key
+            )
         if self.prompt_cache_retention:
             payload["prompt_cache_retention"] = self.prompt_cache_retention
 
@@ -624,52 +722,26 @@ class OpenAIProvider:
 
     async def _create_chat_completion(self, payload: dict) -> object:
         self._apply_extra_body(payload)
-        try:
-            return await self.client.with_options(
-                timeout=self.chat_timeout_seconds,
-                max_retries=0,
-            ).chat.completions.create(**payload)
-        except Exception as exc:
-            if _is_non_chat_model_error(exc):
-                raise NonChatModelError(str(exc)) from exc
-            retry = False
-            if _is_context_length_error(exc) and isinstance(payload.get("messages"), list):
-                payload["messages"] = _trim_messages_for_context(payload["messages"])
-                self._strip_prompt_cache(payload)
-                self.logger.warning(
-                    "chat.completions context limit exceeded, retrying with aggressively trimmed history"
-                )
-                retry = True
-            elif _is_unsupported_reasoning_effort_error(exc) and payload.get(
-                "reasoning_effort"
-            ):
-                payload.pop("reasoning_effort", None)
-                self.logger.warning(
-                    "chat.completions rejected reasoning_effort for model=%s; retrying without reasoning override: %s",
-                    payload.get("model"),
-                    exc,
-                )
-                retry = True
-            elif _is_prompt_cache_param_error(exc):
-                if self._strip_prompt_cache(payload):
-                    self.logger.warning(
-                        "chat.completions rejected prompt_cache params, retrying without them: %s",
-                        exc,
-                    )
-                    retry = True
-            elif _is_unsupported_auto_tool_choice_error(exc):
-                if _strip_auto_tool_choice(payload):
-                    self.logger.warning(
-                        "chat.completions rejected auto tool_choice, retrying without tool_choice: %s",
-                        exc,
-                    )
-                    retry = True
-            if retry:
+        last_exc: Exception | None = None
+        for _attempt in range(4):
+            try:
                 return await self.client.with_options(
                     timeout=self.chat_timeout_seconds,
                     max_retries=0,
                 ).chat.completions.create(**payload)
-            raise
+            except Exception as exc:
+                if _is_non_chat_model_error(exc):
+                    raise NonChatModelError(str(exc)) from exc
+                if _is_timeout_error(exc):
+                    raise
+                if not _adapt_chat_completion_payload_after_error(
+                    payload, exc, logger=self.logger
+                ):
+                    raise
+                last_exc = exc
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("chat.completions retry loop exhausted without response")
 
     async def _create_response(self, payload: dict) -> object:
         self._apply_extra_body(payload)
@@ -692,27 +764,22 @@ class OpenAIProvider:
                     input_text_chars,
                 )
                 raise
-            retry = False
-            if _is_unsupported_reasoning_effort_error(exc):
-                if payload.pop("reasoning", None) is not None:
-                    self.logger.warning(
-                        "responses rejected reasoning.effort for model=%s; retrying without reasoning override",
-                        payload.get("model"),
-                    )
-                    retry = True
-            elif _is_prompt_cache_param_error(exc):
-                if self._strip_prompt_cache(payload):
-                    self.logger.warning(
-                        "responses rejected prompt_cache params, retrying without them: %s",
-                        exc,
-                    )
-                    retry = True
-            if retry:
-                return await self._responses_client.with_options(
-                    timeout=self.responses_timeout_seconds,
-                    max_retries=0,
-                ).responses.create(**payload)
-            raise
+            last_exc = exc
+            for _attempt in range(3):
+                if not _adapt_responses_payload_after_error(
+                    payload, last_exc, logger=self.logger
+                ):
+                    raise last_exc
+                try:
+                    return await self._responses_client.with_options(
+                        timeout=self.responses_timeout_seconds,
+                        max_retries=0,
+                    ).responses.create(**payload)
+                except Exception as retry_exc:
+                    if _is_timeout_error(retry_exc):
+                        raise
+                    last_exc = retry_exc
+            raise last_exc
 
     async def _create_response_stream(self, payload: dict):
         self._apply_extra_body(payload)
@@ -723,27 +790,20 @@ class OpenAIProvider:
                 max_retries=0,
             ).responses.create(**stream_payload)
         except Exception as exc:
-            retry = False
-            if _is_unsupported_reasoning_effort_error(exc):
-                if stream_payload.pop("reasoning", None) is not None:
-                    self.logger.warning(
-                        "responses stream rejected reasoning.effort for model=%s; retrying without reasoning override",
-                        stream_payload.get("model"),
-                    )
-                    retry = True
-            elif _is_prompt_cache_param_error(exc):
-                if self._strip_prompt_cache(stream_payload):
-                    self.logger.warning(
-                        "responses stream rejected prompt_cache params, retrying without them: %s",
-                        exc,
-                    )
-                    retry = True
-            if retry:
-                return await self._responses_client.with_options(
-                    timeout=self.responses_timeout_seconds,
-                    max_retries=0,
-                ).responses.create(**stream_payload)
-            raise
+            last_exc = exc
+            for _attempt in range(3):
+                if not _adapt_responses_payload_after_error(
+                    stream_payload, last_exc, logger=self.logger
+                ):
+                    raise last_exc
+                try:
+                    return await self._responses_client.with_options(
+                        timeout=self.responses_timeout_seconds,
+                        max_retries=0,
+                    ).responses.create(**stream_payload)
+                except Exception as retry_exc:
+                    last_exc = retry_exc
+            raise last_exc
 
     async def _stream_via_responses(
         self,
@@ -1417,7 +1477,7 @@ class AzureOpenAIProvider(OpenAIProvider):
             max_retries=0,
         )
         self.reasoning_effort = reasoning_effort
-        self.prompt_cache_key = prompt_cache_key
+        self.prompt_cache_key = normalize_openai_prompt_cache_key(prompt_cache_key)
         self.prompt_cache_retention = (
             prompt_cache_retention or settings.openai_prompt_cache_retention
             if prompt_cache_enabled

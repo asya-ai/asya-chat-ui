@@ -646,6 +646,9 @@ class ChatGenerationTask(SQLModel, table=True):
 
 class ChatGenerationEvent(SQLModel, table=True):
     __tablename__ = "chat_generation_events"
+    __table_args__ = (
+        Index("ix_chat_generation_events_task_id_sequence", "task_id", "sequence"),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     task_id: UUID = Field(foreign_key="chat_generation_tasks.id", index=True)

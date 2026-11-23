@@ -13,6 +13,11 @@ import {
   isDirectTextDocument,
 } from "./http_fetch.js";
 import { validateUrl } from "./url_safety.js";
+import {
+  analyzeStaticHtml,
+  contentCoverage,
+  createHostModeCache,
+} from "./static_detect.js";
 import { exportMarpPresentation } from "./marp_export.js";
 
 const app = express();
@@ -295,6 +300,33 @@ const preparePage = async (page, browserInstance) => {
   });
 };
 
+// Per-origin validation cache: pages issue hundreds of subresource requests and
+// a DNS lookup per request would be slow. Short TTL limits rebinding windows;
+// network isolation (scraper has no route to internal services) is the backstop.
+const REQUEST_VALIDATION_TTL_MS = 30_000;
+const requestValidationCache = new Map();
+
+const validateRequestUrlCached = async (requestUrl) => {
+  let key;
+  try {
+    const parsed = new URL(requestUrl);
+    key = `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return false;
+  }
+  const now = Date.now();
+  const cached = requestValidationCache.get(key);
+  if (cached && cached.expires > now) {
+    return cached.valid;
+  }
+  const valid = await validateUrl(requestUrl);
+  if (requestValidationCache.size > 5000) {
+    requestValidationCache.clear();
+  }
+  requestValidationCache.set(key, { valid, expires: now + REQUEST_VALIDATION_TTL_MS });
+  return valid;
+};
+
 const attachPrivateRedirectGuard = async (page) => {
   // Async request handlers race easily in Puppeteer; resolve carefully and
   // never call continue/abort twice.
@@ -305,8 +337,12 @@ const attachPrivateRedirectGuard = async (page) => {
         if (request.isInterceptResolutionHandled?.()) {
           return;
         }
-        if (request.isNavigationRequest() && request.redirectChain().length > 0) {
-          const valid = await validateUrl(request.url());
+        // Validate EVERY network request (subresources, page JS fetch/XHR,
+        // iframes, redirects) — not just redirected navigations — so a scraped
+        // page cannot reach internal services (docker daemon, redis, backend).
+        const requestUrl = request.url();
+        if (!requestUrl.startsWith("data:") && !requestUrl.startsWith("blob:")) {
+          const valid = await validateRequestUrlCached(requestUrl);
           if (request.isInterceptResolutionHandled?.()) {
             return;
           }
@@ -334,12 +370,13 @@ const settlePage = async (page) => {
   // Let SPA routes, deferred scripts, and hydration settle.
   try {
     await page.waitForFunction(() => document.readyState === "complete", {
-      timeout: 8000,
+      timeout: 5000,
     });
   } catch {}
 
   try {
-    await page.waitForNetworkIdle({ idleTime: 700, timeout: 8000 });
+    // Ad/analytics-heavy pages never go fully idle; don't wait long for them.
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: 2500 });
   } catch {}
 
   // Trigger lazy loaders (IntersectionObserver/image/content reveal).
@@ -350,12 +387,15 @@ const settlePage = async (page) => {
         document.documentElement?.scrollHeight || 0,
       );
       const viewport = window.innerHeight || 900;
+      // Cap lazy-load scrolling: a few screens is enough to trigger loaders,
+      // and walking very long pages costs seconds for no extra text.
+      const maxHeight = Math.min(totalHeight, viewport * 6);
       let y = 0;
-      while (y < totalHeight) {
+      while (y < maxHeight) {
         window.scrollTo(0, y);
         y += Math.max(Math.floor(viewport * 0.9), 400);
         // Small delay between scroll steps to allow lazy content to render.
-        await new Promise((resolve) => setTimeout(resolve, 120));
+        await new Promise((resolve) => setTimeout(resolve, 80));
       }
       window.scrollTo(0, 0);
     });
@@ -365,12 +405,38 @@ const settlePage = async (page) => {
   try {
     await page.waitForFunction(
       () => (document.body?.innerText || "").replace(/\s+/g, " ").trim().length > 40,
-      { timeout: 10000 },
+      { timeout: 3000 },
     );
   } catch {}
 
   // One final short settle after scrolling.
-  await sleep(250);
+  await sleep(150);
+};
+
+// Basic quality bar for text extracted from raw HTML (no JS executed).
+const STATIC_REJECT_PATTERN =
+  /enable javascript|javascript (is )?(required|disabled)|just a moment|checking your browser|verify you are (a )?human|captcha|access denied/i;
+const MIN_STATIC_WORDS = 120;
+
+const isUsableStaticMarkdown = (result) => {
+  const markdown = result?.markdown;
+  if (!markdown) return false;
+  if (markdownWordCount(markdown) < MIN_STATIC_WORDS) return false;
+  if (looksBoilerplateMarkdown(markdown)) return false;
+  const head = `${result.title || ""}\n${markdown.slice(0, 1500)}`;
+  return !STATIC_REJECT_PATTERN.test(head);
+};
+
+// Answer mode: the LLM only needs visual context next to the markdown, so a
+// viewport JPEG (~100-300KB) instead of a multi-MB full-page PNG.
+const captureAnswerScreenshot = async (page) => {
+  await page.setViewport(DEFAULT_VIEWPORT);
+  return await page.screenshot({
+    type: "jpeg",
+    quality: 70,
+    fullPage: false,
+    encoding: "base64",
+  });
 };
 
 const captureScreenshotSafe = async (page) => {
@@ -485,149 +551,234 @@ const toMarkdown = (html, url) => {
   return articleMarkdown || preferredMarkdown || bodyMarkdown;
 };
 
+const errorMessage = (error) =>
+  error && typeof error === "object" && "message" in error
+    ? String(error.message)
+    : String(error);
+
+// Load the page in headless Chrome. Returns { finalUrl, title, markdown,
+// screenshot?, screenshotError? }; markdown is omitted for screenshot mode.
+const scrapeWithBrowser = async (url, outputMode) => {
+  let page = null;
+  try {
+    const browserInstance = await getBrowser();
+    page = await browserInstance.newPage();
+    await preparePage(page, browserInstance);
+    await attachPrivateRedirectGuard(page);
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await settlePage(page);
+    const finalUrl = page.url();
+    if (!(await validateUrl(finalUrl))) {
+      throw new Error("Redirected to invalid or private URL");
+    }
+    const title = await page.title();
+    if (outputMode === "screenshot") {
+      return { finalUrl, title, screenshot: await captureScreenshotSafe(page) };
+    }
+
+    let screenshot = null;
+    let screenshotError = null;
+    if (outputMode === "answer") {
+      try {
+        screenshot = await captureAnswerScreenshot(page);
+      } catch (shotError) {
+        screenshotError = errorMessage(shotError);
+      }
+    }
+
+    let markdown = toMarkdown(await page.content(), finalUrl);
+    if (textLimit && markdown.length > textLimit) {
+      markdown = markdown.slice(0, textLimit);
+    }
+    const result = { finalUrl, title, markdown };
+    if (outputMode === "answer") {
+      result.screenshot = screenshot;
+      result.screenshotContentType = "image/jpeg";
+      result.screenshotError = screenshotError;
+    }
+    return result;
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+};
+
+// Per-host memory of whether raw HTML was enough or a browser was needed.
+const hostModes = createHostModeCache();
+const RAW_FILE_EXTENSION = /\.(txt|json|csv|tsv|md|xml|rss|atom|ya?ml|log)$/i;
+// Static extraction must cover this share of what the browser rendered.
+const STATIC_COVERAGE_THRESHOLD = 0.8;
+
+const learnHostMode = (host, staticResult, browserResult) => {
+  if (!browserResult?.markdown?.trim()) return;
+  const coverage = staticResult?.markdown
+    ? contentCoverage(staticResult.markdown, browserResult.markdown)
+    : 0;
+  const mode = coverage >= STATIC_COVERAGE_THRESHOLD ? "static" : "browser";
+  hostModes.set(host, mode);
+  console.info("Learned scrape mode", { host, mode, coverage: coverage.toFixed(2) });
+};
+
 app.post("/scrape", async (req, res) => {
-  const { url, output } = req.body || {};
+  const { url, output, render } = req.body || {};
   if (!url || typeof url !== "string") {
     return res.status(400).json({ error: "Missing url" });
   }
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     return res.status(400).json({ error: "Invalid URL scheme" });
   }
-  const outputMode =
-    typeof output === "string" && output.toLowerCase() === "screenshot"
-      ? "screenshot"
-      : "markdown";
+  const requestedMode = typeof output === "string" ? output.toLowerCase() : "";
+  // "answer" = markdown + screenshot from a single page load.
+  const outputMode = ["screenshot", "answer"].includes(requestedMode)
+    ? requestedMode
+    : "markdown";
+  const forceRender = render === true;
 
   try {
     const isValid = await validateUrl(url);
     if (!isValid) {
       return res.status(400).json({ error: "Invalid or private URL" });
     }
+    const host = new URL(url).hostname.toLowerCase();
 
     let httpDoc = null;
-    if (outputMode === "markdown") {
+    let httpError = null;
+    const loadHttpDoc = async (timeoutMs = 8000) => {
+      if (httpDoc || httpError) return httpDoc;
       try {
-        httpDoc = await fetchDocument(url, { validateUrl });
-        // Plain text / JSON / etc. do not need a browser.
-        if (isDirectTextDocument(httpDoc)) {
-          const direct = documentToMarkdown(httpDoc, { textLimit });
-          if (direct?.markdown) {
-            return res.json(direct);
-          }
+        httpDoc = await fetchDocument(url, { validateUrl, timeoutMs });
+      } catch (error) {
+        httpError = error;
+      }
+      return httpDoc;
+    };
+    const staticMarkdown = () =>
+      httpDoc ? documentToMarkdown(httpDoc, { textLimit, toMarkdown }) : null;
+
+    // Screenshots, or a full render the caller asked for, always use the browser.
+    // Answer mode goes through the static/learned path below and only renders
+    // (and screenshots) when the page actually needs a browser.
+    if (outputMode === "screenshot" || forceRender) {
+      try {
+        const result = await scrapeWithBrowser(url, outputMode);
+        if (outputMode !== "screenshot" && !result.markdown?.trim()) {
+          await loadHttpDoc();
+          const fallback = staticMarkdown();
+          if (fallback?.markdown) result.markdown = fallback.markdown;
         }
-      } catch (directError) {
-        const message =
-          directError && typeof directError === "object" && "message" in directError
-            ? String(directError.message)
-            : String(directError);
-        console.warn("HTTP probe failed, continuing with browser", {
-          url,
-          error: message,
-        });
-      }
-    }
-
-    const httpMarkdownFallback = async () => {
-      if (!httpDoc) {
-        httpDoc = await fetchDocument(url, { validateUrl });
-      }
-      return documentToMarkdown(httpDoc, { textLimit, toMarkdown });
-    };
-
-    let page = null;
-    let closed = false;
-    const closePage = async () => {
-      if (!page || closed) return;
-      closed = true;
-      try {
-        await page.close();
-      } catch {
-        // ignore
-      }
-    };
-
-    try {
-      const browserInstance = await getBrowser();
-      page = await browserInstance.newPage();
-      await preparePage(page, browserInstance);
-      await attachPrivateRedirectGuard(page);
-
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await settlePage(page);
-      const finalUrl = page.url();
-      if (!(await validateUrl(finalUrl))) {
-        throw new Error("Redirected to invalid or private URL");
-      }
-      const title = await page.title();
-      if (outputMode === "screenshot") {
-        const screenshot = await captureScreenshotSafe(page);
-        await closePage();
-        return res.json({ finalUrl, title, screenshot });
-      }
-
-      const html = await page.content();
-      await closePage();
-
-      let markdown = toMarkdown(html, finalUrl);
-      if (textLimit && markdown.length > textLimit) {
-        markdown = markdown.slice(0, textLimit);
-      }
-
-      // Soft-blocked / blank SPA shells: reuse the HTTP body when possible.
-      if (!String(markdown || "").trim()) {
-        try {
-          const fallback = await httpMarkdownFallback();
-          if (fallback?.markdown) {
-            return res.json(fallback);
-          }
-        } catch (fallbackError) {
-          const message =
-            fallbackError && typeof fallbackError === "object" && "message" in fallbackError
-              ? String(fallbackError.message)
-              : String(fallbackError);
-          console.warn("HTTP fallback after empty browser scrape failed", {
-            url,
-            error: message,
+        if (outputMode === "markdown" && !result.markdown?.trim()) {
+          return res.status(422).json({
+            error: "Scrape returned empty content",
+            detail: `No extractable text from ${result.finalUrl || url}`,
+            finalUrl: result.finalUrl,
+            title: result.title,
           });
         }
-        return res.status(422).json({
-          error: "Scrape returned empty content",
-          detail: `No extractable text from ${finalUrl || url}`,
-          finalUrl,
-          title,
-        });
-      }
-
-      return res.json({ finalUrl, title, markdown });
-    } catch (browserError) {
-      await closePage();
-      if (outputMode === "screenshot") {
-        throw browserError;
-      }
-      // Browser launch/navigation failures: still try HTTP extraction.
-      try {
-        const fallback = await httpMarkdownFallback();
+        return res.json({ ...result, method: "browser" });
+      } catch (browserError) {
+        if (outputMode === "screenshot") throw browserError;
+        await loadHttpDoc();
+        const fallback = staticMarkdown();
         if (fallback?.markdown) {
           console.warn("Browser scrape failed, served HTTP fallback", {
             url,
-            error:
-              browserError && typeof browserError === "object" && "message" in browserError
-                ? String(browserError.message)
-                : String(browserError),
+            error: errorMessage(browserError),
           });
-          return res.json(fallback);
+          return res.json({ ...fallback, method: "static-fallback" });
         }
-      } catch {
-        // fall through to original browser error
+        throw browserError;
+      }
+    }
+
+    const knownMode = hostModes.get(host);
+
+    // Unknown host: start the browser now so a wrong static guess costs no extra time.
+    // Raw file URLs (.json, .txt, ...) never need it.
+    const looksLikeRawFile = RAW_FILE_EXTENSION.test(new URL(url).pathname);
+    const browserMode = outputMode === "answer" ? "answer" : "markdown";
+    const browserPromise =
+      knownMode === "static" || looksLikeRawFile ? null : scrapeWithBrowser(url, browserMode);
+    browserPromise?.catch(() => {}); // handled below; avoid unhandled rejection
+
+    if (knownMode !== "browser") {
+      await loadHttpDoc();
+      // Plain text / JSON / etc. never need a browser.
+      if (httpDoc && isDirectTextDocument(httpDoc)) {
+        const direct = documentToMarkdown(httpDoc, { textLimit });
+        if (direct?.markdown) {
+          return res.json({ ...direct, method: "static" });
+        }
+      }
+    }
+
+    const staticResult = staticMarkdown();
+    const analysis = httpDoc ? analyzeStaticHtml(httpDoc.body) : null;
+    const staticComplete =
+      isUsableStaticMarkdown(staticResult) && analysis && !analysis.shell;
+
+    if (knownMode === "static") {
+      if (isUsableStaticMarkdown(staticResult)) {
+        return res.json({ ...staticResult, method: "static" });
+      }
+      // Host normally works statically but this page didn't: re-learn it.
+      hostModes.delete(host);
+    } else if (knownMode !== "browser" && staticComplete) {
+      // Confident static result: answer now, let the browser finish in the
+      // background and record whether static was actually complete.
+      res.json({ ...staticResult, method: "static" });
+      browserPromise
+        .then((browserResult) => learnHostMode(host, staticResult, browserResult))
+        .catch((error) =>
+          console.warn("Background browser comparison failed", {
+            url,
+            error: errorMessage(error),
+          }),
+        );
+      return;
+    }
+
+    try {
+      const browserResult = await (browserPromise || scrapeWithBrowser(url, browserMode));
+      if (knownMode !== "browser") {
+        learnHostMode(host, staticResult, browserResult);
+      }
+      if (browserResult.markdown?.trim()) {
+        return res.json({ ...browserResult, method: "browser" });
+      }
+      // Soft-blocked / blank SPA shells: reuse the HTTP body when possible.
+      await loadHttpDoc();
+      const fallback = staticMarkdown();
+      if (fallback?.markdown) {
+        return res.json({ ...fallback, method: "static-fallback" });
+      }
+      return res.status(422).json({
+        error: "Scrape returned empty content",
+        detail: `No extractable text from ${browserResult.finalUrl || url}`,
+        finalUrl: browserResult.finalUrl,
+        title: browserResult.title,
+      });
+    } catch (browserError) {
+      await loadHttpDoc();
+      const fallback = staticMarkdown();
+      if (fallback?.markdown) {
+        console.warn("Browser scrape failed, served HTTP fallback", {
+          url,
+          error: errorMessage(browserError),
+        });
+        return res.json({ ...fallback, method: "static-fallback" });
       }
       throw browserError;
     }
   } catch (err) {
-    const message =
-      err && typeof err === "object" && "message" in err
-        ? String(err.message)
-        : String(err);
+    const message = errorMessage(err);
     console.error("Scrape failed", { url, outputMode, error: message });
+    if (res.headersSent) return;
     return res.status(500).json({ error: "Scrape failed", detail: message });
   }
 });

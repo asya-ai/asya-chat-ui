@@ -327,6 +327,7 @@ async def web_scrape(
     urls: list[str] | None = None,
     output: str | None = None,
     question: str | None = None,
+    render: bool | None = None,
 ) -> ToolResult:
     url_list = _ensure_list(urls) or _ensure_list(url)
     if not url_list:
@@ -352,7 +353,9 @@ async def web_scrape(
         return max(len(value) * 3 // 4 - padding, 0)
 
     async def _call_scraper(item: str, mode: str) -> tuple[dict[str, Any] | None, str | None]:
-        payload = {"url": item, "output": mode}
+        payload: dict[str, Any] = {"url": item, "output": mode}
+        if render:
+            payload["render"] = True
         # Scraper may settle SPAs for ~20s+; keep client timeout above that.
         scraper_host = urlparse(settings.scraper_url).hostname or settings.scraper_url
         try:
@@ -411,13 +414,20 @@ async def web_scrape(
             return {"url": item, "error": "Blocked host"}
         try:
             if output_mode == "answer":
-                markdown_data, markdown_error = await _call_scraper(item, "markdown")
+                # One page load returns both markdown and screenshot.
+                markdown_data, markdown_error = await _call_scraper(item, "answer")
                 if markdown_error or not markdown_data:
                     return {"url": item, "error": markdown_error or "Failed to scrape markdown"}
                 final_url = str(markdown_data.get("finalUrl") or item)
                 if is_literal_blocked_hostname(urlparse(final_url).hostname):
                     return {"url": item, "error": "Blocked redirect host"}
-                screenshot_data, screenshot_error = await _call_scraper(item, "screenshot")
+                screenshot_data = markdown_data if markdown_data.get("screenshot") else None
+                # No screenshot without an error = static page, answered from markdown only.
+                screenshot_error = (
+                    str(markdown_data["screenshotError"])
+                    if not screenshot_data and markdown_data.get("screenshotError")
+                    else None
+                )
                 base_output = {
                     "url": final_url,
                     "title": markdown_data.get("title"),
@@ -456,7 +466,9 @@ async def web_scrape(
                     "analysis_input": {
                         "markdown": markdown,
                         "screenshot_base64": screenshot_base64,
-                        "screenshot_content_type": "image/png",
+                        "screenshot_content_type": str(
+                            markdown_data.get("screenshotContentType") or "image/png"
+                        ),
                         "screenshot_available": screenshot_available,
                         "screenshot_error": screenshot_error,
                     },

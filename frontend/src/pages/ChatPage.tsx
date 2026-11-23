@@ -2262,6 +2262,23 @@ export const ChatPage = () => {
     isSharedView,
   ])
 
+  // Bubbles only need this array to build an image URL map; keep its identity stable while
+  // streaming text so every MessageBubble does not re-render (and re-parse markdown) per token.
+  const chatImageMessagesRef = useRef<{ key: string; messages: typeof visibleMessages }>({
+    key: "",
+    messages: visibleMessages,
+  })
+  const chatImageMessages = useMemo(() => {
+    const map = collectChatImageUrlMap(visibleMessages)
+    const key = `${visibleMessages.length}|${Object.entries(map)
+      .map(([name, url]) => `${name}:${url.length}:${url.slice(-32)}`)
+      .join("|")}`
+    if (chatImageMessagesRef.current.key !== key) {
+      chatImageMessagesRef.current = { key, messages: visibleMessages }
+    }
+    return chatImageMessagesRef.current.messages
+  }, [visibleMessages])
+
   const presentationImageUrls = useMemo(() => {
     const fromChat = collectChatImageUrlMap([...serverMessages, ...toolEvents])
     const fromProject = collectProjectImageUrlMap(projectSources)
@@ -3855,7 +3872,7 @@ export const ChatPage = () => {
         <MessageBubble
           key={msg.id}
           msg={msg}
-          chatImageMessages={visibleMessages}
+          chatImageMessages={chatImageMessages}
           isUser={isUser}
           isCodeEvent={isCodeEvent}
           isThinking={isSharedView ? false : isThinking}

@@ -65,6 +65,7 @@ services:
       - files-data:/data/files
     networks:
       - app
+      - scrape
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,6 +108,7 @@ services:
     # DNS for service names like `scraper` (EAI_AGAIN from Celery workers).
     networks:
       - app
+      - scrape
     depends_on:
       redis:
         condition: service_started
@@ -158,8 +160,10 @@ services:
       SCRAPER_PORT: "3001"
       SCRAPE_TEXT_LIMIT: ${SCRAPE_TEXT_LIMIT:-20000}
     shm_size: "256mb"
+    # Isolated: scraped pages run JS in Chrome, so the scraper must not share a
+    # network with dind (unauthenticated docker API), redis or postgres.
     networks:
-      - app
+      - scrape
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/healthz').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
@@ -229,3 +233,4 @@ volumes:
 networks:
   app:
   egress:
+  scrape:

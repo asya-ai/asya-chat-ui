@@ -461,6 +461,8 @@ def get_provider_for_org(
 
     creds = resolve_effective_credentials(session, provider, org_config)
     openai_compatible = creds.provider_type == "openai_compatible"
+    if openai_compatible:
+        prefer_responses_api = False
 
     return get_provider(
         provider,

@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
+
+OPENAI_PROMPT_CACHE_KEY_MAX_LEN = 64
+
+
+def normalize_openai_prompt_cache_key(key: str | None) -> str | None:
+    """OpenAI/Azure accept prompt_cache_key strings up to 64 chars."""
+    if not key:
+        return None
+    cleaned = key.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) <= OPENAI_PROMPT_CACHE_KEY_MAX_LEN:
+        return cleaned
+    digest = hashlib.sha256(cleaned.encode()).hexdigest()
+    return f"h:{digest[:62]}"
 
 
 # Wired on ChatCompletionRequest; not re-merged onto provider payloads here.

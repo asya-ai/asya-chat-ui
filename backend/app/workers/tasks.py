@@ -1343,21 +1343,31 @@ async def _run_generation(task_id: UUID) -> None:
                     session.add(assistant_message)
                     session.commit()
                 if tool_attachments:
-                    existing_names = {
-                        row.file_name
-                        for row in session.exec(
-                            select(ChatMessageAttachment).where(
-                                ChatMessageAttachment.message_id == assistant_message.id
-                            )
-                        ).all()
-                    }
-                    remaining = [
+                    pending_inline = [
                         item
                         for item in tool_attachments
                         if isinstance(item, dict)
+                        and isinstance(item.get("data_base64"), str)
+                        and item.get("data_base64")
                         and str(item.get("file_name") or "").strip()
-                        and str(item.get("file_name")).strip() not in existing_names
                     ]
+                    if pending_inline:
+                        existing_names = set(
+                            session.scalars(
+                                select(ChatMessageAttachment.file_name).where(
+                                    ChatMessageAttachment.message_id
+                                    == assistant_message.id
+                                )
+                            ).all()
+                        )
+                        remaining = [
+                            item
+                            for item in pending_inline
+                            if str(item.get("file_name")).strip()
+                            not in existing_names
+                        ]
+                    else:
+                        remaining = []
                     if remaining:
                         persist_tool_attachment_dicts(
                             session,
@@ -1531,7 +1541,7 @@ async def _run_generation(task_id: UUID) -> None:
             task.completed_at = completed_at
             session.commit()
             clear_agent_checkpoint(session, task.id)
-            stored_attachments = session.exec(
+            stored_attachments = session.scalars(
                 select(ChatMessageAttachment).where(
                     ChatMessageAttachment.message_id == assistant_message.id
                 )
@@ -1680,6 +1690,32 @@ async def _run_generation(task_id: UUID) -> None:
                     exc_info=True,
                 )
             await _maybe_close_provider(provider)
+            try:
+                # Delay so clients still replaying the tail of the stream finish first.
+                compact_generation_events.apply_async(
+                    args=[str(task_id)], countdown=_DELTA_COMPACTION_DELAY_SECONDS
+                )
+            except Exception:
+                logger.debug("Failed to schedule delta compaction task=%s", task_id, exc_info=True)
+
+
+_DELTA_COMPACTION_DELAY_SECONDS = 120
+
+
+@celery_app.task(name="chatui.compact_generation_events")
+def compact_generation_events(task_id: str) -> int:
+    from app.services.generation_event_compaction import compact_task_delta_events
+
+    with Session(engine) as session:
+        return compact_task_delta_events(session, UUID(task_id))
+
+
+@celery_app.task(name="chatui.compact_generation_events_backlog")
+def compact_generation_events_backlog() -> dict[str, int]:
+    from app.services.generation_event_compaction import compact_backlog
+
+    with Session(engine) as session:
+        return compact_backlog(session)
 
 
 # Reuse one event loop per Celery worker process. asyncio.run() creates and

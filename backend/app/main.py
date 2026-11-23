@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -94,6 +95,27 @@ async def refresh_access_token(request: Request, call_next):
     return await call_next(request)
 
 
+_SLOW_REQUEST_SECONDS = float(os.getenv("SLOW_REQUEST_LOG_SECONDS", "1.0"))
+_perf_logger = logging.getLogger("app.perf")
+
+
+@app.middleware("http")
+async def log_slow_requests(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - started
+    response.headers["Server-Timing"] = f"app;dur={elapsed * 1000:.1f}"
+    if elapsed >= _SLOW_REQUEST_SECONDS:
+        _perf_logger.warning(
+            "slow request %s %s -> %s in %.2fs",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed,
+        )
+    return response
+
+
 def _redact_sensitive(value):
     if isinstance(value, dict):
         return {
@@ -157,5 +179,24 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             detail,
             error_type=error_type,
             code=code,
+        ),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, HTTPException):
+        raise exc
+    if not _is_openai_compat_path(request):
+        raise exc
+    logging.getLogger(__name__).exception(
+        "openai_compat unhandled error path=%s", request.url.path
+    )
+    return JSONResponse(
+        status_code=500,
+        content=openai_compat_support.openai_error_body(
+            "An unexpected error occurred",
+            error_type="server_error",
+            code="internal_error",
         ),
     )

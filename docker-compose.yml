@@ -79,6 +79,7 @@ services:
       retries: 12
     networks:
       - default
+      - scrape
       - asya-mcp
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -105,9 +106,10 @@ services:
       - .env
     # Chrome needs more than Docker's default 64MB /dev/shm.
     shm_size: "256mb"
-    # Explicit default network so workers always share DNS with scraper.
+    # Isolated: scraped pages run JS in Chrome, so the scraper must not share a
+    # network with dind (unauthenticated docker API), redis or postgres.
     networks:
-      - default
+      - scrape
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/healthz').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
       interval: 10s
@@ -157,6 +159,7 @@ services:
     # for MCP, but scraper resolution must not depend on that external network.
     networks:
       - default
+      - scrape
       - asya-mcp
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -220,5 +223,6 @@ volumes:
   dind-data:
 networks:
   default:
+  scrape:
   asya-mcp:
     external: true

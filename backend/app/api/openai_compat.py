@@ -20,8 +20,15 @@ from app.services.model_capabilities import (
     prefer_responses_api_for_model,
 )
 from app.services.providers.base import ChatToolSpec
-from app.services.instance_providers import get_provider_for_org
-from app.services.openai_completion_params import params_from_chat_request
+from app.services.instance_providers import (
+    ResolvedCredentials,
+    get_provider_for_org,
+    resolve_effective_credentials,
+)
+from app.services.openai_completion_params import (
+    normalize_openai_prompt_cache_key,
+    params_from_chat_request,
+)
 from app.api import openai_compat_support as compat_support
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
@@ -639,6 +646,16 @@ class ModelListResponse(BaseModel):
     data: list[ModelListItem]
 
 
+def _proxy_openai_responses_to_upstream(creds: ResolvedCredentials) -> bool:
+    """Only passthrough /v1/responses on the official OpenAI API."""
+    if creds.provider_type == "openai_compatible":
+        return False
+    base = (creds.base_url or settings.openai_base_url or "").strip().rstrip("/").lower()
+    if not base:
+        return True
+    return "api.openai.com" in base
+
+
 def _responses_sse_events(response_payload: dict[str, Any]) -> list[str]:
     """Minimal OpenAI Responses SSE for providers we emulate via chat completions."""
     response_id = str(response_payload.get("id") or f"resp_{uuid4().hex[:24]}")
@@ -844,7 +861,7 @@ async def chat_completions(
         )
 
     provider_config = require_provider_enabled(session, org_id, model.provider)
-    prompt_cache_key = f"api:{org_id}:{auth.user.id}"
+    prompt_cache_key = normalize_openai_prompt_cache_key(f"api:{org_id}:{auth.user.id}")
     provider = get_provider_for_org(
         session,
         org_id,
@@ -968,11 +985,15 @@ async def chat_completions(
                 yield "data: [DONE]\n\n"
                 return
 
+            stream_terminal = False
             async for chunk in stream_iter:
                 if chunk.usage is not None:
                     final_usage = chunk.usage
                 if chunk.finish_reason:
                     finish_reason = chunk.finish_reason
+                    stream_terminal = True
+                if stream_terminal and chunk.content:
+                    continue
                 delta: dict[str, Any] = {}
                 if not sent_role:
                     delta["role"] = "assistant"
@@ -1067,20 +1088,25 @@ async def chat_completions(
             headers={"Cache-Control": "no-cache"},
         )
 
-    if tool_specs:
-        response = await provider.chat_with_tools(
-            model.model_name,
-            message_payload,
-            tool_specs,
-            tool_choice=payload.tool_choice,
-            completion_params=completion_params,
-        )
-    else:
-        response = await provider.chat(
-            model.model_name,
-            message_payload,
-            completion_params=completion_params,
-        )
+    try:
+        if tool_specs:
+            response = await provider.chat_with_tools(
+                model.model_name,
+                message_payload,
+                tool_specs,
+                tool_choice=payload.tool_choice,
+                completion_params=completion_params,
+            )
+        else:
+            response = await provider.chat(
+                model.model_name,
+                message_payload,
+                completion_params=completion_params,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise compat_support.upstream_exception_to_http(exc) from exc
     compat_support.record_usage_event(
         session,
         org_id=org_id,
@@ -1107,21 +1133,18 @@ async def create_response(
             detail="Model is not enabled for this organization",
         )
     provider_config = require_provider_enabled(session, auth.org_id, model.provider)
+    creds = resolve_effective_credentials(session, model.provider, provider_config)
 
-    # For OpenAI models, proxy to the Responses API directly so the wire
-    # shape is 1:1 with what OpenAI returns — no SDK version dependency.
-    if model.provider == "openai":
+    # For OpenAI models on the official API, proxy to /v1/responses so the wire
+    # shape is 1:1 with what OpenAI returns. OpenAI-compatible upstreams are
+    # adapted via chat completions below (same as other providers).
+    if model.provider == "openai" and _proxy_openai_responses_to_upstream(creds):
         import httpx as _httpx
 
-        api_key = (
-            (provider_config.api_key_override if provider_config else None)
-            or settings.openai_api_key
+        api_key = creds.api_key or settings.openai_api_key
+        base_url = (creds.base_url or settings.openai_base_url or "https://api.openai.com/v1").rstrip(
+            "/"
         )
-        base_url = (
-            (provider_config.base_url_override if provider_config else None)
-            or "https://api.openai.com/v1"
-        )
-        base_url = base_url.rstrip("/")
         request_payload = payload.model_dump(mode="json", exclude_none=True)
         request_payload["model"] = model.model_name
 
@@ -1242,12 +1265,20 @@ async def create_response(
         user=getattr(payload, "user", None),
         stream=payload.stream,
     )
-    adapter_stream = payload.stream and model.provider != "openai"
+    use_responses_upstream_proxy = (
+        model.provider == "openai" and _proxy_openai_responses_to_upstream(creds)
+    )
+    adapter_stream = bool(payload.stream and not use_responses_upstream_proxy)
     if adapter_stream:
         completion_payload = completion_payload.model_copy(update={"stream": False})
-    completion = await chat_completions(
-        completion_payload, session=session, auth=auth
-    )
+    try:
+        completion = await chat_completions(
+            completion_payload, session=session, auth=auth
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise compat_support.upstream_exception_to_http(exc) from exc
     if isinstance(completion, StreamingResponse):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1337,26 +1368,24 @@ async def create_embeddings(
             detail="Embeddings not supported for this provider",
         )
     provider_config = require_provider_enabled(session, auth.org_id, model.provider)
-    api_key = provider_config.api_key_override if provider_config else None
-    base_url = provider_config.base_url_override if provider_config else None
-    endpoint = provider_config.endpoint_override if provider_config else None
+    creds = resolve_effective_credentials(session, model.provider, provider_config)
     from openai import AsyncAzureOpenAI, AsyncOpenAI, OpenAIError
 
     if model.provider == "azure":
         client = AsyncAzureOpenAI(
-            api_key=api_key or settings.azure_openai_api_key,
-            azure_endpoint=endpoint or settings.azure_openai_endpoint,
+            api_key=creds.api_key or settings.azure_openai_api_key,
+            azure_endpoint=creds.endpoint or settings.azure_openai_endpoint,
             api_version=settings.azure_openai_api_version,
         )
     elif model.provider == "openrouter":
         client = AsyncOpenAI(
-            api_key=api_key or settings.openrouter_api_key,
-            base_url=base_url or "https://openrouter.ai/api/v1",
+            api_key=creds.api_key or settings.openrouter_api_key,
+            base_url=creds.base_url or "https://openrouter.ai/api/v1",
         )
     else:
         client = AsyncOpenAI(
-            api_key=api_key or settings.openai_api_key,
-            base_url=base_url,
+            api_key=creds.api_key or settings.openai_api_key,
+            base_url=creds.base_url or settings.openai_base_url,
         )
     inputs = payload.input if isinstance(payload.input, list) else [payload.input]
     embed_kwargs: dict[str, Any] = {
@@ -1371,6 +1400,8 @@ async def create_embeddings(
         embed_kwargs["user"] = payload.user
     try:
         response = await client.embeddings.create(**embed_kwargs)
+    except HTTPException:
+        raise
     except OpenAIError as exc:
         logger.warning(
             "openai_compat.embeddings upstream_error org_id=%s model=%s: %s",
@@ -1378,20 +1409,14 @@ async def create_embeddings(
             model.model_name,
             exc,
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+        raise compat_support.upstream_exception_to_http(exc) from exc
     except Exception as exc:
         logger.exception(
             "openai_compat.embeddings_error org_id=%s model=%s",
             auth.org_id,
             model.model_name,
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Embedding request failed",
-        ) from exc
+        raise compat_support.upstream_exception_to_http(exc) from exc
     data = [
         EmbeddingData(embedding=item.embedding, index=item.index)
         for item in response.data

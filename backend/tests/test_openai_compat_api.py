@@ -16,10 +16,13 @@ from app.api.openai_compat import (
     ChatContentPart,
     ChatMessagePayload,
     LegacyCompletionRequest,
+    ResponseCreateRequest,
     chat_completions,
+    create_response,
     legacy_completions,
     list_models,
 )
+from app.services.instance_providers import ResolvedCredentials
 from app.api import openai_compat_support as compat_support
 from app.models import ChatModel, Org, OrgProviderConfig, UsageEvent, User
 from app.services.providers.base import (
@@ -530,6 +533,105 @@ async def test_developer_role_normalized_to_system_message(compat_env) -> None:
     await chat_completions(payload, session=compat_env.session, auth=compat_env.auth)
     roles = [m["role"] for m in compat_env.provider.messages or []]
     assert roles[0] == "system"
+
+
+@pytest.mark.asyncio
+async def test_responses_adapts_for_openai_compatible_upstream(compat_env, monkeypatch) -> None:
+    creds = ResolvedCredentials(
+        provider_type="openai_compatible",
+        api_key="sk-test",
+        base_url="https://eldigen.example/v1",
+    )
+    monkeypatch.setattr(
+        "app.api.openai_compat.resolve_effective_credentials",
+        lambda *a, **k: creds,
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, *args, **kwargs):
+            raise AssertionError("must not proxy openai_compatible upstream /responses")
+
+        def stream(self, *args, **kwargs):
+            raise AssertionError("must not proxy openai_compatible upstream /responses stream")
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    payload = ResponseCreateRequest(
+        model=compat_env.model.model_name,
+        input=[{"role": "user", "content": "hi"}],
+    )
+    result = await create_response(
+        payload, session=compat_env.session, auth=compat_env.auth
+    )
+    assert result["output_text"] == "pong"
+    assert compat_env.provider.chat_calls == 1
+
+
+def test_upstream_exception_to_http_maps_bad_request() -> None:
+    from fastapi import HTTPException
+
+    from app.api.openai_compat_support import upstream_exception_to_http
+
+    class _BadRequest(Exception):
+        status_code = 400
+
+    mapped = upstream_exception_to_http(_BadRequest("Unsupported parameter: temperature"))
+    assert isinstance(mapped, HTTPException)
+    assert mapped.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_adapts_for_openai_compatible(compat_env, monkeypatch) -> None:
+    creds = ResolvedCredentials(
+        provider_type="openai_compatible",
+        api_key="sk-test",
+        base_url="https://eldigen.example/v1",
+    )
+    monkeypatch.setattr(
+        "app.api.openai_compat.resolve_effective_credentials",
+        lambda *a, **k: creds,
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, *args, **kwargs):
+            raise AssertionError("must not proxy")
+
+        def stream(self, *args, **kwargs):
+            raise AssertionError("must not proxy")
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    payload = ResponseCreateRequest(
+        model=compat_env.model.model_name,
+        input=[{"role": "user", "content": "stream"}],
+        stream=True,
+    )
+    response = await create_response(
+        payload, session=compat_env.session, auth=compat_env.auth
+    )
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk if isinstance(chunk, bytes) else chunk.encode()
+    text = body.decode()
+    assert "response.completed" in text or "response.output_text.delta" in text
 
 
 def test_stream_chunk_sse_includes_usage_when_requested() -> None:

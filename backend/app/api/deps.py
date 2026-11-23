@@ -15,6 +15,14 @@ from app.services.oidc_session_service import ensure_oidc_session_fresh
 def _resolve_user_from_token_claims(
     session: Session, claims: dict[str, Any]
 ) -> User:
+    # Purpose-scoped tokens (e.g. integration OAuth `state`) share the signing
+    # key and carry `sub`, but must never authenticate API requests — they leave
+    # the app via IdP redirects and end up in third-party logs / history.
+    if claims.get("purpose") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
     subject = claims.get("sub")
     if not subject:
         raise HTTPException(

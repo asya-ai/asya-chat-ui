@@ -240,6 +240,28 @@ const groupChatsByDate = (
 const staggerStyle = (stagger: number): CSSProperties =>
   ({ "--stagger": stagger } as CSSProperties)
 
+const CHAT_RENDER_PAGE = 60
+
+/** Invisible marker that calls onVisible when scrolled near; used to grow the rendered chat list. */
+const LoadMoreSentinel = ({ onVisible }: { onVisible: () => void }) => {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const cb = useRef(onVisible)
+  cb.current = onVisible
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) cb.current()
+      },
+      { rootMargin: "400px 0px" }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  return <div ref={ref} aria-hidden="true" className="h-px w-full" />
+}
+
 const SessionDateHeading = ({
   label,
   stagger = 0,
@@ -372,6 +394,7 @@ export const ChatSidebar = ({
   const instrDescriptionRef = useRef<HTMLInputElement | null>(null)
   const instrPromptRef = useRef<HTMLTextAreaElement | null>(null)
   const [sessionQueryDebounced, setSessionQueryDebounced] = useState("")
+  const [chatRenderLimit, setChatRenderLimit] = useState(CHAT_RENDER_PAGE)
   const [renameChat, setRenameChat] = useState<Chat | null>(null)
   const [renameValue, setRenameValue] = useState("")
   const [deleteConfirmChat, setDeleteConfirmChat] = useState<Chat | null>(null)
@@ -483,6 +506,10 @@ export const ChatSidebar = ({
     if (currentChatId === chatId && status === "ready") return null
     return status
   }
+
+  useEffect(() => {
+    setChatRenderLimit(CHAT_RENDER_PAGE)
+  }, [tab, focusedAgentId, sessionQueryDebounced])
 
   const handleSessionQueryChange = useCallback((value: string) => {
     setSessionQueryDebounced(value)
@@ -1221,6 +1248,15 @@ export const ChatSidebar = ({
                     (() => {
                       let stagger = 0
                       const next = () => stagger++
+                      let budget = chatRenderLimit
+                      const take = (list: Chat[]) => {
+                        const visible = list.slice(0, Math.max(budget, 0))
+                        budget -= visible.length
+                        return visible
+                      }
+                      const totalChats =
+                        pinnedChats.length +
+                        sessionGroups.reduce((sum, group) => sum + group.chats.length, 0)
                       return (
                         <>
                           {pinnedChats.length > 0 ? (
@@ -1229,18 +1265,29 @@ export const ChatSidebar = ({
                                 label={`${t("chat_pinned")} (${pinnedChats.length})`}
                                 stagger={next()}
                               />
-                              {pinnedChats.map((chat) => renderChatRow(chat, next()))}
+                              {take(pinnedChats).map((chat) => renderChatRow(chat, next()))}
                             </div>
                           ) : null}
-                          {sessionGroups.map((group) => (
-                            <div
-                              key={group.label}
-                              className="flex flex-col gap-0.5 mt-2 first:mt-0"
-                            >
-                              <SessionDateHeading label={group.label} stagger={next()} />
-                              {group.chats.map((chat) => renderChatRow(chat, next()))}
-                            </div>
-                          ))}
+                          {sessionGroups.map((group) => {
+                            const visible = take(group.chats)
+                            if (visible.length === 0) return null
+                            return (
+                              <div
+                                key={group.label}
+                                className="flex flex-col gap-0.5 mt-2 first:mt-0"
+                              >
+                                <SessionDateHeading label={group.label} stagger={next()} />
+                                {visible.map((chat) => renderChatRow(chat, next()))}
+                              </div>
+                            )
+                          })}
+                          {totalChats > chatRenderLimit ? (
+                            <LoadMoreSentinel
+                              onVisible={() =>
+                                setChatRenderLimit((limit) => limit + CHAT_RENDER_PAGE)
+                              }
+                            />
+                          ) : null}
                         </>
                       )
                     })()
@@ -1465,6 +1512,18 @@ export const ChatSidebar = ({
                           (() => {
                             let stagger = 0
                             const next = () => stagger++
+                            let budget = chatRenderLimit
+                            const take = (list: Chat[]) => {
+                              const visible = list.slice(0, Math.max(budget, 0))
+                              budget -= visible.length
+                              return visible
+                            }
+                            const totalChats =
+                              projectPinnedChats.length +
+                              projectSessionGroups.reduce(
+                                (sum, group) => sum + group.chats.length,
+                                0
+                              )
                             return (
                           <>
                             {projectPinnedChats.length > 0 ? (
@@ -1473,18 +1532,29 @@ export const ChatSidebar = ({
                                   label={`${t("chat_pinned")} (${projectPinnedChats.length})`}
                                   stagger={next()}
                                 />
-                                {projectPinnedChats.map((chat) => renderChatRow(chat, next()))}
+                                {take(projectPinnedChats).map((chat) => renderChatRow(chat, next()))}
                               </div>
                             ) : null}
-                            {projectSessionGroups.map((group) => (
-                              <div
-                                key={group.label}
-                                className="flex flex-col gap-0.5 mt-2 first:mt-0"
-                              >
-                                <SessionDateHeading label={group.label} stagger={next()} />
-                                {group.chats.map((chat) => renderChatRow(chat, next()))}
-                              </div>
-                            ))}
+                            {projectSessionGroups.map((group) => {
+                              const visible = take(group.chats)
+                              if (visible.length === 0) return null
+                              return (
+                                <div
+                                  key={group.label}
+                                  className="flex flex-col gap-0.5 mt-2 first:mt-0"
+                                >
+                                  <SessionDateHeading label={group.label} stagger={next()} />
+                                  {visible.map((chat) => renderChatRow(chat, next()))}
+                                </div>
+                              )
+                            })}
+                            {totalChats > chatRenderLimit ? (
+                              <LoadMoreSentinel
+                                onVisible={() =>
+                                  setChatRenderLimit((limit) => limit + CHAT_RENDER_PAGE)
+                                }
+                              />
+                            ) : null}
                           </>
                             )
                           })()
